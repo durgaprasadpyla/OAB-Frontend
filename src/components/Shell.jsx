@@ -12,7 +12,7 @@ import { today } from '../lib/format.js';
  */
 export default function Shell() {
   const { user, role, logout } = useAuth();
-  const { mods, loading, error, saving } = useData();
+  const { mods, loading, error, saving, conflict, clearConflict } = useData();
   const nav = useNavigate();
   const loc = useLocation();
 
@@ -62,6 +62,12 @@ export default function Shell() {
         </div>
       </div>
       <div className="oab-main">
+        {conflict && (
+          <div className="al al-y" style={{ margin: '12px 16px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <span>⚠️ This data was changed elsewhere and has been reloaded. Review the latest values and save your change again.</span>
+            <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={clearConflict}>Dismiss</button>
+          </div>
+        )}
         {error
           ? <div className="al al-r" style={{ margin: 16 }}>Failed to load data: {error}</div>
           : loading

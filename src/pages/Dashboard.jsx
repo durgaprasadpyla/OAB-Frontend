@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { rmRatesApi } from '../api.js';
 import { balance, num, calcMetres } from '../lib/calc.js';
-import { getPM, getCostPrice, loadMatRates, saveMatRates } from '../lib/pricing.js';
+import { getPM, getCostPrice } from '../lib/pricing.js';
 import { computeKPIs, dashRange } from '../lib/dashboard.js';
 import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
@@ -47,9 +48,12 @@ function Summary() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [client, setClient] = useState('');
-  const [rates, setRates] = useState(() => ({ bopp: 0, afbopp: 0, afldpe: 0, ...loadMatRates() }));
+  const [rates, setRates] = useState({ bopp: 0, afbopp: 0, afldpe: 0 });
   const [showDrill, setShowDrill] = useState(false);
   const [msg, setMsg] = useState('');
+
+  // RM ₹/kg rates are server-side now (shared across devices), not localStorage.
+  useEffect(() => { rmRatesApi.get().then((r) => setRates((cur) => ({ ...cur, ...r }))).catch(() => {}); }, []);
 
   const ctx = { prices: mods.prices, jss: mods.jss, matRates: rates };
   const range = filter === 'custom' ? { from, to } : dashRange(filter);
@@ -58,7 +62,16 @@ function Summary() {
 
   const sales = [...k.periodInv, ...k.periodManual].sort((a, b) => (a.date < b.date ? 1 : -1));
 
-  function pushRates() { saveMatRates(rates); setMsg('✓ Raw-material rates saved — margins recomputed.'); setTimeout(() => setMsg(''), 4000); }
+  async function pushRates() {
+    try {
+      const saved = await rmRatesApi.put(rates);
+      setRates((cur) => ({ ...cur, ...saved }));
+      setMsg('✓ Raw-material rates saved — margins recomputed.');
+    } catch (e) {
+      setMsg('Save failed: ' + e.message);
+    }
+    setTimeout(() => setMsg(''), 4000);
+  }
 
   async function uploadCM(file) {
     if (!file) return;
@@ -371,7 +384,9 @@ function SOCosting() {
   const [wastageKg, setWastageKg] = useState('');
   const [manpower, setManpower] = useState('');
   const [power, setPower] = useState('');
-  const ctx = { prices: mods.prices, jss: mods.jss, matRates: loadMatRates() };
+  const [matRates, setMatRates] = useState({ bopp: 0, afbopp: 0, afldpe: 0 });
+  useEffect(() => { rmRatesApi.get().then((r) => setMatRates((cur) => ({ ...cur, ...r }))).catch(() => {}); }, []);
+  const ctx = { prices: mods.prices, jss: mods.jss, matRates };
   const allRows = useMemo(() => ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])), [mods.oab]);
   const allSOs = useMemo(() => [...allRows].sort((a, b) => (a.so > b.so ? 1 : -1)), [allRows]);
   const r = allRows.find((x) => x.so === so);

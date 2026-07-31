@@ -18,6 +18,11 @@ import { api } from './api.js';
  *   id 6  purchase   { asl:[suppliers], po:[...], grn:[...], pay:[...] }
  *   id 7  pmData     { pm daily print qty, keyed by SO }
  *   id 8  scrap      { scrap buyer details }
+ *
+ * Each module carries an optimistic-lock `version` from the backend. We read it
+ * on load, echo it on save, and — if the server reports a conflict (409, another
+ * writer got there first) — reload that module, show a non-destructive notice,
+ * and let the user re-apply their edit. A 409 NEVER logs the user out.
  */
 export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8 };
 
@@ -37,26 +42,37 @@ export function emptyModules() {
 
 async function loadOne(id) {
   const rows = await api(`/rest/v1/oab_data?id=eq.${id}&select=data`);
-  if (Array.isArray(rows) && rows.length && rows[0] && rows[0].data != null) {
-    try { return JSON.parse(rows[0].data); } catch { return null; }
+  if (Array.isArray(rows) && rows.length && rows[0]) {
+    const row = rows[0];
+    let value = null;
+    if (row.data != null) { try { value = JSON.parse(row.data); } catch { value = null; } }
+    const version = Number.isFinite(Number(row.version)) ? Number(row.version) : 0;
+    return { value, version };
   }
-  return null;
+  return { value: null, version: 0 };
 }
 
-async function saveOne(id, obj) {
-  // api() JSON-stringifies the body; the backend expects {id, data:"<json string>"}.
-  await api('/rest/v1/oab_data', { method: 'POST', body: { id, data: JSON.stringify(obj) } });
+async function saveOne(id, obj, version) {
+  // api() JSON-stringifies the body; the backend expects {id, data:"<json string>", version}
+  // and returns {id, version:<new>}. Fall back to an optimistic bump if absent.
+  const resp = await api('/rest/v1/oab_data', { method: 'POST', body: { id, data: JSON.stringify(obj), version } });
+  const v = resp && Number.isFinite(Number(resp.version)) ? Number(resp.version) : (Number(version) || 0) + 1;
+  return v;
 }
 
 const DataCtx = createContext(null);
 
 export function DataProvider({ children }) {
   const [mods, setMods] = useState(emptyModules);
+  const [versions, setVersions] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState(null);   // { key, at } when a save was reloaded after a 409
   const modsRef = useRef(mods);
   modsRef.current = mods;
+  const versionsRef = useRef(versions);
+  versionsRef.current = versions;
 
   const reload = useCallback(async () => {
     setLoading(true); setError('');
@@ -64,8 +80,13 @@ export function DataProvider({ children }) {
       const entries = Object.entries(KEY_TO_ID);
       const results = await Promise.all(entries.map(([, id]) => loadOne(id)));
       const base = emptyModules();
-      entries.forEach(([key], i) => { if (results[i] != null) base[key] = results[i]; });
+      const vers = {};
+      entries.forEach(([key], i) => {
+        if (results[i] && results[i].value != null) base[key] = results[i].value;
+        vers[key] = results[i] ? results[i].version : 0;
+      });
       setMods(base);
+      setVersions(vers);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -75,23 +96,61 @@ export function DataProvider({ children }) {
 
   useEffect(() => { reload(); }, [reload]);
 
+  const clearConflict = useCallback(() => setConflict(null), []);
+
+  /**
+   * Reload a single module from the server and update it + its version. Used after
+   * a granular endpoint write (Phase 1): the endpoint is the authority, so we pull
+   * the fresh, server-updated blob rather than mutating the local copy by hand.
+   */
+  const reloadModule = useCallback(async (key) => {
+    const id = KEY_TO_ID[key];
+    if (!id) return;
+    const fresh = await loadOne(id);
+    setMods(m => ({ ...m, [key]: fresh.value != null ? fresh.value : emptyModules()[key] }));
+    setVersions(m => ({ ...m, [key]: fresh.version }));
+  }, []);
+
   /** Replace one module and persist it. `next` may be a value or (prev)=>next. */
   const save = useCallback(async (key, next) => {
     const id = KEY_TO_ID[key];
     if (!id) throw new Error('unknown module: ' + key);
-    const value = typeof next === 'function' ? next(modsRef.current[key]) : next;
+    const prev = modsRef.current[key];                 // snapshot for rollback
+    const value = typeof next === 'function' ? next(prev) : next;
     setMods(m => ({ ...m, [key]: value }));   // optimistic local update
     setSaving(true);
     try {
-      await saveOne(id, value);
+      const expected = versionsRef.current[key] ?? 0;
+      const newVersion = await saveOne(id, value, expected);
+      setVersions(m => ({ ...m, [key]: newVersion }));
+      return value;
+    } catch (e) {
+      if (e && (e.code === 'conflict' || e.status === 409)) {
+        // Someone else saved this module first. Reload the fresh copy (so the UI
+        // shows server truth) and flag it — the user's in-progress form state lives
+        // in the screen, not here, so it is preserved; they can review and re-submit.
+        let fresh = null;
+        try { fresh = await loadOne(id); } catch { /* fall through to rollback */ }
+        if (fresh) {
+          setMods(m => ({ ...m, [key]: fresh.value != null ? fresh.value : emptyModules()[key] }));
+          setVersions(m => ({ ...m, [key]: fresh.version }));
+        } else {
+          setMods(m => ({ ...m, [key]: prev }));
+        }
+        setConflict({ key, at: Date.now() });
+        const err = new Error(`"${key}" was changed on the server and has been reloaded — please review and save again.`);
+        err.code = 'conflict';
+        throw err;
+      }
+      setMods(m => ({ ...m, [key]: prev }));  // roll back: never show unsaved data as saved
+      throw e;
     } finally {
       setSaving(false);
     }
-    return value;
   }, []);
 
   return (
-    <DataCtx.Provider value={{ mods, loading, error, saving, reload, save }}>
+    <DataCtx.Provider value={{ mods, versions, loading, error, saving, conflict, clearConflict, reload, reloadModule, save }}>
       {children}
     </DataCtx.Provider>
   );

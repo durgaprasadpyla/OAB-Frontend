@@ -1,17 +1,16 @@
 import { useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
+import { ordersApi } from '../api.js';
 import { balance, calcMetres } from '../lib/calc.js';
 import { dash, fmtDate } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 
-const clone = (o) => JSON.parse(JSON.stringify(o));
-
 /** Order & Production Balance board (native port of renderOAB, legacy 1839). */
 export default function OabBoard() {
-  const { mods, save } = useData();
+  const { mods, reloadModule } = useData();
   const [sp, setSp] = useSearchParams();
   const sheet = sp.get('sheet') === 'OT' ? 'OT' : 'SF';
 
@@ -60,10 +59,8 @@ export default function OabBoard() {
   const setSheet = (k) => { setSp({ sheet: k }); setShowClosed(false); };
 
   async function reopen(so) {
-    const next = clone(mods.oab);
-    const arr = next.OAB[sheet] || [];
-    const i = arr.findIndex((r) => r.so === so);
-    if (i >= 0) { arr[i] = { ...arr[i], closed: false, shortClosed: false }; await save('oab', next); }
+    try { await ordersApi.reopen(so); await reloadModule('oab'); }
+    catch (e) { alert('Reopen failed: ' + (e.message || e)); }
   }
 
   function exportExcel() {
@@ -89,8 +86,8 @@ export default function OabBoard() {
       <div className="pg-sub">Open sales orders — {sheet === 'SF' ? 'Stay Fresh' : 'Others'} sheet, live from the database.</div>
 
       <div className="fbar">
-        <button className={'btn btn-s' + (sheet === 'SF' ? ' on' : '')} style={sheet === 'SF' ? onStyle : undefined} onClick={() => setSheet('SF')}>Stay Fresh</button>
-        <button className={'btn btn-s' + (sheet === 'OT' ? ' on' : '')} style={sheet === 'OT' ? onStyle : undefined} onClick={() => setSheet('OT')}>Others</button>
+        <button className={'btn btn-s' + (sheet === 'SF' ? ' on' : '')} onClick={() => setSheet('SF')}>Stay Fresh</button>
+        <button className={'btn btn-s' + (sheet === 'OT' ? ' on' : '')} onClick={() => setSheet('OT')}>Others</button>
         <span style={{ width: 8 }} />
         <input placeholder="Search SO / customer / job / spec / PO…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
         <select value={cf} onChange={(e) => setCf(e.target.value)}><option value="">All customers</option>{customers.map((c) => <option key={c} value={c}>{c}</option>)}</select>
@@ -136,13 +133,13 @@ export default function OabBoard() {
                   const st = prodStatus(r.so);
                   const nr = st !== 'Ready';
                   return (
-                    <tr key={r.so} style={{ background: nr ? '#FEF0F0' : i % 2 === 0 ? undefined : '#EEF7F2' }}>
+                    <tr key={r.so} className={'zebra' + (nr ? ' nr' : '')}>
                       <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
                       <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec || '-'}</span></td>
                       <td><DispFormBadge df={r.dispatchForm} /></td>
                       <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
                       <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
-                      <td style={{ fontSize: 11, color: '#7A4F00' }}>{r.subBrand || '-'}</td>
+                      <td style={{ fontSize: 11, color: 'var(--amber)' }}>{r.subBrand || '-'}</td>
                       <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>
                       <td style={{ fontSize: 11 }}>{r.poNum || '-'}</td>
                       <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
@@ -165,8 +162,6 @@ export default function OabBoard() {
     </div>
   );
 }
-
-const onStyle = { background: 'var(--gl)', color: 'var(--g)', borderColor: '#A8D5B8', fontWeight: 700 };
 
 function Stat({ label, value, cls }) {
   return (

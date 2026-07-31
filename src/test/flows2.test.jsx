@@ -27,6 +27,7 @@ describe('Purchase — Generate PO flow', () => {
     await user.click(screen.getByRole('button', { name: /Create PO/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 6)).toBe(true));
+    expect(saved.find((s) => s.id === 6).endpoint).toBe('/api/purchase-orders'); // granular endpoint
     const mod = saved.find((s) => s.id === 6).data;
     expect(mod.pos).toHaveLength(1);
     expect(mod.pos[0].supplier).toBe('Sup1');

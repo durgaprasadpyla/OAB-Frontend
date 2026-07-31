@@ -35,6 +35,7 @@ describe('New PO flow', () => {
     await user.click(screen.getByRole('button', { name: /Create 1 SO/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
+    expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/sales-orders'); // granular endpoint, not a blob save
     const mod = saved.find((s) => s.id === 1).data;
     const row = mod.OAB.SF.find((r) => r.so === '26/401');
     expect(row).toBeTruthy();
@@ -58,6 +59,7 @@ describe('Daily Update flow', () => {
     await user.click(screen.getByRole('button', { name: /Save All Changes/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
+    expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/oab-rows/dispatch'); // granular endpoint
     const row = saved.find((s) => s.id === 1).data.OAB.SF[0];
     expect(row.manDisp).toBe(200);
     expect(row.manDispLog.at(-1)).toMatchObject({ invNo: 'INV5', qty: 200 });
@@ -100,6 +102,7 @@ describe('Invoice flow', () => {
     await user.click(screen.getByRole('button', { name: /Confirm & Update OAB/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
+    expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/invoices'); // server-authoritative invoice endpoint
     const mod = saved.find((s) => s.id === 1).data;
     expect(mod.INV_REG[0]).toMatchObject({ qty: 200, amount: 15000, po: 'PO1' });
     expect(mod.INV_REG[0].items[0]).toMatchObject({ spec: 'A1', rate: 75, qty: 200 });

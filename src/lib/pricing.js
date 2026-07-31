@@ -13,13 +13,9 @@ export function getUOM(dispatchForm) {
   return (df === 'roll' || df === 'rolls') ? 'Kgs' : 'Pcs';
 }
 
-/** Raw-material ₹/kg rates — device-local (localStorage 'bloomflex_mat'), as in the legacy app. */
-export function loadMatRates() {
-  try { return JSON.parse(localStorage.getItem('bloomflex_mat') || '{}') || {}; } catch { return {}; }
-}
-export function saveMatRates(rates) {
-  try { localStorage.setItem('bloomflex_mat', JSON.stringify(rates || {})); } catch { /* ignore */ }
-}
+// Raw-material ₹/kg rates now live on the server (rm_rate table) instead of
+// per-device localStorage, so margins are identical on every device. Load them
+// via api.js `rmRatesApi.get()` and pass them in as ctx.matRates.
 
 /**
  * Live raw-material cost from JSS material + pouch weight × current ₹/kg rates.

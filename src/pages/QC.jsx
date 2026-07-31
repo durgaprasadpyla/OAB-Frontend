@@ -179,7 +179,7 @@ export default function QC() {
           <Field label="Print Loc" value={form.printLoc} onChange={set('printLoc')} />
         </div>
 
-        <div className="g3">
+        <div className="g4">
           <div className="fg">
             <label>Dispatch Form</label>
             <select value={form.dispatchForm} onChange={set('dispatchForm')}>
@@ -230,7 +230,7 @@ export default function QC() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '12px', color: 'var(--i3)' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
                     No specs found
                   </td>
                 </tr>

@@ -14,11 +14,18 @@ export function isSOFormat(s) {
   return /^\d{2}\/\d+$/.test(String(s || ''));
 }
 
-/** Next invoice number, e.g. "BF/26/329". Returns { no, next }. */
-export function nextInvNo(lastInvNo, yy) {
+/**
+ * Next invoice number, e.g. "BL/26-27/329". Returns { no, next }.
+ *
+ * Single, authoritative definition of the invoice-number format. It matches the
+ * invoice screen (financial-year prefix, Apr-start) and the backend
+ * SequenceService; the old divergent "BF/<yy>/<n>" form has been retired.
+ * `dateIso` (optional) selects the financial year; defaults to today.
+ */
+export function nextInvNo(lastInvNo, dateIso) {
+  const [y1, y2] = financialYear(dateIso).split('-');
   const n = num(lastInvNo) + 1;
-  const y = yy || String(new Date().getFullYear()).slice(-2);
-  return { no: `BF/${y}/${n}`, next: n };
+  return { no: `BL/${y1.slice(-2)}-${y2.slice(-2)}/${n}`, next: n };
 }
 
 /** Next purchase-PO number, e.g. "BLM/PUR/2026-2027/101". */

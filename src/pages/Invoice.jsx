@@ -1,9 +1,11 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
-import { getPM, getCostPrice, loadMatRates } from '../lib/pricing.js';
+import { getPM } from '../lib/pricing.js';
+import { ordersApi } from '../api.js';
 import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
+import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import PackingListModal from '../components/PackingListModal.jsx';
 import { elementToPDF, printElement } from '../lib/pdf.js';
@@ -12,22 +14,15 @@ import { saveInvoicePdf } from '../lib/invoicePdf.js';
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-function nextInvoiceNo(lastInvNo) {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const ny = String(now.getFullYear() + 1).slice(-2);
-  return `BL/${yy}-${ny}/${num(lastInvNo) + 1}`;
-}
-
 const emptyHeader = (lastInvNo) => ({
-  ivNo: nextInvoiceNo(lastInvNo), ivDt: today(), po: '', transporter: '', dcNo: '', vehicle: '', driver: '',
+  ivNo: nextInvNo(lastInvNo).no, ivDt: today(), po: '', transporter: '', dcNo: '', vehicle: '', driver: '',
   placeOfSupply: '', paymentTerms: '30 days', freight: '0', gstType: 'IGST',
   customer: '', billingAddr: '', shippingAddr: '', billingGstin: '', shippingGstin: '', contactPerson: '', contactNo: '',
 });
 
 /** Invoice — builder + A4 tax invoice + confirm→OAB + register (native port, legacy 1983–2365). */
 export default function Invoice() {
-  const { mods, save } = useData();
+  const { mods, reloadModule } = useData();
   const [h, setH] = useState(() => emptyHeader(mods.oab && mods.oab.lastInvNo));
   const [lines, setLines] = useState({});   // { [so]: {checked, qty, fg, rate} }
   const [pendInv, setPendInv] = useState(null);
@@ -102,34 +97,28 @@ export default function Invoice() {
     if (!pendInv) return;
     setBusy(true);
     try {
-      const next = clone(mods.oab);
-      pendInv.forEach((p) => {
-        const arr = next.OAB[p.key] || [];
-        const i = arr.findIndex((r) => r.so === p.so);
-        if (i < 0) return;
-        arr[i].invDisp = num(arr[i].invDisp) + p.qty;
-        if (p.fgToUse > 0) arr[i].fg = Math.max(0, num(arr[i].fg) - p.fgToUse);
-      });
-      const m = /(\d+)$/.exec(h.ivNo.trim());
-      next.lastInvNo = m ? parseInt(m[1], 10) : num(next.lastInvNo) + 1;
-      const ctx = { prices: mods.prices, jss: mods.jss, matRates: loadMatRates() };
-      const entry = {
-        no: h.ivNo.trim(), date: h.ivDt, po: h.po, customer: h.customer,
-        qty: pendInv.reduce((s, p) => s + p.qty, 0),
-        amount: pendInv.reduce((s, p) => s + p.lineTotal, 0),
-        margin: pendInv.reduce((s, p) => s + (p.rate - getCostPrice(p.spec, ctx)) * p.qty, 0),
-        items: pendInv.map((p) => ({ spec: p.spec, jobName: p.jobName, rate: p.rate, qty: p.qty, dispatchForm: p.dispatchForm })),
-        packingList: plItems.length ? clone(plItems) : [],
-        pos: h.placeOfSupply, billingAddr: h.billingAddr, shipAddr: h.shippingAddr,
-        contact: h.contactPerson, contactNo: h.contactNo, dispLoc: h.placeOfSupply,
-        header: { transporter: h.transporter, dcNo: h.dcNo, vehicle: h.vehicle, driver: h.driver, paymentTerms: h.paymentTerms, freight: num(h.freight), gstType: h.gstType, billingGstin: h.billingGstin, shippingGstin: h.shippingGstin, placeOfSupply: h.placeOfSupply },
+      // The server assigns the invoice number and recomputes total/GST/margin,
+      // bumps invDisp and consumes FG — all in one transaction. The client's
+      // preview number/amounts are ignored; we render/PDF from the returned doc.
+      const header = {
+        po: h.po, date: h.ivDt, customer: h.customer, placeOfSupply: h.placeOfSupply,
+        billingAddr: h.billingAddr, shippingAddr: h.shippingAddr, billingGstin: h.billingGstin,
+        shippingGstin: h.shippingGstin, contactPerson: h.contactPerson, contactNo: h.contactNo,
+        transporter: h.transporter, dcNo: h.dcNo, vehicle: h.vehicle, driver: h.driver,
+        paymentTerms: h.paymentTerms, freight: num(h.freight), gstType: h.gstType,
       };
-      if (!Array.isArray(next.INV_REG)) next.INV_REG = [];
-      next.INV_REG.unshift(entry);
-      await save('oab', next);
-      flash('✅ Invoice confirmed — dispatched qty updated. Next invoice: ' + nextInvoiceNo(next.lastInvNo));
+      const lines = pendInv.map((p) => ({
+        so: p.so, spec: p.spec, jobName: p.jobName, qty: p.qty, rate: p.rate,
+        fgToUse: p.fgToUse, dispatchForm: p.dispatchForm,
+      }));
+      const resp = await ordersApi.createInvoice({ header, lines, packingList: plItems.length ? clone(plItems) : [] });
+      await reloadModule('oab');
+      const newNo = (resp && resp.no) || '';
+      const m = /(\d+)$/.exec(newNo);
+      const lastN = m ? parseInt(m[1], 10) : 0;
+      flash('✅ Invoice ' + newNo + ' confirmed — dispatched qty updated. Next invoice: ' + nextInvNo(lastN).no);
       setPendInv(null); setPlItems([]); setLines({});
-      setH(emptyHeader(next.lastInvNo));
+      setH(emptyHeader(lastN));
     } catch (e) {
       flash('Confirm failed: ' + e.message, 'r');
     } finally {
@@ -285,7 +274,8 @@ const inpS = { width: '100%', height: 30, border: '1px solid var(--bd)', borderR
 
 function periodRange(period) {
   const now = new Date();
-  const p = (d) => d.toISOString().slice(0, 10);
+  const pad = (x) => String(x).padStart(2, '0');
+  const p = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   if (period === 'thismonth') return [p(new Date(now.getFullYear(), now.getMonth(), 1)), p(new Date(now.getFullYear(), now.getMonth() + 1, 0))];
   if (period === 'lastmonth') return [p(new Date(now.getFullYear(), now.getMonth() - 1, 1)), p(new Date(now.getFullYear(), now.getMonth(), 0))];
   return ['', ''];

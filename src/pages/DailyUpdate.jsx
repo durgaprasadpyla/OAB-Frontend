@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { balance } from '../lib/calc.js';
-import { dash, today, fmtDate } from '../lib/format.js';
+import { ordersApi } from '../api.js';
+import { balance, invBalance } from '../lib/calc.js';
+import { dash, fmtDate } from '../lib/format.js';
 import { STAGES } from '../lib/constants.js';
 import { BalanceBadge } from '../components/badges.jsx';
 
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** Daily Update — manual dispatch + FG + stage + short-close (native port of renderUpd/saveAllUpd, legacy 1906). */
 export default function DailyUpdate() {
-  const { mods, save } = useData();
+  const { mods, reloadModule } = useData();
   const [sheet, setSheet] = useState('SF');
   const [q, setQ] = useState('');
   const [edits, setEdits] = useState({});   // { [so]: {man, inv, fg, stage} }
@@ -29,44 +29,49 @@ export default function DailyUpdate() {
   const flash = (text, t = 'g') => { setMsg({ text, t }); setTimeout(() => setMsg(null), 4000); };
 
   async function saveAll() {
-    const next = clone(mods.oab);
-    const arr = next.OAB[sheet] || [];
-    let changed = 0;
+    const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
+    const ops = [];
+    const over = [];
     arr.forEach((r) => {
       if (r.closed) return;
       const e = edits[r.so];
       if (!e) return;
+      const op = { so: r.so };
+      let has = false;
       if (e.man !== undefined && e.man !== '' && num(e.man) > 0) {
-        if (!Array.isArray(r.manDispLog)) r.manDispLog = [];
-        r.manDispLog.push({ date: today(), invNo: (e.inv || '').trim(), qty: num(e.man) });
-        r.manDisp = num(r.manDisp) + num(e.man);
-        changed++;
+        const avail = invBalance(r);   // remaining un-dispatched qty (excludes FG)
+        if (num(e.man) > avail) { over.push(`SO ${r.so}: ${num(e.man)} > balance ${avail}`); return; }
+        op.addQty = num(e.man); op.invNo = (e.inv || '').trim(); has = true;
       }
-      if (e.fg !== undefined && e.fg !== '') { r.fg = num(e.fg); changed++; }
-      if (prodStatus(r.so) === 'Ready' && e.stage !== undefined && e.stage !== '' && e.stage !== r.stage) { r.stage = e.stage; changed++; }
+      if (e.fg !== undefined && e.fg !== '') { op.fg = num(e.fg); has = true; }
+      if (prodStatus(r.so) === 'Ready' && e.stage !== undefined && e.stage !== '' && e.stage !== r.stage) { op.stage = e.stage; has = true; }
+      if (has) ops.push(op);
     });
-    if (!changed) { flash('No changes to save', 'y'); return; }
+    if (over.length) { flash('Manual dispatch exceeds balance — ' + over.join('; '), 'r'); return; }
+    if (!ops.length) { flash('No changes to save', 'y'); return; }
     setBusy(true);
-    try { await save('oab', next); setEdits({}); flash('✅ All changes saved'); }
-    catch (err) { flash('Save failed: ' + err.message, 'r'); }
-    finally { setBusy(false); }
+    try {
+      for (const op of ops) await ordersApi.dispatch(op);   // server: atomic manDisp += qty, FG/stage
+      await reloadModule('oab');
+      setEdits({}); flash('✅ All changes saved');
+    } catch (err) {
+      await reloadModule('oab');   // some ops may have committed; show server truth
+      flash('Save failed: ' + err.message, 'r');
+    } finally { setBusy(false); }
   }
 
   async function closeSO(so) {
-    const next = clone(mods.oab);
-    const arr = next.OAB[sheet] || [];
-    const i = arr.findIndex((r) => r.so === so);
-    if (i < 0) return;
-    const r = arr[i];
+    const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
+    const r = arr.find((x) => x.so === so);
+    if (!r) return;
     const disp = num(r.invDisp) + num(r.manDisp);
     const short = disp < num(r.poQty);
     const message = short
       ? `Short close SO ${r.so}?\nPO Qty: ${num(r.poQty).toLocaleString('en-IN')}\nDispatched: ${disp.toLocaleString('en-IN')}\nShort by: ${(num(r.poQty) - disp).toLocaleString('en-IN')} pcs\n\nThis will mark the SO as closed.`
       : `Close SO ${r.so}? It is fully dispatched.`;
     if (!window.confirm(message)) return;
-    arr[i] = { ...r, closed: true, closedDate: today(), shortClosed: short };
     setBusy(true);
-    try { await save('oab', next); flash('SO ' + r.so + ' closed' + (short ? ' (short close)' : '')); }
+    try { await ordersApi.close(so); await reloadModule('oab'); flash('SO ' + r.so + ' closed' + (short ? ' (short close)' : '')); }
     catch (err) { flash('Close failed: ' + err.message, 'r'); }
     finally { setBusy(false); }
   }
@@ -77,8 +82,8 @@ export default function DailyUpdate() {
       <div className="pg-sub">Log manual dispatches, set finished-goods and production stage, or short-close an SO.</div>
 
       <div className="fbar">
-        <button className="btn btn-s" style={sheet === 'SF' ? onStyle : undefined} onClick={() => setSheet('SF')}>Stay Fresh</button>
-        <button className="btn btn-s" style={sheet === 'OT' ? onStyle : undefined} onClick={() => setSheet('OT')}>Others</button>
+        <button className={'btn btn-s' + (sheet === 'SF' ? ' on' : '')} onClick={() => setSheet('SF')}>Stay Fresh</button>
+        <button className={'btn btn-s' + (sheet === 'OT' ? ' on' : '')} onClick={() => setSheet('OT')}>Others</button>
         <input placeholder="Search SO / customer / job / spec…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
         <span style={{ flex: 1 }} />
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save All Changes'}</button>
@@ -198,6 +203,5 @@ function ManDispModal({ so, log, onClose }) {
   );
 }
 
-const onStyle = { background: 'var(--gl)', color: 'var(--g)', borderColor: '#A8D5B8', fontWeight: 700 };
 const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'auto', padding: 20 };
 const sheet = { background: 'var(--wh)', borderRadius: 12, padding: 18, width: 'min(560px, 96vw)', margin: 'auto' };

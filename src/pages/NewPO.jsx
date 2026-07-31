@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { ordersApi } from '../api.js';
 import { today, fmtDate, dash } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
 
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
 export default function NewPO() {
-  const { mods, save } = useData();
+  const { mods, reloadModule } = useData();
   const [step, setStep] = useState(1);            // 1 | 2 | 3 | 4(=success)
   const [poNum, setPoNum] = useState('');
   const [poDate, setPoDate] = useState(today());
@@ -76,23 +76,20 @@ export default function NewPO() {
   }
 
   async function submit() {
-    const dupes = ['SF', 'OT'].flatMap((k) => (mods.oab.OAB[k] || []))
-      .filter((r) => selPO.some((s) => s.so === r.so)).map((r) => r.so);
-    if (dupes.length) return alert('SO already exists: ' + dupes.join(', '));
     setBusy(true);
     try {
-      const next = clone(mods.oab);
-      next.lastSO = { ...(next.lastSO || { y: soY, n: 0 }) };
-      selPO.forEach((row) => {
-        const key = row.jobType === 'StayFresh' ? 'SF' : 'OT';
-        if (!next.OAB[key]) next.OAB[key] = [];
-        const mx = next.OAB[key].reduce((m, r) => Math.max(m, parseInt(r.sno, 10) || 0), 0);
-        next.OAB[key].push({ ...row, sno: mx + 1 });
-        const n = parseInt(row.so.split('/')[1], 10);
-        if (n > num(next.lastSO.n)) next.lastSO.n = n;
-      });
-      await save('oab', next);
-      setAdded({ count: selPO.length, first: selPO[0].so, last: selPO[selPO.length - 1].so });
+      // Send the chosen SKUs; the server assigns each SO number atomically and
+      // returns them. The SO numbers shown in the Confirm step are a provisional
+      // preview — the authoritative numbers come back here.
+      const items = selPO.map((r) => ({
+        spec: r.spec, jobName: r.jobName, jobType: r.jobType, subBrand: r.subBrand, poQty: r.poQty,
+        width: r.width, material: r.material, mic: r.mic, height: r.height, filmWidth: r.filmWidth,
+        gsm: r.gsm, dispatchForm: r.dispatchForm, pouchingMachines: r.pouchingMachines,
+      }));
+      const resp = await ordersApi.createSalesOrders({ poNum: poNum.trim(), poDate, poExp, customer, dispLoc: loc, items });
+      await reloadModule('oab');
+      const created = (resp && resp.created) || [];
+      setAdded({ count: created.length, first: created[0], last: created[created.length - 1] });
       setStep(4);
     } catch (e) {
       alert('Save failed: ' + e.message);

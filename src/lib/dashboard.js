@@ -9,7 +9,7 @@ const sum = (arr, k) => (arr || []).reduce((s, x) => s + (Number(x[k]) || 0), 0)
 /** Date window for the dashboard filter. */
 export function dashRange(filter, customFrom, customTo) {
   const now = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
+  const iso = (d) => { const p = (x) => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
   if (filter === 'day') { const t = iso(now); return { from: t, to: t }; }
   if (filter === 'month') return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: iso(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
   if (filter === 'last_month') return { from: iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: iso(new Date(now.getFullYear(), now.getMonth(), 0)) };

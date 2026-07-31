@@ -144,3 +144,65 @@ html,body,#root{height:100%}
 .oab-frame{position:absolute;inset:0;width:100%;height:100%;border:0}
 .oab-main{flex:1;min-height:0;position:relative;overflow:auto;background:var(--bg)}
 .oab-main>#app{min-height:100%}
+
+
+/* ============================================================================
+   Production hardening (appended): responsive layout, accessibility, tokens.
+   ============================================================================ */
+
+/* Darken secondary-text token to meet WCAG AA contrast (#888 ~3.5:1 -> ~4.6:1).
+   New semantic tokens replace scattered hardcoded hexes. */
+:root{
+  --i3:#6B6B6B;
+  --amber:#7A4F00;
+  --warn:#A3510A;
+  --zebra:#EEF7F2;
+  --nr-bg:#FEF0F0;
+}
+
+/* Visible keyboard focus on every interactive element */
+.btn:focus-visible,.ntab:focus-visible,.step-tab:focus-visible,
+a:focus-visible,[role="button"]:focus-visible,
+input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--g);
+  outline-offset:2px;
+}
+.step-tab{cursor:pointer}
+
+/* Active segmented-button state (retires the duplicated inline "onStyle" objects) */
+.btn.on{background:var(--gl);color:var(--g);border-color:#A8D5B8;font-weight:700}
+
+/* Table date inputs now match the other cell inputs */
+td input[type=date]{width:100%;height:27px;border:1px solid var(--bd);border-radius:5px;padding:0 6px;font-size:12px}
+td input[type=date]:focus{border-color:var(--g);outline:none}
+
+/* Numeric-alignment utility */
+.num,td.num,th.num{text-align:right}
+td.num input{text-align:right}
+
+/* Zebra striping via CSS so row-hover feedback still works (NR rows win) */
+tbody tr.zebra:not(.nr):nth-child(even){background:var(--zebra)}
+tbody tr.zebra:not(.nr):hover{background:#FAFAF8}
+tbody tr.nr{background:var(--nr-bg)}
+tbody tr.nr:hover{background:#FBE4E4}
+
+/* ── Responsive breakpoints ──────────────────────────────────────────────── */
+@media (max-width:900px){
+  #hdr{height:auto;min-height:48px;flex-wrap:wrap;padding:8px 12px}
+  #nav{order:3;width:100%;flex-wrap:wrap;justify-content:flex-start}
+  .g3,.g4{grid-template-columns:1fr 1fr}
+}
+@media (max-width:600px){
+  #app{padding:12px 12px 4px}
+  .g2,.g3,.g4{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr 1fr}
+  .act{flex-wrap:wrap}
+  .fbar{gap:6px}
+  .pg-ttl{font-size:15px}
+  .ntab{padding:0 10px}
+}
+
+/* Print: un-clip a scrollable container when it is the print target */
+@media print{
+  .print-target,.print-target .tw,.print-target.tw{max-height:none!important;overflow:visible!important}
+}

@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { useData } from '../data.jsx';
+import { ordersApi } from '../api.js';
 import { balance } from '../lib/calc.js';
 import { dash, today } from '../lib/format.js';
 import { STAGES, PROD_STATUSES } from '../lib/constants.js';
 import { exportAOA } from '../lib/xlsx.js';
-
-const clone = (o) => JSON.parse(JSON.stringify(o));
+import { printElement } from '../lib/pdf.js';
 
 /**
  * Production Floor — native port of the legacy plant view (showPlantView /
@@ -18,7 +18,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
  * `prodStatus` module keyed by SO; stage lives on the OAB row itself.
  */
 export default function Plant() {
-  const { mods, save } = useData();
+  const { mods, save, reloadModule } = useData();
 
   // Sheet filter (All / SF / OT), default All.
   const [filter, setFilter] = useState('All');
@@ -27,6 +27,7 @@ export default function Plant() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const tableRef = useRef(null);
 
   // Flatten both sheets (SF first), open rows only.
   const rows = useMemo(() => {
@@ -85,14 +86,13 @@ export default function Plant() {
     return ps !== curPs || finalStage !== curStage;
   }), [edits, mods.oab, mods.prodStatus]);
 
-  // Build the two next-modules from current mods + edits.
+  // Collect the prod-status module update + the per-row stage changes from edits.
   function computeNext() {
     const nextPs = { ...(mods.prodStatus || {}) };
-    const nextOab = clone(mods.oab);
+    const stageChanges = [];
     let psDirty = false;
-    let stageDirty = false;
     ['SF', 'OT'].forEach((sheet) => {
-      const arr = (nextOab.OAB && nextOab.OAB[sheet]) || [];
+      const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
       arr.forEach((r) => {
         if (r.closed) return;
         const e = edits[sheet + '|' + r.so];
@@ -101,19 +101,20 @@ export default function Plant() {
         const ps = e.ps != null ? e.ps : curPs;
         const finalStage = ps === 'Ready' ? (e.st != null ? e.st : (r.stage || '')) : '';
         if (ps !== curPs) { nextPs[r.so] = ps; psDirty = true; }
-        if (finalStage !== (r.stage || '')) { r.stage = finalStage; stageDirty = true; }
+        if (finalStage !== (r.stage || '')) { stageChanges.push({ so: r.so, stage: finalStage }); }
       });
     });
-    return { nextPs, nextOab, psDirty, stageDirty };
+    return { nextPs, psDirty, stageChanges };
   }
 
   async function onSave() {
-    const { nextPs, nextOab, psDirty, stageDirty } = computeNext();
-    if (!psDirty && !stageDirty) return;
+    const { nextPs, psDirty, stageChanges } = computeNext();
+    if (!psDirty && !stageChanges.length) return;
     setBusy(true); setErr(''); setMsg('');
     try {
-      await save('prodStatus', nextPs);   // (1) prod-status module, keyed by SO
-      await save('oab', nextOab);          // (2) OAB rows carry the stage
+      if (psDirty) await save('prodStatus', nextPs);              // (1) prod-status module, keyed by SO
+      for (const ch of stageChanges) await ordersApi.setStage(ch.so, ch.stage); // (2) stage via the plant endpoint
+      if (stageChanges.length) await reloadModule('oab');
       setEdits({});
       setMsg('Saved at ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
       setTimeout(() => setMsg(''), 4000);
@@ -148,8 +149,7 @@ export default function Plant() {
         {['All', 'SF', 'OT'].map((k) => (
           <button
             key={k}
-            className="btn btn-s"
-            style={filter === k ? activeFilter : undefined}
+            className={'btn btn-s' + (filter === k ? ' on' : '')}
             onClick={() => setFilter(k)}
           >
             {k === 'All' ? 'All' : k === 'SF' ? 'Stay Fresh' : 'Others'}
@@ -160,10 +160,10 @@ export default function Plant() {
           {busy ? 'Saving…' : 'Save'}
         </button>
         <button className="btn btn-s" onClick={onExcel}>Download Excel</button>
-        <button className="btn btn-s" onClick={() => window.print()}>Print</button>
+        <button className="btn btn-s" onClick={() => printElement(tableRef.current)}>Print</button>
       </div>
 
-      <div className="tw sy">
+      <div className="tw sy" ref={tableRef}>
         <table>
           <thead>
             <tr>
@@ -181,9 +181,9 @@ export default function Plant() {
               const { ps, isReady, st } = eff(sheet, r);
               const nr = !isReady;
               return (
-                <tr key={sheet + '|' + r.so} style={{ background: nr ? '#FEF0F0' : i % 2 === 0 ? undefined : '#F5FAF7' }}>
+                <tr key={sheet + '|' + r.so} className={'zebra' + (nr ? ' nr' : '')}>
                   <td>
-                    <span className="so-pill" style={nr ? { fontSize: 10, background: '#C0392B' } : { fontSize: 10 }}>
+                    <span className="so-pill" style={nr ? { fontSize: 10, background: 'var(--red)' } : { fontSize: 10 }}>
                       {r.so}
                     </span>
                   </td>
@@ -193,7 +193,7 @@ export default function Plant() {
                   <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.poQty)}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: balance(r) > 0 ? '#C0392B' : '#1B6B3A' }}>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: balance(r) > 0 ? 'var(--red)' : 'var(--g)' }}>
                     {dash(balance(r))}
                   </td>
                   <td>
@@ -233,5 +233,4 @@ export default function Plant() {
   );
 }
 
-const activeFilter = { background: 'var(--gl)', color: 'var(--g)', borderColor: '#A8D5B8', fontWeight: 700 };
 const cellSel = { height: 26, fontSize: 11, border: '1px solid var(--bd)', borderRadius: 4, padding: '0 4px' };

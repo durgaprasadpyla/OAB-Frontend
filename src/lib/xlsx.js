@@ -6,10 +6,20 @@ function X() {
   return window.XLSX;
 }
 
+// Neutralize spreadsheet formula injection: a cell starting with = + - @ (or a
+// leading control char) is prefixed with ' so Excel/Sheets treats it as text.
+function sanitizeCell(v) {
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v)) return "'" + v;
+  return v;
+}
+function sanitizeRows(rows) {
+  return (rows || []).map((row) => (Array.isArray(row) ? row.map(sanitizeCell) : row));
+}
+
 /** Download an array-of-arrays as an .xlsx file. */
 export function exportAOA(rows, filename, sheetName = 'Sheet1') {
   const x = X();
-  const ws = x.utils.aoa_to_sheet(rows);
+  const ws = x.utils.aoa_to_sheet(sanitizeRows(rows));
   const wb = x.utils.book_new();
   x.utils.book_append_sheet(wb, ws, sheetName);
   x.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');

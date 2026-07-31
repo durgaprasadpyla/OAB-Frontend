@@ -1,8 +1,7 @@
 import { Fragment, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { useAuth } from '../auth.jsx';
-import { purchComputeStatus, parsePaymentDays, num } from '../lib/calc.js';
-import { nextPONum } from '../lib/seq.js';
+import { purchaseApi } from '../api.js';
+import { parsePaymentDays, num } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 
@@ -31,8 +30,7 @@ const textareaStyle = {
  * purchDueDate. Module 6 shape: { asl, pos, priceHistory, counter, itemsExtra }.
  */
 export default function Purchase() {
-  const { mods, save } = useData();
-  const { user } = useAuth();
+  const { mods, reloadModule } = useData();
 
   const [tab, setTab] = useState('gen'); // 'gen' | 'track' | 'pay'
   const [busy, setBusy] = useState(false);
@@ -71,22 +69,14 @@ export default function Purchase() {
     [supplierRows],
   );
 
-  // ── Persistence: deep-clone module 6, guarantee the canonical shape, mutate, save ──
-  function cloneP() {
-    const next = JSON.parse(JSON.stringify(mods.purchase || {}));
-    if (!Array.isArray(next.asl)) next.asl = [];
-    if (!Array.isArray(next.pos)) next.pos = [];
-    if (!Array.isArray(next.priceHistory)) next.priceHistory = [];
-    if (!Array.isArray(next.itemsExtra)) next.itemsExtra = [];
-    if (!Number.isFinite(Number(next.counter))) next.counter = 0;
-    return next;
-  }
-  async function persist(mutate) {
+  // ── Persistence: call the granular server endpoint, then reload module 6 ──
+  // The server assigns the PO number, records price history, and keeps GRN/status
+  // atomic; module 6's blob (read model) is refreshed via reloadModule.
+  async function runPurchase(action) {
     setBusy(true);
     try {
-      const next = cloneP();
-      mutate(next);
-      await save('purchase', next);
+      await action();
+      await reloadModule('purchase');
       return true;
     } catch (e) {
       return e;
@@ -138,31 +128,18 @@ export default function Purchase() {
     const valid = items.filter((it) => it.item.trim() && num(it.qty) > 0 && num(it.rate) >= 0);
     if (!valid.length) { setGenMsg({ t: 'r', m: 'Add at least one item with a quantity and rate.' }); return; }
 
-    const day = today();
-    const built = valid.map((it) => ({
-      item: it.item.trim(), unit: (it.unit || '').trim(),
-      qty: num(it.qty), rate: num(it.rate), amount: num(it.qty) * num(it.rate), receivedQty: 0,
-    }));
-    const sub = built.reduce((s, i) => s + i.amount, 0);
-    const gp = num(gst);
-    const total = sub + sub * gp / 100; // totalAmount = Σamount (+GST)
-
-    let madeNum = '';
-    const r = await persist((n) => {
-      madeNum = nextPONum(n.counter, day);
-      n.pos.unshift({
-        poNum: madeNum, poDate: day, supplier, items: built, totalAmount: total,
-        expectedDelivery: expected || '', gstPercent: gp, status: 'Open',
-        grnRef: '', actualReceiptDate: '', closedDate: '', manualClosed: false,
-        receipts: [], paymentStatus: 'Unpaid', paymentDate: '', notes: (notes || '').trim(),
-        createdBy: user || 'purchase',
+    // The server assigns the number, computes the total, and records price history.
+    let made = '';
+    const r = await runPurchase(async () => {
+      const resp = await purchaseApi.createPO({
+        supplier, expectedDelivery: expected || '', gstPercent: num(gst), notes: (notes || '').trim(),
+        items: valid.map((it) => ({ item: it.item.trim(), unit: (it.unit || '').trim(), qty: num(it.qty), rate: num(it.rate) })),
       });
-      n.counter = num(n.counter) + 1;
-      built.forEach((i) => n.priceHistory.push({ supplier, item: i.item, rate: i.rate, date: day, poNum: madeNum }));
+      made = resp && resp.poNum;
     });
 
     if (r === true) {
-      setGenMsg({ t: 'g', m: '✓ ' + madeNum + ' generated and saved.' });
+      setGenMsg({ t: 'g', m: '✓ ' + made + ' generated and saved.' });
       setItems([{ ...EMPTY_ROW }]); setExpected(''); setGst(''); setNotes(''); setSupplier('');
     } else if (r) {
       setGenMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
@@ -182,54 +159,33 @@ export default function Purchase() {
   async function saveGRN(po) {
     setGrnMsg(null);
     if (!grnRef.trim()) { setGrnMsg({ t: 'r', m: 'Enter the GRN reference.' }); return; }
-    const day = today(); // receipt is recorded as of the day this GRN entry is made (legacy pvSaveGRN)
-    const ref = grnRef.trim();
-    const r = await persist((n) => {
-      const t = n.pos.find((p) => p.poNum === po.poNum);
-      if (!t) return;
-      (t.items || []).forEach((it, idx) => {
-        const already = num(it.receivedQty);
-        const bal = Math.max(0, num(it.qty) - already);
-        let v = num(grnQty[idx]);
-        if (v < 0) v = 0;
-        if (v > bal) v = bal;      // cap so a line never receives past its ordered qty
-        it.receivedQty = already + v;
-      });
-      t.grnRef = ref;
-      t.actualReceiptDate = day;
-      t.status = purchComputeStatus(t.items); // automatic Open / Partial / Closed
-      t.manualClosed = false;
-      t.closedDate = t.status === 'Closed' ? day : '';
-      if (!Array.isArray(t.receipts)) t.receipts = [];
-      t.receipts.push({ date: day, ref });
-    });
+    const qty = {};                       // { itemIndex: receiveNow }; server caps at the balance
+    (po.items || []).forEach((it, idx) => { const v = num(grnQty[idx]); if (v > 0) qty[idx] = v; });
+    const r = await runPurchase(() => purchaseApi.receiveGRN({ poNum: po.poNum, grnRef: grnRef.trim(), qty }));
     if (r === true) closeGRN();
     else if (r) setGrnMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
   }
 
   async function forceClose(po) {
-    const day = today();
-    const r = await persist((n) => {
-      const t = n.pos.find((p) => p.poNum === po.poNum);
-      if (t) { t.status = 'Closed'; t.manualClosed = true; t.closedDate = day; }
-    });
+    const r = await runPurchase(() => purchaseApi.close(po.poNum));
     if (r === true) closeGRN();
+    else if (r) alert('Force close failed: ' + (r.message || r));
   }
 
-  const reopen = (po) => persist((n) => {
-    const t = n.pos.find((p) => p.poNum === po.poNum);
-    if (t) { t.status = purchComputeStatus(t.items); t.manualClosed = false; t.closedDate = ''; }
-  });
+  const reopen = async (po) => {
+    const r = await runPurchase(() => purchaseApi.reopen(po.poNum));
+    if (r !== true && r) alert('Reopen failed: ' + (r.message || r));
+  };
 
   // ── Section 3: Payments ──
-  const markPaid = (po) => persist((n) => {
-    const t = n.pos.find((p) => p.poNum === po.poNum);
-    if (t) { t.paymentStatus = 'Paid'; t.paymentDate = today(); }
-  });
-  const markUnpaid = (po) => persist((n) => {
-    const t = n.pos.find((p) => p.poNum === po.poNum);
-    if (t) { t.paymentStatus = 'Unpaid'; t.paymentDate = ''; }
-  });
+  const markPaid = async (po) => {
+    const r = await runPurchase(() => purchaseApi.pay(po.poNum));
+    if (r !== true && r) alert('Mark paid failed: ' + (r.message || r));
+  };
+  const markUnpaid = async (po) => {
+    const r = await runPurchase(() => purchaseApi.unpay(po.poNum));
+    if (r !== true && r) alert('Mark unpaid failed: ' + (r.message || r));
+  };
 
   function exportPayments() {
     const header = ['PO Number', 'Supplier', 'Total Amount', 'Payment Terms', 'Due Date', 'Status', 'Payment Date'];

@@ -56,6 +56,15 @@ function threeDigits(n) {
   return (h ? ONES[h] + ' Hundred' + (rest ? ' ' : '') : '') + (rest ? twoDigits(rest) : '');
 }
 
+// Words for the crore group, safe for very large invoices (up to ~99999 crore)
+// instead of returning "undefined" once crore >= 1000.
+function croreWords(n) {
+  if (n < 1000) return threeDigits(n);
+  const th = Math.floor(n / 1000);
+  const rest = n % 1000;
+  return (th ? twoDigits(th) + ' Thousand' + (rest ? ' ' : '') : '') + (rest ? threeDigits(rest) : '');
+}
+
 /** Amount in words, Indian system (Rupees … Paise … Only). For invoices. */
 export function amountInWords(amount) {
   const a = Math.round(num(amount) * 100) / 100;
@@ -69,7 +78,7 @@ export function amountInWords(amount) {
   const hundred = rupeesPart % 1000;
 
   let words = '';
-  if (crore) words += threeDigits(crore) + ' Crore ';
+  if (crore) words += croreWords(crore) + ' Crore ';
   if (lakh) words += twoDigits(lakh) + ' Lakh ';
   if (thousand) words += twoDigits(thousand) + ' Thousand ';
   if (hundred) words += threeDigits(hundred) + ' ';
