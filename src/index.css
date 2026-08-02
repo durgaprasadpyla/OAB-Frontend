@@ -85,6 +85,10 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
   body.printing #root>*{visibility:hidden}
   body.printing .print-target,body.printing .print-target *{visibility:visible}
   body.printing .print-target{position:absolute;left:0;top:0;width:100%;min-height:0;margin:0;box-shadow:none}
+  /* The invoice is authored at a fixed 210mm; inside the 7mm print margins that
+     overflows the 196mm printable width and the browser scales/clips it (blurry,
+     misaligned). Pin it to the printable width so it lands 1:1 on A4. */
+  body.printing .inv{width:196mm;min-height:0;border:none;margin:0 auto}
   @page{size:A4;margin:7mm}
 }
 /* Invoice document styles - A4 */

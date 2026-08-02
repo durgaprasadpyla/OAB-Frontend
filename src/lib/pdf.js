@@ -15,8 +15,12 @@ export async function elementToPDF(el, filename, { orientation = 'portrait', mar
   const JsPDF = window.jspdf && window.jspdf.jsPDF;
   if (!JsPDF) throw new Error('jsPDF is not loaded');
 
+  // scale 2 (~190 DPI on A4) is plenty for tables/packing lists and produces a
+  // file ~2.5x smaller and noticeably faster to render than scale 3, which was
+  // emitting very large, slow captures. (Invoices use the true-vector path in
+  // invoicePdf.js — crisp and tiny — not this rasterizer.)
   const canvas = await window.html2canvas(el, {
-    scale: 3,
+    scale: 2,
     backgroundColor: '#ffffff',
     useCORS: true,
     width: el.offsetWidth,
@@ -55,7 +59,7 @@ export async function elementToPDF(el, filename, { orientation = 'portrait', mar
     ctx.drawImage(canvas, 0, sy, canvas.width, sh, 0, 0, canvas.width, sh);
     // JPEG (opaque, no alpha) → one image, no soft-mask, ~20x smaller than the
     // alpha PNG jsPDF was storing, and renders crisply in every viewer.
-    const img = slice.toDataURL('image/jpeg', 0.92);
+    const img = slice.toDataURL('image/jpeg', 0.85);
     const hmm = sh / pxPerMm;
     if (p > 0) pdf.addPage();
     pdf.addImage(img, 'JPEG', margin, margin, contentW, hmm);

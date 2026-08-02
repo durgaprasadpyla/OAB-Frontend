@@ -8,7 +8,8 @@ import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import PackingListModal from '../components/PackingListModal.jsx';
-import { elementToPDF, printElement } from '../lib/pdf.js';
+import PortalEntry from '../components/PortalEntry.jsx';
+import { printElement } from '../lib/pdf.js';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -259,6 +260,7 @@ export default function Invoice() {
             <button className="btn btn-s" style={{ background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--g)' }}
               onClick={() => { if (!plItems.length) setPlItems(pendInv.map((p) => ({ spec: p.spec, jobName: p.jobName, totalQty: p.qty, dispatchForm: p.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] }))); setShowPL(true); }}>📦 Create Packing List</button>
           </div>
+          <PortalEntry header={h} lines={pendInv} />
           <InvoiceDoc ref={docRef} header={h} lines={pendInv} />
         </div>
       )}
