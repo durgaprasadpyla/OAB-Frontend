@@ -68,11 +68,23 @@ export function buildInvoiceDoc(header, lines) {
   // ── Bill To / Ship To ──
   const baTop = y;
   const al = (a) => String(a || '').split('\n').filter(Boolean);
+  const billW = mid - 2 - (L + 2);   // text width available inside the Bill To column
+  const shipW = R - 2 - (mid + 2);   // text width available inside the Ship To column
+  // Draw address lines wrapped to the column width so a long line can't bleed into
+  // the neighbouring column or run off the page. Returns the next y.
+  const addr = (arr, x, startY, maxW) => {
+    let yy = startY;
+    setF(8);
+    arr.forEach((ln) => {
+      doc.splitTextToSize(String(ln), maxW).forEach((p) => { T(p, x, yy, { size: 8 }); yy += 3.8; });
+    });
+    return yy;
+  };
   lbl('Bill To', L + 2, baTop + 4); T(h.customer, L + 2, baTop + 8.5, { size: 9, style: 'bold' });
-  let by = baTop + 12.3; al(h.billingAddr).forEach((ln) => { T(ln, L + 2, by, { size: 8 }); by += 3.8; });
+  let by = addr(al(h.billingAddr), L + 2, baTop + 12.3, billW);
   if (h.billingGstin) { T('GSTIN: ' + h.billingGstin, L + 2, by, { size: 8 }); by += 3.8; }
   lbl('Ship To', mid + 2, baTop + 4); T(h.customer, mid + 2, baTop + 8.5, { size: 9, style: 'bold' });
-  let sy = baTop + 12.3; al(h.shippingAddr || h.billingAddr).forEach((ln) => { T(ln, mid + 2, sy, { size: 8 }); sy += 3.8; });
+  let sy = addr(al(h.shippingAddr || h.billingAddr), mid + 2, baTop + 12.3, shipW);
   if (h.shippingGstin) { T('GSTIN: ' + h.shippingGstin, mid + 2, sy, { size: 8 }); sy += 3.8; }
   y = baTop + Math.max(24, Math.max(by, sy) + 1 - baTop); box(L, baTop, W, y - baTop); vline(mid, baTop, y);
 

@@ -28,7 +28,6 @@ export function nextInvNo(lastInvNo, dateIso) {
   return { no: `BL/${y1.slice(-2)}-${y2.slice(-2)}/${n}`, next: n };
 }
 
-/** Next purchase-PO number, e.g. "BLM/PUR/2026-2027/101". */
-export function nextPONum(counter, dateIso) {
-  return `BLM/PUR/${financialYear(dateIso)}/${num(counter) + 1}`;
-}
+// nextPONum was removed: purchase PO numbers are now assigned server-side
+// (POST /api/purchase-orders -> resp.poNum via SequenceService). The client no
+// longer derives PO numbers locally, so no preview helper is needed here.
