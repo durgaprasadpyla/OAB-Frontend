@@ -76,8 +76,20 @@ export default function OabBoard() {
   }
 
   async function exportPDF() {
-    try { await elementToPDF(tableRef.current, `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.pdf`, { orientation: 'landscape' }); }
+    const el = tableRef.current;
+    if (!el) return;
+    // The table sits in a `.tw.sy` scroll container (max-height via CSS class), so a
+    // plain capture would rasterise only the rows currently in view. Un-clip it inline
+    // (inline style overrides the class) for the whole export — so html2canvas AND the
+    // pagination read the full height and EVERY row lands in the PDF, matching Excel —
+    // then clear the inline styles to restore the on-screen scroll. Excel is untouched.
+    const prevMaxHeight = el.style.maxHeight;
+    const prevOverflow = el.style.overflow;
+    el.style.maxHeight = 'none';
+    el.style.overflow = 'visible';
+    try { await elementToPDF(el, `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.pdf`, { orientation: 'landscape' }); }
     catch (e) { alert('PDF export failed: ' + e.message); }
+    finally { el.style.maxHeight = prevMaxHeight; el.style.overflow = prevOverflow; }
   }
 
   return (
