@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { COMPANY } from '../lib/company.js';
 import { dash } from '../lib/format.js';
-import { elementToPDF, printElement } from '../lib/pdf.js';
+import { elementToPDF } from '../lib/pdf.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -16,6 +16,47 @@ export default function PackingListModal({ items, setItems, invNo, onClose }) {
 
   async function pdf() { try { await elementToPDF(docRef.current, `PackingList_${(invNo || '').replace(/[\\/]/g, '-')}.pdf`); } catch (e) { alert('PDF failed: ' + e.message); } }
 
+  /**
+   * Print EVERY record. The packing list lives inside a position:fixed, scrolling
+   * modal overlay. The shared printElement() marks the node position:absolute, whose
+   * containing block then resolves to that fixed overlay — so the overlay's
+   * overflow:auto clips the output to its first page (~one record). Instead we clone
+   * the printable node to <body> and, via `.pl-printing` print CSS, show only the
+   * clone while printing, so all records flow and paginate across A4 pages — matching
+   * the Save-PDF (html2canvas) output, which is left untouched. cloneNode copies markup
+   * but not the live value of controlled inputs, so we copy the bag from/to/qty across.
+   */
+  function handlePrint() {
+    const src = docRef.current;
+    if (!src) return;
+    const clone = src.cloneNode(true);
+    const live = src.querySelectorAll('input');
+    const copied = clone.querySelectorAll('input');
+    live.forEach((inp, i) => { if (copied[i]) { copied[i].setAttribute('value', inp.value); copied[i].value = inp.value; } });
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pl-print-clone';
+    wrap.appendChild(clone);
+    document.body.appendChild(wrap);
+    document.body.classList.add('pl-printing');
+
+    let done = false;
+    const mql = typeof window.matchMedia === 'function' ? window.matchMedia('print') : null;
+    const onMql = (e) => { if (!e.matches) cleanup(); };
+    function cleanup() {
+      if (done) return;
+      done = true;
+      document.body.classList.remove('pl-printing');
+      wrap.remove();
+      window.removeEventListener('afterprint', cleanup);
+      if (mql && mql.removeEventListener) mql.removeEventListener('change', onMql);
+    }
+    window.addEventListener('afterprint', cleanup);
+    if (mql && mql.addEventListener) mql.addEventListener('change', onMql);
+
+    setTimeout(() => window.print(), 60);   // let the clone paint before the print dialog opens
+  }
+
   return (
     <div style={overlay} onClick={onClose}>
       <div style={sheet} onClick={(e) => e.stopPropagation()}>
@@ -23,7 +64,7 @@ export default function PackingListModal({ items, setItems, invNo, onClose }) {
           <div className="ctitle" style={{ margin: 0 }}>Packing List — {invNo}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-g" onClick={pdf}>⬇ Save PDF</button>
-            <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
+            <button className="btn btn-s" onClick={handlePrint}>🖨 Print</button>
             <button className="btn btn-b" onClick={onClose}>Done</button>
           </div>
         </div>

@@ -210,3 +210,13 @@ tbody tr.nr:hover{background:#FBE4E4}
 @media print{
   .print-target,.print-target .tw,.print-target.tw{max-height:none!important;overflow:visible!important}
 }
+
+/* Packing-list print (PackingListModal.jsx): the list sits inside a position:fixed,
+   scrolling modal that clips the shared print path to one record. handlePrint() clones
+   the printable node to <body>; here we hide the app and show only that clone while
+   printing, so every record flows and paginates. Hidden on screen so there's no flash. */
+.pl-print-clone{display:none}
+@media print{
+  body.pl-printing #root{display:none!important}
+  body.pl-printing .pl-print-clone{display:block!important}
+}
