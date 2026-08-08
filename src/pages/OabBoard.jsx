@@ -8,6 +8,14 @@ import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 
+/** Whole days since an SO's PO date (null if no/invalid date), for the Age column. */
+function soAgeDays(poDate) {
+  if (!poDate) return null;
+  const d = new Date(poDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+
 /** Order & Production Balance board (native port of renderOAB, legacy 1839). */
 export default function OabBoard() {
   const { mods, reloadModule } = useData();
@@ -130,7 +138,7 @@ export default function OabBoard() {
               <thead>
                 <tr>
                   <th>SO#</th><th>Spec</th><th>Form</th><th>Customer</th><th>Job Name</th><th>Sub Brand</th>
-                  <th>Disp Loc</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th>
+                  <th>Disp Loc</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }} title="Days since PO date">Age</th><th style={{ textAlign: 'right' }}>PO Qty</th>
                   <th style={{ textAlign: 'right' }}>Inv</th><th style={{ textAlign: 'right' }}>Man</th>
                   <th style={{ textAlign: 'right' }}>FG</th><th style={{ textAlign: 'right' }}>Balance</th>
                   <th style={{ textAlign: 'right' }}>Metres+5%</th><th>Prod Status</th><th style={{ textAlign: 'center' }}>Stage</th>
@@ -138,12 +146,13 @@ export default function OabBoard() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={17} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No data</td></tr>
+                  <tr><td colSpan={18} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No data</td></tr>
                 ) : filtered.map((r, i) => {
                   const b = balance(r);
                   const mW = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
                   const st = prodStatus(r.so);
                   const nr = st !== 'Ready';
+                  const age = soAgeDays(r.poDate);
                   return (
                     <tr key={r.so} className={'zebra' + (nr ? ' nr' : '')}>
                       <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
@@ -155,6 +164,7 @@ export default function OabBoard() {
                       <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>
                       <td style={{ fontSize: 11 }}>{r.poNum || '-'}</td>
                       <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
+                      <td style={{ textAlign: 'right', fontSize: 11, whiteSpace: 'nowrap', color: age == null ? 'var(--i3)' : age > 90 ? 'var(--red)' : age > 45 ? 'var(--amber)' : 'var(--i2)', fontWeight: age != null && age > 45 ? 700 : 400 }}>{age == null ? '-' : age + 'd'}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.poQty)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(r.invDisp)}</td>
                       <td style={{ textAlign: 'right' }}>{dash(r.manDisp)}</td>

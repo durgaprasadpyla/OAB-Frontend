@@ -8,6 +8,7 @@ import Login from './pages/Login.jsx';
 import NewPO from './pages/NewPO.jsx';
 import OabBoard from './pages/OabBoard.jsx';
 import DailyUpdate from './pages/DailyUpdate.jsx';
+import FGLedger from './pages/FGLedger.jsx';
 import Invoice from './pages/Invoice.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import PDashboard from './pages/PDashboard.jsx';
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/po" element={<RoleRoute path="/po"><NewPO /></RoleRoute>} />
         <Route path="/oab" element={<RoleRoute path="/oab"><OabBoard /></RoleRoute>} />
         <Route path="/daily" element={<RoleRoute path="/daily"><DailyUpdate /></RoleRoute>} />
+        <Route path="/fg" element={<RoleRoute path="/fg"><FGLedger /></RoleRoute>} />
         <Route path="/invoice" element={<RoleRoute path="/invoice"><Invoice /></RoleRoute>} />
         <Route path="/dashboard" element={<RoleRoute path="/dashboard"><Dashboard /></RoleRoute>} />
         <Route path="/pdashboard" element={<RoleRoute path="/pdashboard"><PDashboard /></RoleRoute>} />

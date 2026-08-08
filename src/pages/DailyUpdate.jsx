@@ -5,12 +5,13 @@ import { balance, invBalance } from '../lib/calc.js';
 import { dash, fmtDate } from '../lib/format.js';
 import { STAGES } from '../lib/constants.js';
 import { BalanceBadge } from '../components/badges.jsx';
+import { fgProduced, fgAddAllocation } from '../lib/fg.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** Daily Update — manual dispatch + FG + stage + short-close (native port of renderUpd/saveAllUpd, legacy 1906). */
 export default function DailyUpdate() {
-  const { mods, reloadModule } = useData();
+  const { mods, reloadModule, save } = useData();
   const [sheet, setSheet] = useState('SF');
   const [q, setQ] = useState('');
   const [edits, setEdits] = useState({});   // { [so]: {man, inv, fg, stage} }
@@ -32,6 +33,7 @@ export default function DailyUpdate() {
     const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
     const ops = [];
     const over = [];
+    const fgDraws = [];   // FG increases to record against the ledger pool
     arr.forEach((r) => {
       if (r.closed) return;
       const e = edits[r.so];
@@ -43,7 +45,11 @@ export default function DailyUpdate() {
         if (num(e.man) > avail) { over.push(`SO ${r.so}: ${num(e.man)} > balance ${avail}`); return; }
         op.addQty = num(e.man); op.invNo = (e.inv || '').trim(); has = true;
       }
-      if (e.fg !== undefined && e.fg !== '') { op.fg = num(e.fg); has = true; }
+      if (e.fg !== undefined && e.fg !== '') {
+        op.fg = num(e.fg); has = true;
+        const delta = num(e.fg) - num(r.fg);   // increase in this SO's assigned FG
+        if (delta > 0 && r.spec) fgDraws.push({ so: r.so, spec: r.spec, delta });
+      }
       if (prodStatus(r.so) === 'Ready' && e.stage !== undefined && e.stage !== '' && e.stage !== r.stage) { op.stage = e.stage; has = true; }
       if (has) ops.push(op);
     });
@@ -53,6 +59,16 @@ export default function DailyUpdate() {
     try {
       for (const op of ops) await ordersApi.dispatch(op);   // server: atomic manDisp += qty, FG/stage
       await reloadModule('oab');
+      // Record FG increases as pool allocations, but ONLY for specs already tracked
+      // in the FG ledger (have production recorded). Untracked specs keep the
+      // pre-existing free "Set FG" behaviour untouched. Best-effort: a ledger
+      // failure never fails the dispatch that already committed.
+      const tracked = fgDraws.filter((d) => fgProduced(mods.fgLedger, d.spec) > 0);
+      if (tracked.length) {
+        try {
+          await save('fgLedger', (prev) => tracked.reduce((led, d) => fgAddAllocation(led, d.spec, d.delta, d.so, 'daily-update'), prev));
+        } catch { /* additive tracking only — ignore */ }
+      }
       setEdits({}); flash('✅ All changes saved');
     } catch (err) {
       await reloadModule('oab');   // some ops may have committed; show server truth

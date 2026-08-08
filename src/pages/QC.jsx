@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
+import CapaPanel from '../components/CapaPanel.jsx';
 
 // QC / JSS spec entry, ported from the legacy showQCView + initQCForm +
 // saveQCSpec + qcCalcPW + renderQCTable + exportJSSExcel. Persists to the
@@ -251,6 +252,8 @@ export default function QC() {
           </table>
         </div>
       </div>
+
+      <CapaPanel />
     </div>
   );
 }

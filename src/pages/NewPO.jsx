@@ -4,12 +4,14 @@ import { ordersApi } from '../api.js';
 import { today, fmtDate, dash } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
+import { fgAvail, fgAddAllocation } from '../lib/fg.js';
+import FgAllocModal from '../components/FgAllocModal.jsx';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
 export default function NewPO() {
-  const { mods, reloadModule } = useData();
+  const { mods, reloadModule, save } = useData();
   const [step, setStep] = useState(1);            // 1 | 2 | 3 | 4(=success)
   const [poNum, setPoNum] = useState('');
   const [poDate, setPoDate] = useState(today());
@@ -20,6 +22,7 @@ export default function NewPO() {
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [allocRows, setAllocRows] = useState(null);   // FG drawdown candidates (modal), or null
 
   const customers = useMemo(() => jssCustomers(mods.jss), [mods.jss]);
   const locations = useMemo(() => getCustLocations(mods.customers, customer), [mods.customers, customer]);
@@ -91,8 +94,37 @@ export default function NewPO() {
       const created = (resp && resp.created) || [];
       setAdded({ count: created.length, first: created[0], last: created[created.length - 1] });
       setStep(4);
+      // Offer to draw down existing finished goods for any created SO whose spec
+      // has FG in stock. The server assigns SO numbers in item order, so
+      // created[i] corresponds to selPO[i]; only map when the lengths agree so a
+      // mismatch never mis-attributes an allocation.
+      if (created.length === selPO.length) {
+        const cands = created
+          .map((so, i) => ({ so, spec: selPO[i].spec, jobName: selPO[i].jobName, avail: fgAvail(mods.fgLedger, selPO[i].spec) }))
+          .filter((c) => c.spec && c.avail > 0);
+        if (cands.length) setAllocRows(cands);
+      }
     } catch (e) {
       alert('Save failed: ' + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Apply the FG drawdown chosen in the modal: record each allocation in the
+  // ledger (module 9) and set the SO row's fg (reduces its balance). Best-effort
+  // and additive — it never blocks the already-created SOs.
+  async function applyAlloc(plan) {
+    setBusy(true);
+    try {
+      await save('fgLedger', (prev) => plan.reduce((led, p) => fgAddAllocation(led, p.spec, p.qty, p.so, 'new-po'), prev));
+      for (const p of plan) await ordersApi.dispatch({ so: p.so, fg: p.qty });
+      await reloadModule('oab');
+      setAllocRows(null);
+    } catch (e) {
+      alert('FG allocation failed (the SOs were still created): ' + e.message);
+      await reloadModule('oab');
+      setAllocRows(null);
     } finally {
       setBusy(false);
     }
@@ -228,6 +260,10 @@ export default function NewPO() {
           </div>
           <div className="act"><button className="btn btn-g" onClick={reset}>+ New PO</button></div>
         </div>
+      )}
+
+      {allocRows && (
+        <FgAllocModal rows={allocRows} busy={busy} onConfirm={applyAlloc} onCancel={() => setAllocRows(null)} />
       )}
     </div>
   );

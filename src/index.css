@@ -30,6 +30,8 @@ input,select,textarea,button{font-family:inherit}
 .fg input,.fg select{height:34px;border:1px solid var(--bd);border-radius:7px;padding:0 10px;font-size:13px;color:var(--ink);background:var(--wh);outline:none;transition:border .15s}
 .fg input:focus,.fg select:focus{border-color:var(--g);box-shadow:0 0 0 3px rgba(27,107,58,.08)}
 .fg input[readonly]{background:var(--bg);color:var(--i3)}
+.fg textarea{border:1px solid var(--bd);border-radius:7px;padding:6px 10px;font-size:13px;color:var(--ink);background:var(--wh);outline:none;transition:border .15s;resize:vertical}
+.fg textarea:focus{border-color:var(--g);box-shadow:0 0 0 3px rgba(27,107,58,.08)}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px}

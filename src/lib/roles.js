@@ -29,6 +29,7 @@ export function navTabs(role) {
     { to: '/oab?sheet=SF', label: 'Stay Fresh OAB', match: '/oab', sheet: 'SF' },
     { to: '/oab?sheet=OT', label: 'Others OAB', match: '/oab', sheet: 'OT' },
     { to: '/daily', label: 'Daily Update' },
+    { to: '/fg', label: '📦 FG Entry' },
     { to: '/invoice', label: 'Invoice' },
   ];
   if (role === 'superadmin') tabs.push({ to: '/dashboard', label: '📊 Dashboard' });
@@ -39,7 +40,7 @@ export function navTabs(role) {
 /** Whether a role may view a route (base path, query ignored). */
 export function canAccess(role, path) {
   const p = String(path || '').split('?')[0];
-  if (['/po', '/oab', '/daily', '/invoice'].includes(p)) return OPS_ROLES.includes(role);
+  if (['/po', '/oab', '/daily', '/fg', '/invoice'].includes(p)) return OPS_ROLES.includes(role);
   if (p === '/dashboard') return role === 'superadmin';
   if (p === '/pdashboard') return role === 'padmin' || role === 'superadmin';
   if (p === '/plant') return role === 'plant';

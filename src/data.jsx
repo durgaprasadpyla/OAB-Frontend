@@ -18,13 +18,15 @@ import { api } from './api.js';
  *   id 6  purchase   { asl:[suppliers], po:[...], grn:[...], pay:[...] }
  *   id 7  pmData     { pm daily print qty, keyed by SO }
  *   id 8  scrap      { scrap buyer details }
+ *   id 9  fgLedger   { [spec]: { prod:[{date,qty,ts,id,note}], alloc:[{date,qty,ts,so,src}] } }
+ *   id 11 capa       [ QC CAPA records ]
  *
  * Each module carries an optimistic-lock `version` from the backend. We read it
  * on load, echo it on save, and — if the server reports a conflict (409, another
  * writer got there first) — reload that module, show a non-destructive notice,
  * and let the user re-apply their edit. A 409 NEVER logs the user out.
  */
-export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8 };
+export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8, fgLedger: 9, capa: 11 };
 
 // Empty-but-valid shapes so every screen can render before anything is saved.
 export function emptyModules() {
@@ -37,6 +39,8 @@ export function emptyModules() {
     purchase: { asl: [], pos: [], priceHistory: [], counter: 0, itemsExtra: [] },
     pmData: {},
     scrap: {},
+    fgLedger: {},   // { [spec]: { prod:[], alloc:[] } }
+    capa: [],       // QC CAPA records
   };
 }
 
