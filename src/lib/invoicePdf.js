@@ -11,11 +11,16 @@ import { inr, amountInWords, fmtDate } from './format.js';
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const money = (v) => 'Rs. ' + inr(v, 2);
 
-/** Build and return the jsPDF document (no download). */
-export function buildInvoiceDoc(header, lines) {
+/** Build and return the jsPDF document (no download). `opts.proforma` renders a
+ *  proforma-invoice variant (title/marking/meta differ; `opts.notes` prints a
+ *  special-notes box before the signatures). Defaults render the tax invoice. */
+export function buildInvoiceDoc(header, lines, opts = {}) {
   const JsPDF = window.jspdf && window.jspdf.jsPDF;
   if (!JsPDF) throw new Error('jsPDF is not loaded');
   const h = header || {};
+  const isPro = !!opts.proforma;
+  const title = isPro ? 'PROFORMA INVOICE' : 'TAX INVOICE';
+  const marking = isPro ? 'PROFORMA - NOT A TAX INVOICE' : 'ORIGINAL FOR RECIPIENT';
   const rows = (lines || []).map((l) => ({
     spec: l.spec, jobName: l.jobName || l.spec, qty: n(l.qty), rate: n(l.rate),
     amt: n(l.lineTotal) || n(l.qty) * n(l.rate), df: l.dispatchForm,
@@ -38,19 +43,23 @@ export function buildInvoiceDoc(header, lines) {
   T('PRIVATE LIMITED', 105, y + 13.5, { size: 9, style: 'bold', color: [51, 51, 51], align: 'center' });
   T(COMPANY.addressLines.join(' '), 105, y + 18, { size: 8, color: [51, 51, 51], align: 'center' });
   T(`GSTIN: ${COMPANY.gstin}    ${COMPANY.email}    ${COMPANY.web}`, 105, y + 22, { size: 8, color: [51, 51, 51], align: 'center' });
-  T('ORIGINAL FOR RECIPIENT', R - 1.5, y + 3.5, { size: 7, color: [51, 51, 51], align: 'right' });
+  T(marking, R - 1.5, y + 3.5, { size: 7, color: [51, 51, 51], align: 'right' });
   y += 26; box(L, top, W, y - top, 0.4);
 
   // ── TAX INVOICE ──
   box(L, y, W, 7, 0.4);
-  T('TAX INVOICE', 105, y + 4.8, { size: 12, style: 'bold', align: 'center' });
-  setF(12, 'bold'); const tiw = doc.getTextWidth('TAX INVOICE');
+  T(title, 105, y + 4.8, { size: 12, style: 'bold', align: 'center' });
+  setF(12, 'bold'); const tiw = doc.getTextWidth(title);
   doc.setLineWidth(0.3); doc.line(105 - tiw / 2, y + 5.6, 105 + tiw / 2, y + 5.6);
   y += 7;
 
   // ── Meta table ──
   const metaTop = y, rowH = 9;
-  const meta = [
+  const meta = isPro ? [
+    ['Proforma No.', h.ivNo, 'Date', fmtDate(h.ivDt)],
+    ['Customer', h.customer, 'GST Type', (h.gstType === 'CGST_SGST' ? 'CGST + SGST' : 'IGST')],
+    ['Payment Terms', h.paymentTerms, 'Seller GSTIN', COMPANY.gstin],
+  ] : [
     ['Invoice No.', h.ivNo, 'Invoice Date', fmtDate(h.ivDt)],
     ['PO Number', h.po, 'Place of Supply', h.placeOfSupply],
     ['Transporter', h.transporter, 'DC / LR #', h.dcNo],
@@ -144,6 +153,13 @@ export function buildInvoiceDoc(header, lines) {
   setF(8, 'bold'); const bW = doc.getTextWidth('Bank Details: ');
   T(COMPANY.bank, L + 2 + bW, y + 4, { size: 8 }); y += 6;
 
+  // ── Special notes (proforma) ──
+  if (opts.notes) {
+    setF(8); const noteLines = doc.splitTextToSize('Notes: ' + String(opts.notes), W - 4);
+    const nh = noteLines.length * 3.8 + 3;
+    box(L, y, W, nh); doc.text(noteLines, L + 2, y + 4); y += nh;
+  }
+
   // ── Signatures ──
   const sigH = 22; box(L, y, W, sigH); vline(mid, y, y + sigH);
   T("Receiver's Signature", L + 2, y + 5, { size: 9 });
@@ -154,7 +170,7 @@ export function buildInvoiceDoc(header, lines) {
 }
 
 /** Build the vector invoice and download it (one click, no dialog). */
-export function saveInvoicePdf(header, lines, filename) {
-  const doc = buildInvoiceDoc(header, lines);
+export function saveInvoicePdf(header, lines, filename, opts = {}) {
+  const doc = buildInvoiceDoc(header, lines, opts);
   doc.save(String(filename || 'invoice').replace(/[\\/]/g, '-').replace(/\.pdf$/i, '') + '.pdf');
 }

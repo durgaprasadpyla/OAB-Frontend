@@ -9,6 +9,7 @@ import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import PackingListModal from '../components/PackingListModal.jsx';
 import PortalEntry from '../components/PortalEntry.jsx';
+import ProformaModal from '../components/ProformaModal.jsx';
 import { printElement } from '../lib/pdf.js';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
 
@@ -29,6 +30,7 @@ export default function Invoice() {
   const [pendInv, setPendInv] = useState(null);
   const [plItems, setPlItems] = useState([]);
   const [showPL, setShowPL] = useState(false);
+  const [showProforma, setShowProforma] = useState(false);
   const [autoPdf, setAutoPdf] = useState(false);
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -156,7 +158,10 @@ export default function Invoice() {
   return (
     <div id="app">
       <div className="pg-ttl">Invoice</div>
-      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; prices → generate → confirm updates OAB.</div>
+      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; prices → generate → confirm updates OAB.
+        &nbsp;·&nbsp;
+        <a href="#" onClick={(e) => { e.preventDefault(); setShowProforma(true); }} style={{ color: 'var(--g)', fontWeight: 600 }}>🧾 Create Proforma Invoice</a>
+      </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
 
       {!pendInv && (
@@ -268,6 +273,7 @@ export default function Invoice() {
       <Register mods={mods} onView={(e) => loadRegister(e, false)} onPdf={(e) => loadRegister(e, true)} />
 
       {showPL && <PackingListModal items={plItems} setItems={setPlItems} invNo={h.ivNo} onClose={() => setShowPL(false)} />}
+      {showProforma && <ProformaModal onClose={() => setShowProforma(false)} />}
     </div>
   );
 }
