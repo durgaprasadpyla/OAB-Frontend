@@ -8,6 +8,7 @@ import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
+import CustomersAdmin from '../components/CustomersAdmin.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -15,6 +16,7 @@ const TABS = [
   { k: 'summary', label: '📈 Summary' },
   { k: 'price', label: '💰 Price Master' },
   { k: 'jss', label: '📋 JSS Editor' },
+  { k: 'customers', label: '🏢 Customers' },
   { k: 'delete', label: '🗑 Delete SOs' },
   { k: 'trends', label: '📊 Trends & Forecast' },
   { k: 'costing', label: '🧮 SO Costing' },
@@ -36,6 +38,7 @@ export default function Dashboard() {
       {tab === 'summary' && <Summary />}
       {tab === 'price' && <PriceMaster />}
       {tab === 'jss' && <JssEditor />}
+      {tab === 'customers' && <CustomersAdmin />}
       {tab === 'delete' && <DeleteSOs />}
       {tab === 'trends' && <Trends />}
       {tab === 'costing' && <SOCosting />}
