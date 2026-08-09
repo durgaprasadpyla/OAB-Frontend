@@ -7,6 +7,7 @@ import { computeKPIs, dashRange } from '../lib/dashboard.js';
 import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
+import UsersAccess from '../components/UsersAccess.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -17,6 +18,7 @@ const TABS = [
   { k: 'delete', label: '🗑 Delete SOs' },
   { k: 'trends', label: '📊 Trends & Forecast' },
   { k: 'costing', label: '🧮 SO Costing' },
+  { k: 'users', label: '👥 Users & Access' },
 ];
 
 /** Superadmin Dashboard — native port of renderDashboard + its sub-panels. */
@@ -37,6 +39,7 @@ export default function Dashboard() {
       {tab === 'delete' && <DeleteSOs />}
       {tab === 'trends' && <Trends />}
       {tab === 'costing' && <SOCosting />}
+      {tab === 'users' && <UsersAccess />}
     </div>
   );
 }

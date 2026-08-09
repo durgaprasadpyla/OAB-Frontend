@@ -83,6 +83,14 @@ export const rmRatesApi = {
   put: (rates) => api('/api/rm-rates', { method: 'PUT', body: rates }),
 };
 
+// User administration (superadmin only). Backed by the app_user table + bcrypt;
+// passwords are write-only (create / reset) and never returned.
+export const usersApi = {
+  list: () => api('/api/admin/users'),
+  create: (body) => api('/api/admin/users', { method: 'POST', body }),
+  update: (id, body) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'PUT', body }),
+};
+
 // Column values come back lowercase from MySQL and uppercase from H2 — read either.
 export function field(row, key) {
   if (row == null) return '';
