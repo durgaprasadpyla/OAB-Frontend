@@ -315,4 +315,65 @@
   // Slot 10 (blob users) is retired — never write it (would 403). No-op any stray sync call.
   window.usersCloudSave = function () { return Promise.resolve(); };
   window.usersCloudLoad = function () { return Promise.resolve(false); };
+
+  // ═══════════════════ Invoice PDF — sharper + proper margins ═══════════════════
+  // The reference captured the invoice at html2canvas scale:2 (~192 dpi → blurry) and
+  // placed the image edge-to-edge at (0,0) full page width (no margins → content clipped
+  // at the page edges). Re-capture at higher resolution and inset it with page margins;
+  // multi-page slicing respects the margins so nothing is cut.
+  window.saveInvoicePDF = async function () {
+    var btn = document.getElementById('pdf-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating PDF…'; }
+    try {
+      var el = document.getElementById('inv-doc');
+      if (!el || !el.innerHTML.trim()) { alert('Generate the invoice first.'); if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Invoice PDF'; } return; }
+      var prevDisplay = el.style.display;
+      el.style.display = 'block';
+      var canvas = await html2canvas(el, {
+        scale: 3,                       // ~300+ dpi (was 2 → blurry)
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        windowWidth: 794,
+        onclone: function (doc) {       // render the invoice in its pristine print layout
+          var ov = doc.getElementById('oab-overrides'); if (ov) ov.remove();
+        }
+      });
+      var jsPDF = window.jspdf.jsPDF;
+      var pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+      var pageW = pdf.internal.pageSize.getWidth();   // 210
+      var pageH = pdf.internal.pageSize.getHeight();  // 297
+      var margin = 8;                                 // mm on every side
+      var imgW = pageW - 2 * margin;
+      var imgH = (canvas.height * imgW) / canvas.width;
+      var contentH = pageH - 2 * margin;
+      if (imgH <= contentH + 0.5) {
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH);
+      } else {
+        var pxPerPage = Math.floor((contentH / imgH) * canvas.height);
+        var srcY = 0, page = 0;
+        while (srcY < canvas.height - 1) {
+          var srcH = Math.min(pxPerPage, canvas.height - srcY);
+          var pc = document.createElement('canvas');
+          pc.width = canvas.width; pc.height = srcH;
+          var ctx = pc.getContext('2d');
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, pc.width, pc.height);
+          ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+          var drawH = (srcH / canvas.height) * imgH;
+          if (page > 0) pdf.addPage();
+          pdf.addImage(pc.toDataURL('image/png'), 'PNG', margin, margin, imgW, drawH);
+          srcY += srcH; page++;
+        }
+      }
+      var rawIvNo = (document.getElementById('iv-no').value || '').trim();
+      var custName = (document.getElementById('iv-cu').value || '').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20);
+      var ivNo = (rawIvNo.replace(/\//g, '-').replace(/[^a-zA-Z0-9-_]/g, '') || 'invoice') + '_' + custName;
+      pdf.save('Bloomflex_' + ivNo + '.pdf');
+      el.style.display = prevDisplay;
+    } catch (err) {
+      alert('PDF error: ' + err.message); console.error(err);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Invoice PDF'; }
+  };
 })();
