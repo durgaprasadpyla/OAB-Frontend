@@ -1,0 +1,51 @@
+/* ===========================================================================
+ * OAB overrides — injected AFTER the reference's own styles (so these win).
+ * Production polish not present in the reference build:
+ *   (1) a clean, plain login screen, and
+ *   (2) responsive hardening so nothing spills out of its box when zoomed /
+ *       on narrower widths (the reference is fixed-width desktop-only).
+ * Desktop appearance at full width is unchanged.
+ * =========================================================================== */
+
+/* ── (1) Plain login screen ──────────────────────────────────────────────
+ * The reference auth modal uses a translucent black backdrop, so the app shows
+ * through it. Make it a solid, on-brand backdrop that fully hides the app. */
+#auth-modal {
+  background: linear-gradient(135deg, #12602f 0%, #0c4623 100%) !important;
+}
+#auth-modal > div {
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .35) !important;
+}
+
+/* Safe, universal: media never exceeds its container. */
+img { max-width: 100%; height: auto; }
+
+/* Form controls may shrink to fit a narrow container instead of forcing their
+ * grid column (and the whole panel) wider than the viewport. No effect at
+ * desktop width, where there is ample room. */
+select, input, textarea { max-width: 100%; min-width: 0; }
+
+/* ── (2) Responsive hardening ─────────────────────────────────────────────
+ * The main app header packs a logo + nav + action buttons on one no-wrap row,
+ * which forces a minimum width and pushes content out of alignment when zoomed.
+ * Let it (and its flex groups) wrap instead of overflowing. */
+#hdr { flex-wrap: wrap !important; height: auto !important; row-gap: 6px; }
+#hdr #nav { flex-wrap: wrap !important; }
+#hdr > div { flex-wrap: wrap !important; }
+
+/* The role-view top bars (plant / qc / pm / purchase / scrap / quote / rep)
+ * are their own flex rows — let them wrap too. */
+#plant-panel > div:first-child,
+#qc-panel > div:first-child,
+#pm-panel > div:first-child,
+#purchase-panel > div:first-child,
+#scrap-panel > div:first-child,
+#quote-panel > div:first-child,
+#rep-panel > div:first-child { flex-wrap: wrap !important; height: auto !important; row-gap: 6px; }
+
+/* Multi-card column layouts (Invoice, etc.) use fixed fr columns whose cards
+ * cannot shrink below their inputs' min width, so a column falls off-screen when
+ * narrow. Reflow them responsively — identical at desktop width, stacks when narrow. */
+div[style*="grid-template-columns"]:has(> .card) {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
+}

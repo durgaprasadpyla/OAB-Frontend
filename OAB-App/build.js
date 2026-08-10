@@ -29,6 +29,7 @@ let html = read('reference/index.html');
 const early = read('src/integration-early.js');
 const late = read('src/integration-late.js');
 const guard = read('reference/connectivity-guard.js');
+const overrides = read('src/overrides.css');
 let logo = '';
 try { logo = read('reference/logo-datauri.txt').trim(); } catch (e) { /* optional */ }
 const report = [];
@@ -99,6 +100,14 @@ const ci = html.indexOf(charsetAnchor);
 if (ci === -1) { console.error('FATAL: charset anchor not found'); process.exit(1); }
 html = html.slice(0, ci + charsetAnchor.length) + headInject + html.slice(ci + charsetAnchor.length);
 report.push('injected early layer after charset meta: yes');
+
+// 3b) Inject the CSS overrides just before </head> so they come AFTER the reference's
+//     own <style> blocks and win at equal specificity.
+const styleInject = '\n<style id="oab-overrides">/* OAB overrides */\n' + overrides + '\n</style>\n';
+const hi = html.indexOf('</head>');
+if (hi === -1) { console.error('FATAL: </head> not found'); process.exit(1); }
+html = html.slice(0, hi) + styleInject + html.slice(hi);
+report.push('injected CSS overrides before </head>: yes');
 
 // 4) Inject LATE layer at the FINAL </body> (the tag appears inside template strings too).
 const lateInject = '\n<script>/* OAB integration — late */\n' + late + '\n</script>\n';
