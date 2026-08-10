@@ -2,6 +2,7 @@ import { useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { ordersApi } from '../api.js';
+import { useApi } from '../lib/useApi.js';
 import { balance, calcMetres } from '../lib/calc.js';
 import { dash, fmtDate } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
@@ -18,9 +19,16 @@ function soAgeDays(poDate) {
 
 /** Order & Production Balance board (native port of renderOAB, legacy 1839). */
 export default function OabBoard() {
-  const { mods, reloadModule } = useData();
+  const { mods } = useData();
   const [sp, setSp] = useSearchParams();
   const sheet = sp.get('sheet') === 'OT' ? 'OT' : 'SF';
+
+  // Orders come from the normalized endpoint (scoped to this sheet), not the whole
+  // `oab` blob. The row `payload` column carries the exact original row JSON, so
+  // everything downstream (filters, totals, Excel/PDF) is unchanged. jss + prodStatus
+  // stay on the blob context (small master data we're deliberately not migrating).
+  const { data: rawRows, loading: rowsLoading, error: rowsError, refetch: refetchRows } =
+    useApi('/api/oab-rows?sheet=' + sheet);
 
   const [q, setQ] = useState('');
   const [cf, setCf] = useState('');
@@ -36,7 +44,11 @@ export default function OabBoard() {
     return m;
   }, [mods.jss]);
 
-  const allRows = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
+  const allRows = useMemo(() => (Array.isArray(rawRows) ? rawRows : []).map((r) => {
+    const p = r.payload ?? r.PAYLOAD;          // MySQL lowercases columns, H2 uppercases
+    if (p) { try { return JSON.parse(p); } catch { /* fall back to the flat columns */ } }
+    return r;
+  }), [rawRows]);
   const openRows = useMemo(() => allRows.filter((r) => !r.closed).map((r) => {
     const j = jssBySpec[r.spec];
     return j ? { ...r, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand } : r;
@@ -67,7 +79,7 @@ export default function OabBoard() {
   const setSheet = (k) => { setSp({ sheet: k }); setShowClosed(false); };
 
   async function reopen(so) {
-    try { await ordersApi.reopen(so); await reloadModule('oab'); }
+    try { await ordersApi.reopen(so); await refetchRows(); }
     catch (e) { alert('Reopen failed: ' + (e.message || e)); }
   }
 
@@ -104,6 +116,7 @@ export default function OabBoard() {
     <div id="app">
       <div className="pg-ttl">Order &amp; Production Balance</div>
       <div className="pg-sub">Open sales orders — {sheet === 'SF' ? 'Stay Fresh' : 'Others'} sheet, live from the database.</div>
+      {rowsError && <div className="al al-r" style={{ margin: '8px 0' }}>Failed to load orders: {rowsError}</div>}
 
       <div className="fbar">
         <button className={'btn btn-s' + (sheet === 'SF' ? ' on' : '')} onClick={() => setSheet('SF')}>Stay Fresh</button>
@@ -146,7 +159,7 @@ export default function OabBoard() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={18} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No data</td></tr>
+                  <tr><td colSpan={18} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>{rowsLoading ? 'Loading…' : 'No data'}</td></tr>
                 ) : filtered.map((r, i) => {
                   const b = balance(r);
                   const mW = calcMetres(r, b, jssBySpec[r.spec]).withWastage;

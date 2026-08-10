@@ -45,7 +45,16 @@ export function emptyModules() {
 }
 
 async function loadOne(id) {
-  const rows = await api(`/rest/v1/oab_data?id=eq.${id}&select=data`);
+  let rows;
+  try {
+    rows = await api(`/rest/v1/oab_data?id=eq.${id}&select=data`);
+  } catch (e) {
+    // A role not permitted to read this module (403) still boots — the module just
+    // stays empty. Only a forbidden read is swallowed; real failures (network, 500)
+    // propagate so the app surfaces a genuine load error instead of hiding it.
+    if (e && (e.code === 'forbidden' || e.status === 403)) return { value: null, version: 0 };
+    throw e;
+  }
   if (Array.isArray(rows) && rows.length && rows[0]) {
     const row = rows[0];
     let value = null;

@@ -37,7 +37,7 @@ function findRow(oab, so) {
  * Options: conflictOnce { [moduleId]: true } — the next /rest POST to that module
  * returns 409 once (simulating a concurrent writer).
  */
-export function installFetch(modules, { conflictOnce = {} } = {}) {
+export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, failRead = {} } = {}) {
   const saved = [];
   const versions = {};
   Object.entries(KEY_TO_ID).forEach(([key, id]) => { versions[id] = modules[key] != null ? 1 : 0; });
@@ -118,6 +118,25 @@ export function installFetch(modules, { conflictOnce = {} } = {}) {
       oab.lastInvNo = num(oab.lastInvNo) + 1;
       recordOab('/api/invoices', body);
       return res(201, { no, qty: totalQty, amount, margin, gst: {}, entry });
+    }
+
+    // GET /api/oab-rows?sheet=SF&open=true — the normalized read the OAB board now
+    // uses instead of the whole `oab` blob. Derives rows from the seeded module and
+    // returns each as { payload:<row JSON> }, mirroring the real endpoint's SELECT *.
+    if (u.includes('/api/oab-rows') && method === 'GET') {
+      const oab = modules.oab || { OAB: { SF: [], OT: [] } };
+      const sheetM = /[?&]sheet=([^&]+)/.exec(u);
+      const openM = /[?&]open=([^&]+)/.exec(u);
+      const wantSheet = sheetM ? decodeURIComponent(sheetM[1]) : null;
+      const wantOpen = openM ? openM[1] === 'true' : null;
+      const out = [];
+      (wantSheet ? [wantSheet] : ['SF', 'OT']).forEach((sh) =>
+        (((oab.OAB && oab.OAB[sh]) || [])).forEach((r) => {
+          if (wantOpen === true && r.closed) return;
+          if (wantOpen === false && !r.closed) return;
+          out.push({ so: r.so, sheet: sh, closed: !!r.closed, payload: JSON.stringify(r) });
+        }));
+      return res(200, out);
     }
 
     if (u.includes('/api/oab-rows/')) {
@@ -214,6 +233,8 @@ export function installFetch(modules, { conflictOnce = {} } = {}) {
       if (method === 'GET') {
         const m = /id=eq\.(\d+)/.exec(u);
         const id = m ? Number(m[1]) : 0;
+        if (forbidRead[id]) return res(403, { error: 'forbidden' });   // role may not read this module
+        if (failRead[id]) return res(500, { error: 'boom' });          // genuine server failure
         const val = modules[ID_TO_KEY[id]];
         if (val == null) return res(200, []);
         return res(200, [{ data: JSON.stringify(val), version: versions[id] || 0 }]);
@@ -237,12 +258,12 @@ export function installFetch(modules, { conflictOnce = {} } = {}) {
 }
 
 /** Render a screen inside Router + Auth + Data providers with seeded modules. */
-export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {} } = {}) {
+export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {}, forbidRead = {}, failRead = {} } = {}) {
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_user', user);
   localStorage.setItem('blm_role', role);
   const mods = JSON.parse(JSON.stringify(modules));
-  const saved = installFetch(mods, { conflictOnce });
+  const saved = installFetch(mods, { conflictOnce, forbidRead, failRead });
   const utils = render(
     <MemoryRouter initialEntries={[route]}>
       <AuthProvider>
