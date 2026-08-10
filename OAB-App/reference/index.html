@@ -717,6 +717,8 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
           <input type="date" id="inv-reg-from" onchange="renderInvRegister()" style="display:none;height:30px;border:1px solid var(--bd);border-radius:6px;padding:0 8px;font-size:12px">
           <span id="inv-reg-to-sep" style="display:none;font-size:12px;color:var(--i3)">to</span>
           <input type="date" id="inv-reg-to" onchange="renderInvRegister()" style="display:none;height:30px;border:1px solid var(--bd);border-radius:6px;padding:0 8px;font-size:12px">
+          <input type="text" id="inv-reg-po" oninput="renderInvRegister()" placeholder="Filter PO #" style="width:120px;height:30px;border:1px solid var(--bd);border-radius:6px;padding:0 8px;font-size:12px">
+          <input type="text" id="inv-reg-so" oninput="renderInvRegister()" placeholder="Filter SO #" style="width:110px;height:30px;border:1px solid var(--bd);border-radius:6px;padding:0 8px;font-size:12px">
           <span id="inv-reg-count" style="font-size:11px;color:var(--i3)"></span>
         </div>
       </div>
@@ -1110,7 +1112,7 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
             <th style="padding:7px 8px;text-align:left;font-size:11px;white-space:nowrap;min-width:80px">Spec No.*</th>
             <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:100px">Job Type</th>
             <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:120px">Group</th>
-            <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:140px">Company</th>
+            <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:140px">Customer</th>
             <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:100px">Sub Brand</th>
             <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:200px">Job Name*</th>
             <th style="padding:7px 8px;text-align:left;font-size:11px;min-width:80px">Print Loc</th>
@@ -1252,6 +1254,18 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
             <div class="fg" style="margin:0;min-width:0;display:flex;justify-content:flex-end;align-items:end"><button class="btn btn-g" style="height:34px" onclick="custSaveRow()">💾 Save Location</button></div>
           </div>
           <div id="cust-msg" style="margin-top:8px"></div>
+        </div>
+
+        <!-- Rename / fix a customer name (updates every location row for that customer + saves to cloud) -->
+        <div style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px;background:#fbfcfe">
+          <div style="font-size:12px;font-weight:700;color:var(--i2);margin-bottom:4px">✏️ Rename / fix a customer name</div>
+          <div style="font-size:11px;color:var(--i3);margin-bottom:8px">Corrects a mis-spelt customer name across every dispatch-location row for that customer and saves it to the cloud master. Use this to fix names entered wrongly via the Excel upload. (Existing orders / JSS specs keep their old text.)</div>
+          <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+            <div class="fg" style="margin:0;min-width:220px"><label>Existing customer</label><select id="cust-rename-sel"></select></div>
+            <div class="fg" style="margin:0;min-width:220px"><label>Corrected name</label><input type="text" id="cust-rename-new" placeholder="Correct spelling" autocomplete="off"></div>
+            <button class="btn btn-g" style="height:34px" onclick="custRenameCustomer()">✏️ Rename everywhere</button>
+          </div>
+          <div id="cust-rename-msg" style="margin-top:6px;font-size:12px"></div>
         </div>
 
         <!-- Filters -->
@@ -3027,7 +3041,7 @@ function jssCompanyOptions(group,selCust,preserve){
   var list=(typeof _custsInGroup==='function')?_custsInGroup(group):[];
   var norm=_normName(selCust);
   var inList=list.some(function(c){return _normName(c)===norm;});
-  var html='<option value="">— Select company —</option>';
+  var html='<option value="">— Select customer —</option>';
   if(selCust&&!inList&&preserve)html+='<option value="'+custEsc(selCust)+'" selected>'+custEsc(selCust)+'</option>';
   list.forEach(function(c){html+='<option value="'+custEsc(c)+'"'+(_normName(c)===norm?' selected':'')+'>'+custEsc(c)+'</option>';});
   return html;
@@ -4032,6 +4046,15 @@ function _invRegDateRange(){
   const to=new Date(now.getFullYear(),now.getMonth()+1,0);
   return {from:from.toISOString().slice(0,10),to:to.toISOString().slice(0,10)};
 }
+// Sale-order numbers tied to an invoice: stored on the invoice if present, else
+// derived from the OAB rows that share the invoice's PO number.
+function _invSOs(inv){
+  if(inv&&inv.sos&&inv.sos.length)return inv.sos;
+  const po=inv&&inv.po;if(!po)return [];
+  const out={};
+  [...(OAB.SF||[]),...(OAB.OT||[])].forEach(function(r){ if(r&&r.poNum===po&&r.so)out[r.so]=1; });
+  return Object.keys(out);
+}
 function renderInvRegisterForPO(po){
   // A specific-PO lookup always shows that PO's full history regardless of
   // the period filter — it's a deliberate, narrow lookup, not the general
@@ -4042,14 +4065,21 @@ function renderInvRegisterForPO(po){
   if(filterBar)filterBar.style.display=po?'none':'flex';
 
   if(!po){
-    const range=_invRegDateRange();
-    if(range){
-      filtered=filtered.filter(function(inv){
-        const d=inv.date||'';
-        if(range.from&&d<range.from)return false;
-        if(range.to&&d>range.to)return false;
-        return true;
-      });
+    const poQ=(($('inv-reg-po')||{value:''}).value||'').trim().toLowerCase();
+    const soQ=(($('inv-reg-so')||{value:''}).value||'').trim().toLowerCase();
+    if(poQ) filtered=filtered.filter(function(inv){return String(inv.po||'').toLowerCase().indexOf(poQ)>-1;});
+    if(soQ) filtered=filtered.filter(function(inv){return _invSOs(inv).some(function(s){return String(s).toLowerCase().indexOf(soQ)>-1;});});
+    // A PO/SO search looks across all invoices; the period filter only scopes the plain browse view.
+    if(!poQ&&!soQ){
+      const range=_invRegDateRange();
+      if(range){
+        filtered=filtered.filter(function(inv){
+          const d=inv.date||'';
+          if(range.from&&d<range.from)return false;
+          if(range.to&&d>range.to)return false;
+          return true;
+        });
+      }
     }
   }
 
@@ -5331,6 +5361,34 @@ function custEditRow(i){
   var t=document.getElementById('cf-title');if(t)t.textContent='✏️ Edit: '+(c.customer||'')+(c.dispatchLoc?' — '+c.dispatchLoc:'');
   try{document.getElementById('dash-cust-panel').scrollIntoView({behavior:'smooth',block:'start'});}catch(e){}
 }
+// Fill the "Rename customer" picker with the distinct customer names in the master.
+function custPopulateRename(){
+  var sel=document.getElementById('cust-rename-sel'); if(!sel)return;
+  var cur=sel.value;
+  var names=[...new Set((CUST_MASTER||[]).map(function(c){return String(c&&c.customer||'').trim();}).filter(Boolean))].sort(function(a,b){return a.localeCompare(b);});
+  sel.innerHTML='<option value="">— Select customer —</option>'+names.map(function(n){return '<option value="'+custEsc(n)+'">'+custEsc(n)+'</option>';}).join('');
+  if(cur&&names.indexOf(cur)>=0)sel.value=cur;
+}
+// Rename a customer across every one of its dispatch-location rows, then persist to cloud.
+window.custRenameCustomer=function(){
+  var sel=document.getElementById('cust-rename-sel'); var oldN=sel?sel.value:'';
+  var nw=document.getElementById('cust-rename-new'); var newN=nw?nw.value.trim():'';
+  var msg=document.getElementById('cust-rename-msg');
+  var say=function(t,c){ if(msg){msg.style.color=(c==='r'?'var(--red)':'var(--g)');msg.textContent=t;} };
+  if(!oldN){ say('Pick the customer to rename.','r'); return; }
+  if(!newN){ say('Enter the corrected name.','r'); return; }
+  if(newN===oldN){ say('The corrected name is the same as the current one.','r'); return; }
+  var n=0;
+  (CUST_MASTER||[]).forEach(function(c){ if(c&&String(c.customer||'').trim()===oldN){ c.customer=newN; n++; } });
+  if(!n){ say('No rows found for that customer.','r'); return; }
+  cmPersist(); updateCMStatus(); renderCustAdmin();
+  try{if(typeof qcPopulateCustomers==='function')qcPopulateCustomers();}catch(e){}
+  try{if(typeof qcPopulateGroups==='function')qcPopulateGroups();}catch(e){}
+  try{if(typeof buildJSSFilters==='function')buildJSSFilters();}catch(e){}
+  if(nw)nw.value='';
+  custPopulateRename();
+  say('✅ Renamed '+n+' row'+(n>1?'s':'')+' to “'+newN+'” and saved to the cloud master.','g');
+};
 function custSaveRow(){
   const gv=function(id){var e=document.getElementById(id);return e?e.value.trim():'';};
   const group=custFormGroupValue();
@@ -5357,6 +5415,7 @@ function custDeleteRow(i){
 }
 function renderCustAdmin(){
   const body=document.getElementById('cust-body');if(!body)return;
+  try{custPopulateRename();}catch(e){}
   const gf=document.getElementById('cust-grp-fil');
   if(gf){const cur=gf.value;const gs=_custGroups();gf.innerHTML='<option value="">All groups</option>'+gs.map(function(g){return '<option value="'+custEsc(g)+'">'+custEsc(g)+'</option>';}).join('');gf.value=(cur&&gs.indexOf(cur)>=0)?cur:'';}
   const q=(document.getElementById('cust-q').value||'').toLowerCase();
@@ -6267,7 +6326,7 @@ var DROPDOWN_DEFS=[
   {key:'categories',   label:'Lead / SKU Categories',      where:'Sales Rep · Sales Admin', type:'list'},
   {key:'despatch',     label:'Dispatch Forms',             where:'Sales Rep — SKUs',        type:'list'},
   {key:'paytypes',     label:'Customer Payment Types',     where:'Sales Rep — Add Lead',    type:'pairs'},
-  {key:'statuses',     label:'Lead Statuses',              where:'Sales Rep · Sales Admin', type:'list'},
+  {key:'statuses',     label:'Contact Stages',             where:'Sales Rep · Sales Admin', type:'list'},
   {key:'designations', label:'Contact Designations',       where:'Sales Rep — Contacts',    type:'list'},
   {key:'visit_types',  label:'Log Visit — Activity Types', where:'Sales Rep — Log Visit',   type:'list'},
   {key:'ping_types',   label:'Next Ping Types',            where:'Sales Rep — Log Visit',   type:'list'},
@@ -6278,7 +6337,7 @@ var DD_DEFAULTS={
   categories:['Dairy','Namkeen','Sanitary Pads','Pet Food','Ice Creams','Staples','Oil','Frozen Meat','Frozen Food','Spices','Confectionery','Shopping Bags','Paan Masala','F&V'],
   despatch:['Roll','Label','Shrink Sleeve','Pouch','Bulk Bags','Others'],
   paytypes:[['A+','A+ — Excellent (pay master)'],['A','A — Good pay master'],['B','B — One nudge needed'],['C','C — Two nudges needed'],['D','D — Do not enter']],
-  statuses:['Hot','Warm','Cold','To Approach','Converted','Cannot Convert'],
+  statuses:['Hot','Cold','Warm','Approach','In touch','Converted','Cannot Convert'],
   designations:['CEO','Managing Director','Senior Purchase Director','Purchase Manager','Purchase Executive','Others'],
   visit_types:['Call','Visit','Email','Meeting','Sample Given','Quotation','Other'],
   ping_types:['Visit','Call','Mail','WhatsApp','Meeting','Other'],
@@ -7235,7 +7294,7 @@ const SDASH_TABS=[
 ];
 
 // ── Lead status system (shared across Active Leads, Lead Allocation, Overview) ──
-var SDASH_STATUSES=['Hot','Warm','Cold','To Approach','Converted','Cannot Convert'];
+var SDASH_STATUSES=['Hot','Cold','Warm','Approach','In touch','Converted','Cannot Convert'];
 
 function sdashRenderShell(){
   const body=document.getElementById('sdash-body');
@@ -7293,7 +7352,11 @@ function sdashRepName(id){const r=(SDASH_DATA.sales_users||[]).find(function(x){
 // Only Active reps are eligible for new lead allocation (Inactive/Left are hidden from pickers).
 function sdashActiveReps(){return (SDASH_DATA.sales_users||[]).filter(function(r){return (r.status|| (r.disabled?'Inactive':'Active'))==='Active';});}
 function sdashLeadCats(l){return (l&&l.categories&&l.categories.length)?l.categories:[(l&&l.category)||'—'];}
-function sdashStageBadge(s){const m={Hot:'background:#fde8e8;color:#c0392b',Warm:'background:#fdf3d6;color:#8a6d00',Cold:'background:#e6f0fb;color:#1d4e89','To Approach':'background:#ede7f6;color:#5e35b1',Converted:'background:#e3f7e9;color:#1B6B3A','Cannot Convert':'background:#eceff1;color:#607d8b'};return 'padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;'+(m[s]||'background:#eee;color:#555');}
+function sdashCustGroup(l){ if(!l) return '—'; if(l.group) return l.group; var n=l.client_name||''; if(typeof custGroupOf==='function'){ var g=custGroupOf(n); if(g&&g!==n) return g; } return '—'; }
+// Test/demo customer names to hide from the Sales Rep + Sales Admin logins (e.g. seed data).
+var SALES_TEST_NAMES=['reliance'];
+window.repIsTestName=function(n){ n=String(n||'').toLowerCase(); return SALES_TEST_NAMES.some(function(t){return n.indexOf(t)>-1;}); };
+function sdashStageBadge(s){const m={Hot:'background:#fde8e8;color:#c0392b',Warm:'background:#fdf3d6;color:#8a6d00',Cold:'background:#e6f0fb;color:#1d4e89','To Approach':'background:#ede7f6;color:#5e35b1','Approach':'background:#ede7f6;color:#5e35b1','In touch':'background:#e8f0fe;color:#1a4fa0',Converted:'background:#e3f7e9;color:#1B6B3A','Cannot Convert':'background:#eceff1;color:#607d8b'};return 'padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;'+(m[s]||'background:#eee;color:#555');}
 // Days between two dates (whole days, >=0). Returns null if either missing.
 function sdashDaysBetween(a,b){if(!a||!b)return null;var d=Math.floor((new Date(b).getTime()-new Date(a).getTime())/86400000);return d<0?0:d;}
 function sdashDaysSinceNow(a){if(!a)return null;var d=Math.floor((Date.now()-new Date(a).getTime())/86400000);return d<0?0:d;}
@@ -7421,7 +7484,7 @@ function sdashOverview(){
       '<td style="padding:8px">'+tag+'</td>'+
       '</tr>';
   });
-  html+=sdashTbl(['Company','Rep','Follow-up Date','Status'],nudgeTrs,'No follow-ups scheduled');
+  html+=sdashTbl(['Customer','Rep','Follow-up Date','Status'],nudgeTrs,'No follow-ups scheduled');
   if(nudges.length>8) html+='<div style="font-size:11px;color:#888;margin-top:4px">+'+(nudges.length-8)+' more — showing soonest 8</div>';
 
   // Rep Targets — current month, new model (category + despatch, from SKU). Set via Users & Access → 🎯 Targets.
@@ -7452,7 +7515,7 @@ function sdashOverview(){
       '<td style="padding:8px;text-align:right">'+sdashFmtN(r.ret)+'</td>'+
       '</tr>';
   });
-  html+=sdashTbl(['Company','First PO','Acquisition Cost','Retention Cost'],costTrs,'No visit expenses logged yet',['left','left','right','right']);
+  html+=sdashTbl(['Customer','First PO','Acquisition Cost','Retention Cost'],costTrs,'No visit expenses logged yet',['left','left','right','right']);
 
   el.innerHTML=html;
 }
@@ -7464,7 +7527,7 @@ function sdashDaily(){
   el.innerHTML='<div style="font-size:14px;font-weight:800;margin-bottom:10px">📋 Daily Updates — Activity Log</div>'+
     sdashFilterBar([
       {id:'sd-daily-rep',type:'select',placeholder:'All Reps',options:reps.map(function(r){return r.display_name;}),onchange:'sdashDailyFilter()'},
-      {id:'sd-daily-q',type:'text',placeholder:'Search company / type / notes...',onchange:'sdashDailyFilter()'}
+      {id:'sd-daily-q',type:'text',placeholder:'Search customer / type / notes...',onchange:'sdashDailyFilter()'}
     ])+
     '<div id="sd-daily-body"></div>';
   sdashDailyFilter();
@@ -7495,7 +7558,7 @@ window.sdashDailyFilter=function(){
       '<td style="padding:8px">'+(i.follow_up_date?sdashFmtD(i.follow_up_date):'—')+'</td>'+
       '</tr>';
   });
-  document.getElementById('sd-daily-body').innerHTML=sdashTbl(['Date','Rep','Company','Type','Outcome / Notes','Expense','Follow-up'],rows,'No activity found',['left','left','left','left','left','right','left']);
+  document.getElementById('sd-daily-body').innerHTML=sdashTbl(['Date','Rep','Customer','Type','Outcome / Notes','Expense','Follow-up'],rows,'No activity found',['left','left','left','left','left','right','left']);
 };
 
 // ── All Active Leads: filterable by search + stage + category ──
@@ -7506,7 +7569,7 @@ function sdashActiveLeads(){
     '<button onclick="sdashExportActiveLeads()" style="height:30px;padding:0 14px;background:#1B6B3A;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">⬇ Export Excel</button></div>'+
     '<div style="font-size:11px;color:#888;margin-bottom:10px">Change a lead\'s status inline below. Updates are shared live with the assigned rep\'s dashboard.</div>'+
     sdashFilterBar([
-      {id:'sd-al-q',type:'text',placeholder:'Search company...',onchange:'sdashActiveLeadsFilter()'},
+      {id:'sd-al-q',type:'text',placeholder:'Search customer...',onchange:'sdashActiveLeadsFilter()'},
       {id:'sd-al-stage',type:'select',placeholder:'All Statuses',options:SDASH_STATUSES,onchange:'sdashActiveLeadsFilter()'},
       {id:'sd-al-cat',type:'select',placeholder:'All Categories',options:cats,onchange:'sdashActiveLeadsFilter()'},
       {id:'sd-al-rep',type:'select',placeholder:'All Reps (incl. unassigned)',options:['— Unassigned —'].concat((SDASH_DATA.sales_users||[]).map(function(r){return r.display_name;})),onchange:'sdashActiveLeadsFilter()'}
@@ -7525,7 +7588,7 @@ window.sdashActiveLeadsFilter=function(){
   const leadLastActivity=function(leadId){const list=interactions.filter(function(i){return i.lead_id===leadId;}).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});return list[0]||null;};
   const leadNextFollowup=function(leadId){const lead=(SDASH_DATA.leads||[]).find(function(x){return x.id===leadId;});const cands=interactions.filter(function(i){return i.lead_id===leadId&&i.follow_up_date&&i.follow_up_date>=todayStr;}).map(function(i){return i.follow_up_date;});if(lead&&lead.next_follow_up_date&&lead.next_follow_up_date>=todayStr)cands.push(lead.next_follow_up_date);cands.sort();return cands[0]||null;};
 
-  let leads=(SDASH_DATA.leads||[]).slice();
+  let leads=(SDASH_DATA.leads||[]).slice().filter(function(l){return !repIsTestName(l.client_name);});
   if(q) leads=leads.filter(function(l){return (l.client_name||'').toLowerCase().indexOf(q)>-1;});
   if(stage) leads=leads.filter(function(l){return (l.stage||'')===stage;});
   if(cat) leads=leads.filter(function(l){return sdashLeadCats(l).indexOf(cat)>-1;});
@@ -7538,6 +7601,7 @@ window.sdashActiveLeadsFilter=function(){
     const ar=sdashLeadAcqRet(l.id);
     return '<tr style="border-top:1px solid #eee">'+
       '<td style="padding:8px;font-weight:700">'+qcEsc(l.client_name)+'</td>'+
+      '<td style="padding:8px;color:#555">'+qcEsc(sdashCustGroup(l))+'</td>'+
       '<td style="padding:8px;max-width:150px">'+sdashLeadCats(l).map(function(c){return '<span style="'+sdashCatBadge()+'">'+qcEsc(c)+'</span>';}).join(' ')+'</td>'+
       '<td style="padding:8px">'+sdashStatusSelect(l)+'</td>'+
       '<td style="padding:8px"><span style="'+sdashPayBadge(l.payment_type)+'">'+qcEsc(l.payment_type||'—')+'</span></td>'+
@@ -7548,7 +7612,7 @@ window.sdashActiveLeadsFilter=function(){
       '<td style="padding:8px;text-align:right;color:#1B6B3A;font-weight:600">'+sdashFmtN(ar.ret)+'</td>'+
       '</tr>';
   });
-  document.getElementById('sd-al-body').innerHTML=sdashTbl(['Company','Category','Status','Pay Type','Sales Rep','Last Activity','Next Follow-up','Acquisition Cost','Retention Cost'],rows,'No active leads match',['left','left','left','left','left','left','left','right','right']);
+  document.getElementById('sd-al-body').innerHTML=sdashTbl(['Customer','Group','Category','Stage','Pay Type','Sales Rep','Last Activity','NextFollow-up','Acquisition Cost','Retention Cost'],rows,'No active leads match',['left','left','left','left','left','left','left','left','right','right']);
 };
 // PO boundary for a customer = the EARLIEST purchase order with a real date.
 // (POs with a blank date are ignored so a stray blank-dated PO can't null-out the split.)
@@ -7605,7 +7669,7 @@ function sdashLeadDB(){
   el.innerHTML='<div style="font-size:14px;font-weight:800;margin-bottom:4px">🗂 Lead Allocation — Master List</div>'+
     '<div style="font-size:11px;color:#888;margin-bottom:10px">Assign a line item to a rep with the per-row dropdown, or tick several and use bulk-assign. Allocated leads appear on the rep\'s dashboard under their active leads.</div>'+
     sdashFilterBar([
-      {id:'sd-ld-q',type:'text',placeholder:'Search company...',onchange:'sdashLeadDBFilter()'},
+      {id:'sd-ld-q',type:'text',placeholder:'Search customer...',onchange:'sdashLeadDBFilter()'},
       {id:'sd-ld-cat',type:'select',placeholder:'All Categories',options:cats,onchange:'sdashLeadDBFilter()'},
       {id:'sd-ld-rep',type:'select',placeholder:'All (Assigned + Unassigned)',options:['— Unassigned —'].concat(sdashActiveReps().map(function(r){return r.display_name;})),onchange:'sdashLeadDBFilter()'}
     ])+
@@ -7627,7 +7691,7 @@ window.sdashLeadDBFilter=function(){
   const repName=(document.getElementById('sd-ld-rep')?.value||'');
   const contacts=SDASH_DATA.contacts||[];
   const reps=sdashActiveReps();
-  let leads=(SDASH_DATA.leads||[]).slice();
+  let leads=(SDASH_DATA.leads||[]).slice().filter(function(l){return !repIsTestName(l.client_name);});
   if(q) leads=leads.filter(function(l){return (l.client_name||'').toLowerCase().indexOf(q)>-1;});
 
   const repSelect=function(l,c){
@@ -7656,6 +7720,7 @@ window.sdashLeadDBFilter=function(){
       rows.push('<tr style="border-top:1px solid #eee">'+
         '<td style="padding:8px;text-align:center"><input type="checkbox" class="sd-alloc-cb" value="'+key+'"></td>'+
         '<td style="padding:8px;font-weight:700">'+qcEsc(l.client_name)+'</td>'+
+        '<td style="padding:8px;color:#555">'+qcEsc(sdashCustGroup(l))+'</td>'+
         '<td style="padding:8px"><span style="'+sdashCatBadge()+'">'+qcEsc(c)+'</span></td>'+
         '<td style="padding:8px">'+qcEsc(l.city||'—')+'</td>'+
         '<td style="padding:8px"><span style="'+sdashStageBadge(l.stage)+'">'+qcEsc(l.stage||'—')+'</span></td>'+
@@ -7666,7 +7731,7 @@ window.sdashLeadDBFilter=function(){
     });
   });
   const headCb='<input type="checkbox" onclick="sdashAllocToggleAll(this)" title="Select all">';
-  document.getElementById('sd-ld-body').innerHTML=sdashTbl([headCb,'Company','Category','City','Stage','Source','Allocate To','Contacts'],rows,'No leads match',['center','left','left','left','left','left','left','center']);
+  document.getElementById('sd-ld-body').innerHTML=sdashTbl([headCb,'Customer','Group','Category','City','Stage','Source','Allocate To','Contacts'],rows,'No leads match',['center','left','left','left','left','left','left','left','center']);
 };
 window.sdashAllocToggleAll=function(cb){ Array.prototype.forEach.call(document.querySelectorAll('.sd-alloc-cb'),function(c){c.checked=cb.checked;}); };
 // Each per-row/bulk assignment already persists on change; Save re-syncs from cloud and confirms.
@@ -7886,12 +7951,12 @@ function sdashContacts(){
   const el=document.getElementById('sdash-content'); if(!el) return;
   el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:14px;font-weight:800">👥 All Contacts — Every Lead, Every Category</div>'+
     '<button onclick="sdashExportContacts()" style="height:30px;padding:0 14px;background:#1B6B3A;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">⬇ Export Excel</button></div>'+
-    '<input id="sdash-contact-q" oninput="sdashContactsFilter()" placeholder="Search contact name, company, phone, email..." style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 12px;font-size:12px;width:320px;margin-bottom:12px;box-sizing:border-box">'+
+    '<input id="sdash-contact-q" oninput="sdashContactsFilter()" placeholder="Search contact name, customer, phone, email..." style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 12px;font-size:12px;width:320px;margin-bottom:12px;box-sizing:border-box">'+
     '<div id="sdash-contacts-body"></div>';
   window._sdashContactRows=(SDASH_DATA.contacts||[]).map(function(c){
     const lead=(SDASH_DATA.leads||[]).find(function(l){return l.id===c.lead_id;});
     return {c:c,lead:lead};
-  });
+  }).filter(function(r){ return !repIsTestName(r.lead?r.lead.client_name:(r.c.customer||'')); });
   sdashContactsFilter();
 }
 function sdashContactsFilter(){
@@ -7915,7 +7980,9 @@ function sdashContactsFilter(){
     const rowBg=r.c.rep_deleted?' style="border-top:1px solid #eee;background:#fff6f6"':' style="border-top:1px solid #eee"';
     return '<tr'+rowBg+'>'+
       '<td style="padding:8px;font-weight:700">'+qcEsc(r.lead?r.lead.client_name:'—')+'</td>'+
+      '<td style="padding:8px;color:#555">'+qcEsc(r.c.group||sdashCustGroup(r.lead))+'</td>'+
       '<td style="padding:8px"><span style="'+sdashCatBadge()+'">'+qcEsc(contactCat)+'</span></td>'+
+      '<td style="padding:8px">'+(r.c.stage?'<span style="background:#eef2ff;color:#3730a3;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">'+qcEsc(r.c.stage)+'</span>':'—')+'</td>'+
       '<td style="padding:8px;font-weight:600">'+qcEsc(r.c.name)+(r.c.is_primary?' <span style="color:#c9a100">⭐</span>':'')+'</td>'+
       '<td style="padding:8px">'+qcEsc(addedBy)+delNote+'</td>'+
       '<td style="padding:8px">'+qcEsc(r.c.designation||'—')+'</td>'+
@@ -7928,7 +7995,7 @@ function sdashContactsFilter(){
       '</td>'+
       '</tr>';
   });
-  body.innerHTML=sdashTbl(['Company','Category','Contact','Added By','Designation','Phone','Email','Remarks','Actions'],trs,'No contacts found');
+  body.innerHTML=sdashTbl(['Customer','Group','Category','Stage','Contact','Added By','Designation','Phone','Email','Remarks','Actions'],trs,'No contacts found');
 }
 // Shared modal for the Sales-Admin dashboard.
 function sdashModal(html){
@@ -9149,8 +9216,8 @@ function qcPopulateCustomers(){
   } else {
     names=[...new Set((typeof CUST_MASTER!=='undefined'?CUST_MASTER:[]||[]).map(function(c){return String(c&&c.customer||'').trim();}).filter(Boolean))].sort(function(a,b){return a.localeCompare(b);});
   }
-  if(!names.length){sel.innerHTML='<option value="">'+(grp?'— No companies in this group —':'— No customers in Customer Master —')+'</option>';return;}
-  const lbl=grp?'— Select company —':'— Select company (no group) —';
+  if(!names.length){sel.innerHTML='<option value="">'+(grp?'— No customers in this group —':'— No customers in Customer Master —')+'</option>';return;}
+  const lbl=grp?'— Select customer —':'— Select customer (no group) —';
   sel.innerHTML='<option value="">'+lbl+'</option>'+names.map(function(n){return '<option value="'+n.replace(/"/g,'&quot;')+'">'+n.replace(/</g,'&lt;')+'</option>';}).join('');
   sel.value=(cur&&names.indexOf(cur)>=0)?cur:'';
 }
@@ -9213,7 +9280,7 @@ function saveQCSpec(){
 function exportJSSExcel(){
   if(!JSS.length){alert('No JSS data to export.');return;}
   const wb=XLSX.utils.book_new();
-  const hdr=['Spec','Job Type','Group','Company','Sub Brand','Job Name','Print Loc','MIC','GSM','Material','Film Width','Ups','Width','Height','Gusset','Dispatch Form','Machine Run On','Status'];
+  const hdr=['Spec','Job Type','Group','Customer','Sub Brand','Job Name','Print Loc','MIC','GSM','Material','Film Width','Ups','Width','Height','Gusset','Dispatch Form','Machine Run On','Status'];
   const rows=JSS.map(function(j){
     // Group: the spec's stored group if set, otherwise derived from the customer list.
     var grp=(typeof specGroup==='function')?specGroup(j):(j.group||'');
@@ -11438,8 +11505,8 @@ async function pvDownloadPOPDF(poNum,btn){
         <div style="grid-column:span 2"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Group <span style="color:#aaa;font-weight:400">(pick a group to filter companies; leave blank for a company with no group)</span></label>
           <select id="qc-group" onchange="qcGroupChange()" style="width:100%;height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">— No group —</option></select></div>
 
-        <div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Company <span style="color:#aaa;font-weight:400">(blank = shared with whole group)</span></label>
-          <select id="qc-customer" style="width:100%;height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">— Select company —</option></select></div>
+        <div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Customer <span style="color:#aaa;font-weight:400">(blank = shared with whole group)</span></label>
+          <select id="qc-customer" style="width:100%;height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">— Select customer —</option></select></div>
 
         <div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Sub Brand</label>
           <input id="qc-subbrand" placeholder="Sub brand / variant" style="width:100%;height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"></div>
@@ -11614,7 +11681,7 @@ async function pvDownloadPOPDF(poNum,btn){
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
               <div style="font-size:12px;font-weight:700;color:#555">📋 CSA Report History</div>
-              <input id="qc-csa-q" oninput="qcCsaRenderHistory()" placeholder="Search company / SKU..." style="height:28px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;width:220px">
+              <input id="qc-csa-q" oninput="qcCsaRenderHistory()" placeholder="Search customer / SKU..." style="height:28px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;width:220px">
             </div>
             <div style="overflow-x:auto;max-height:50vh;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
               <thead style="position:sticky;top:0;z-index:2"><tr style="background:#EEF7F2;color:#1B6B3A">
@@ -12113,7 +12180,20 @@ var REP_DESIGNATIONS=['CEO','Managing Director','Senior Purchase Director','Purc
 var REP_VISIT_TYPES=['Call','Visit','Email','Meeting','Sample Given','Quotation','Other'];
 var REP_PING_TYPES=['Visit','Call','Mail','WhatsApp','Meeting','Other'];
 var REP_RANKS=[['1','Primary'],['2','Secondary'],['3','Tertiary'],['','—']];
-var REP_STATUSES=(typeof SDASH_STATUSES!=='undefined')?SDASH_STATUSES:['Hot','Warm','Cold','To Approach','Converted','Cannot Convert'];
+var REP_CUSTOMER_TYPES=['Direct Customer','Reseller','Filler','Customer Warehouse','HO','Others'];
+// Sales-rep customer pool = the shared Customer Master PLUS every customer any rep has added (leads),
+// so a rep can work any group already in place. Returns a { customerName: groupName } map.
+function repAllCustomers(){
+  var map={};
+  (typeof CUST_MASTER!=='undefined'&&CUST_MASTER?CUST_MASTER:[]).forEach(function(c){ if(c&&c.customer){ var n=String(c.customer).trim(); if(n&&!(n in map)&&!repIsTestName(n)) map[n]=String(c.group||'').trim(); } });
+  (typeof REP_DATA!=='undefined'&&REP_DATA&&REP_DATA.leads?REP_DATA.leads:[]).forEach(function(l){ if(l&&l.client_name){ var n=String(l.client_name).trim(); if(n&&!(n in map)&&!repIsTestName(n)) map[n]=String(l.group||'').trim(); } });
+  return map;
+}
+function repGroupOfCustomer(name){ if(!name) return ''; var m=repAllCustomers(),n=String(name).trim(); return (n in m)?m[n]:''; }
+function repAllGroups(){ var m=repAllCustomers(),s={}; Object.keys(m).forEach(function(n){ if(m[n]) s[m[n]]=1; }); return Object.keys(s).sort(function(a,b){return a.localeCompare(b);}); }
+// Customers in a group ('' = customers with no group). Draws from the combined pool above.
+function repCustsInGroup(group){ var m=repAllCustomers(),g=String(group||'').trim(),o=[]; Object.keys(m).forEach(function(n){ var cg=m[n]; if(g){ if(cg===g) o.push(n); } else { if(!cg) o.push(n); } }); return o.sort(function(a,b){return a.localeCompare(b);}); }
+var REP_STATUSES=(typeof SDASH_STATUSES!=='undefined')?SDASH_STATUSES:['Hot','Cold','Warm','Approach','In touch','Converted','Cannot Convert'];
 
 function repEsc(s){return (typeof qcEsc==='function')?qcEsc(s):String(s==null?'':s);}
 function repFmtD(d){return (typeof sdashFmtD==='function')?sdashFmtD(d):(d||'—');}
@@ -12141,7 +12221,7 @@ function repVisibleCats(l){
 }
 // Leads with at least one line item visible to this rep.
 function repMyLeadList(){
-  return (REP_DATA.leads||[]).filter(function(l){return repVisibleCats(l).length>0;});
+  return (REP_DATA.leads||[]).filter(function(l){return repVisibleCats(l).length>0 && !repIsTestName(l.client_name);});
 }
 // Next scheduled ping for a lead: explicit lead.next_follow_up_date, else soonest future interaction follow_up_date
 function repNextFollow(l){
@@ -12232,7 +12312,7 @@ async function showRepView(){
   repSwitch(REP_TABS.some(function(t){return t[0]===saved;})?saved:'followups');
 }
 
-var REP_TABS=[['followups','🗓 Follow-ups'],['visit','📋 Log Visit'],['po','🧾 Enter PO'],['targets','🎯 My Targets'],['myleads','📈 My Leads'],['contacts','📇 My Contacts'],['add','➕ Add Lead'],['sku','📦 SKUs']];
+var REP_TABS=[['followups','🗓 Follow-ups'],['visit','📋 Log Visit'],['po','🧾 Enter PO'],['targets','🎯 My Targets'],['myleads','📈 My Customers'],['contacts','📇 My Contacts'],['add','➕ Add Customer'],['sku','📦 SKUs']];
 function repRenderNav(){
   var nav=document.getElementById('rep-nav'); if(!nav) return;
   nav.innerHTML=REP_TABS.map(function(t){
@@ -12279,7 +12359,9 @@ function repTbl(headers,rows,empty,aligns){
   return h;
 }
 
-// ── Tab: My Leads ──
+// Payment-type display: show the grade code (A+/A/B…) with the full description as a tooltip.
+function repPayLabel(k){ if(!k) return '—'; var f=(REP_PAYTYPES||[]).find(function(p){return p[0]===k;}); return '<span title="'+repEsc(f?f[1]:'')+'" style="font-weight:700;color:#1a4fa0">'+repEsc(f?f[0]:k)+'</span>'; }
+// ── Tab: My Customers ──
 function repMyLeads(){
   var el=document.getElementById('rep-content'); if(!el) return;
   var leads=repMyLeadList();
@@ -12299,10 +12381,11 @@ function repMyLeads(){
     var stOpts=REP_STATUSES.map(function(s){return '<option value="'+s+'"'+(s===l.stage?' selected':'')+'>'+s+'</option>';}).join('');
     return '<tr style="border-top:1px solid #eee">'+
       '<td style="padding:8px;font-weight:700"><a href="javascript:void(0)" onclick="repCustomerHistory(\''+l.id+'\')" title="View full communication & visit history" style="color:#1a4fa0;text-decoration:none;border-bottom:1px dotted #9bb7de">'+repEsc(l.client_name)+'</a></td>'+
+      '<td style="padding:8px;color:#555">'+repEsc(l.group||repGroupOfCustomer(l.client_name)||'—')+'</td>'+
       '<td style="padding:8px">'+repVisibleCats(l).map(function(c){return '<span style="background:#e8f0fe;color:#1a4fa0;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">'+repEsc(c)+'</span>';}).join(' ')+'</td>'+
       '<td style="padding:8px"><select onchange="repSetLeadStatus(\''+l.id+'\',this.value)" style="'+repStatusBadgeStyle(l.stage)+';border:1px solid rgba(0,0,0,.12);height:26px;width:auto;max-width:120px;font-size:11px;padding:0 4px;cursor:pointer">'+(l.stage?'':'<option value="" selected>— Set —</option>')+stOpts+'</select></td>'+
       '<td style="padding:8px;color:#555">'+repEsc(l.city||'—')+'</td>'+
-      '<td style="padding:8px"><input type="date" value="'+(nf?nf.slice(0,10):'')+'" onchange="repSetFollow(\''+l.id+'\',this.value)" style="height:28px;border:1px solid #ddd;border-radius:5px;padding:0 6px;font-size:11px"></td>'+
+      '<td style="padding:8px">'+repPayLabel(l.payment_type)+'</td>'+
       '<td style="padding:8px">'+repDueBadge(nf)+'</td>'+
       '<td style="padding:8px;text-align:center">'+cCount+'</td>'+
       '</tr>';
@@ -12311,9 +12394,9 @@ function repMyLeads(){
   // Split: leads the rep created vs leads the manager assigned to them.
   var own=leads.filter(function(l){return l.created_by===rid;}).sort(srt);
   var mgr=leads.filter(function(l){return l.created_by!==rid;}).sort(srt);
-  var hdr=['Company','Category','Status','City','Next Ping','Due','Contacts'];
-  var ownCard=repCard('<div style="font-size:14px;font-weight:800;margin-bottom:10px">📈 My Active Leads</div>'+
-    repTbl(hdr,own.map(rowFor),'No leads added by you yet — add one from the ➕ Add Lead tab.'));
+  var hdr=['Customer','Group','Category','Status','City','Payment Type','Due','Contacts'];
+  var ownCard=repCard('<div style="font-size:14px;font-weight:800;margin-bottom:10px">📈 My Active Customers</div>'+
+    repTbl(hdr,own.map(rowFor),'No customers added by you yet — add one from the ➕ Add Customer tab.'));
   var mgrCard=mgr.length?repCard('<div style="font-size:14px;font-weight:800;margin-bottom:2px;color:#5e35b1">👤 Leads assigned to you by the manager</div>'+
     '<div style="font-size:11px;color:#888;margin-bottom:10px">Allocated to you from the Sales-Admin. Work them like your own.</div>'+
     repTbl(hdr,mgr.map(rowFor),'')):'';
@@ -12426,24 +12509,24 @@ function repAddLead(){
   var fld=function(label,inner,req){return '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">'+label+(req?' <span style="color:#c0392b">*</span>':'')+'</label>'+inner+'</div>';};
   var inp=function(id,ph){return '<input id="'+id+'" placeholder="'+(ph||'')+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box">';};
   var desigSel=function(id){return '<select id="'+id+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+REP_DESIGNATIONS.map(function(d){return '<option>'+d+'</option>';}).join('')+'</select>';};
+  var INP='width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box';
+  var groupSelHtml='<select id="rl-group" onchange="repLeadGroupChange()" style="'+INP+'"><option value="">— No group (ungrouped) —</option>'+repAllGroups().map(function(gp){return '<option value="'+repEsc(gp)+'">'+repEsc(gp)+'</option>';}).join('')+'<option value="__new__">➕ Add New Group</option></select>'+
+    '<input id="rl-group-new" placeholder="New group name" style="'+INP+';margin-top:6px;display:none">';
+  var custSelHtml='<select id="rl-cust" onchange="repLeadCustChange()" style="'+INP+'"><option value="">— Select customer —</option>'+repCustsInGroup('').map(function(cn){return '<option value="'+repEsc(cn)+'">'+repEsc(cn)+'</option>';}).join('')+'<option value="__new__">➕ Add New Customer</option></select>'+
+    '<input id="rl-cust-new" placeholder="New customer name" style="'+INP+';margin-top:6px;display:none">';
   el.innerHTML=repCard(
-    '<div style="font-size:14px;font-weight:800;margin-bottom:4px">➕ Add New Lead</div>'+
-    '<div style="font-size:11px;color:#888;margin-bottom:16px">Enter a brand-new customer. New leads are assigned to you automatically and appear under My Leads.</div>'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:4px">➕ Add Customer</div>'+
+    '<div style="font-size:11px;color:#888;margin-bottom:16px">Pick an existing group then customer, or add a new one. Leave the group blank for a customer with no group. New customers are assigned to you and appear under My Customers. Contacts are added separately from the My Contacts tab.</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
-      fld('Customer',inp('rl-customer','New customer / company name'),true)+
-      fld('Payment Type','<select id="rl-paytype" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+REP_PAYTYPES.map(function(p){return '<option value="'+p[0]+'">'+repEsc(p[1])+'</option>';}).join('')+'</select>')+
-      fld('Head Office',inp('rl-headoffice','Head office address / city'))+
+      fld('Group',groupSelHtml)+
+      fld('Customer',custSelHtml,true)+
+      fld('Payment Type','<select id="rl-paytype" style="'+INP+'"><option value="">-- Select --</option>'+REP_PAYTYPES.map(function(p){return '<option value="'+p[0]+'">'+repEsc(p[1])+'</option>';}).join('')+'</select>')+
+      fld('City',inp('rl-city','City where the customer sits'),true)+
+      fld('PIN Code',inp('rl-pin','PIN code (optional)'))+
       fld('Delivery Location',inp('rl-delivery','Delivery location'))+
     '</div>'+
     '<div style="margin-top:12px">'+fld('Categories (select one or more)',repCatCheckboxes('rl-cat'),true)+'</div>'+
     '<div style="margin-top:12px">'+fld('Initial Status','<select id="rl-status" style="width:220px;max-width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box">'+REP_STATUSES.map(function(s){return '<option'+(s==='To Approach'?' selected':'')+'>'+s+'</option>';}).join('')+'</select>')+'</div>'+
-    '<div style="font-size:12px;font-weight:700;color:#555;border-bottom:1px solid #eee;padding-bottom:6px;margin:18px 0 10px">Primary Contact (optional)</div>'+
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
-      fld('Contact Name',inp('rl-cname','Person name'))+
-      fld('Designation',desigSel('rl-cdesig'))+
-      fld('Phone',inp('rl-cphone','Phone'))+
-      fld('Email',inp('rl-cemail','Email'))+
-    '</div>'+
     '<div style="font-size:12px;font-weight:700;color:#555;border-bottom:1px solid #eee;padding-bottom:6px;margin:18px 0 10px">Schedule First Follow-up (optional)</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
       fld('Next Ping Date','<input type="date" id="rl-follow" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box">')+
@@ -12451,40 +12534,55 @@ function repAddLead(){
     '</div>'+
     '<div style="display:flex;justify-content:flex-end;gap:12px;align-items:center;margin-top:16px">'+
       '<span id="rl-msg" style="font-size:12px"></span>'+
-      '<button onclick="repSaveLead()" style="height:38px;padding:0 24px;background:#1a4fa0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ Save Lead</button>'+
+      '<button onclick="repSaveLead()" style="height:38px;padding:0 24px;background:#1a4fa0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ Save Customer</button>'+
     '</div>');
 }
+// Add Customer: Group change → refill Customer list from the combined pool; reveal new-group box when "Add New Group".
+window.repLeadGroupChange=function(){
+  var gv=(document.getElementById('rl-group')||{}).value||'';
+  var ng=document.getElementById('rl-group-new'); if(ng) ng.style.display=(gv==='__new__')?'block':'none';
+  var sel=document.getElementById('rl-cust');
+  if(sel){
+    var list=(gv==='__new__')?[]:repCustsInGroup(gv);
+    sel.innerHTML='<option value="">— Select customer —</option>'+list.map(function(c){return '<option value="'+repEsc(c)+'">'+repEsc(c)+'</option>';}).join('')+'<option value="__new__">➕ Add New Customer</option>';
+  }
+  var nc=document.getElementById('rl-cust-new'); if(nc) nc.style.display='none';
+};
+// Add Customer: reveal new-customer box when "Add New Customer".
+window.repLeadCustChange=function(){
+  var cv=(document.getElementById('rl-cust')||{}).value||'';
+  var nc=document.getElementById('rl-cust-new'); if(nc) nc.style.display=(cv==='__new__')?'block':'none';
+};
 window.repSaveLead=async function(){
   var g=function(id){var e=document.getElementById(id);return e?(e.value||'').trim():'';};
   var msg=document.getElementById('rl-msg');
-  var customer=g('rl-customer');
+  var groupSel=g('rl-group'); var group=(groupSel==='__new__')?g('rl-group-new'):groupSel;
+  var custSel=g('rl-cust'); var customer=(custSel==='__new__')?g('rl-cust-new'):custSel;
+  var city=g('rl-city');
   var categories=repCheckedVals('rl-cat');
-  if(!customer||!categories.length){ if(msg){msg.style.color='#c0392b';msg.textContent='Customer and at least one Category are required.';} return; }
+  if(!customer||!city||!categories.length){ if(msg){msg.style.color='#c0392b';msg.textContent='Customer, City and at least one Category are required.';} return; }
   if(msg){msg.style.color='#888';msg.textContent='Saving…';}
   await repRefresh();
   var rid=REP_SESSION?REP_SESSION.id:null;
+  // Don't let the same rep add the same customer twice.
+  var dup=(REP_DATA.leads||[]).find(function(l){return l.created_by===rid && String(l.client_name||'').trim().toLowerCase()===customer.toLowerCase();});
+  if(dup){ if(msg){msg.style.color='#c0392b';msg.textContent='You already have "'+customer+'" under My Customers.';} return; }
   var nowIso=new Date().toISOString();
   var leadId=repUid('lead');
   var ca={}; categories.forEach(function(c){ca[c]=rid;});
-  var newLead={ id:leadId, client_name:customer, categories:categories, category:categories[0],
-    head_office:g('rl-headoffice'), delivery_location:g('rl-delivery'), city:g('rl-headoffice'),
+  var newLead={ id:leadId, client_name:customer, group:group, categories:categories, category:categories[0],
+    city:city, pincode:g('rl-pin'), head_office:city, delivery_location:g('rl-delivery'),
     payment_type:g('rl-paytype'), stage:g('rl-status')||'To Approach',
     created_by:rid, assigned_to:rid, category_assignments:ca,
     next_follow_up_date:g('rl-follow')||'', created_at:nowIso };
   var patch={ leads:(REP_DATA.leads||[]).concat([newLead]) };
-  var cname=g('rl-cname');
-  if(cname){
-    var contact={ id:repUid('contact'), lead_id:leadId, categories:categories, category:categories[0], name:cname, designation:g('rl-cdesig'),
-      phone:g('rl-cphone'), email:g('rl-cemail'), is_primary:true, priority:1, remarks:g('rl-remarks'), created_by:rid, created_at:nowIso };
-    patch.contacts=(REP_DATA.contacts||[]).concat([contact]);
-  }
   if(g('rl-follow')){
     var inter={ id:repUid('inter'), lead_id:leadId, date:repToday(), type:'Follow-up scheduled',
       outcome:g('rl-remarks'), follow_up_date:g('rl-follow'), created_by:rid };
     patch.interactions=(REP_DATA.interactions||[]).concat([inter]);
   }
   await repPatch(patch);
-  if(msg){msg.style.color='#1B6B3A';msg.textContent='✓ Lead saved and assigned to you.';}
+  if(msg){msg.style.color='#1B6B3A';msg.textContent='✓ Customer saved and assigned to you.';}
   setTimeout(function(){repSwitch('myleads');},700);
 };
 
@@ -12507,7 +12605,7 @@ function repFollowups(){
     });
     if(!rows.length) return '';
     return '<div style="font-size:13px;font-weight:800;color:'+color+';margin:18px 0 8px">'+title+' <span style="color:#888;font-weight:500">('+rows.length+')</span></div>'+
-      repTbl(['Company','Category','City','Scheduled','Reschedule'],rows,'');
+      repTbl(['Customer','Category','City','Scheduled','Reschedule'],rows,'');
   };
   var html=bucket('⚠ Overdue','#c0392b',function(x){return x.d<t;})+
     bucket('● Ping Today','#8a6d00',function(x){return x.d===t;})+
@@ -12585,7 +12683,7 @@ function repVisit(){
     '</div>'+
     '<div style="display:flex;justify-content:flex-end;gap:12px;align-items:center;margin-top:14px"><span id="rv-msg" style="font-size:12px"></span>'+
       '<button onclick="repSaveVisit()" style="height:36px;padding:0 20px;background:#1a4fa0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ Save Update</button></div>')+
-    repCard('<div style="font-size:13px;font-weight:800;margin-bottom:8px">Recent Updates</div>'+repTbl(['Date','Company','Type','Notes','<span style="padding-right:20px;display:inline-block">Expense</span>','<span style="padding-left:20px;display:inline-block">Next Ping</span>'],rows,'No updates logged yet',['left','left','left','left','right','left']));
+    repCard('<div style="font-size:13px;font-weight:800;margin-bottom:8px">Recent Updates</div>'+repTbl(['Date','Customer','Type','Notes','<span style="padding-right:20px;display:inline-block">Expense</span>','<span style="padding-left:20px;display:inline-block">Next Ping</span>'],rows,'No updates logged yet',['left','left','left','left','right','left']));
   repVisitTypeToggle();
 }
 window.repVisitTypeToggle=function(){ var t=(document.getElementById('rv-type')||{}).value; var w=document.getElementById('rv-expense-wrap'); if(w)w.style.display=(t==='Visit')?'block':'none'; };
@@ -12897,6 +12995,24 @@ function repTargets(){
 var REP_EDIT_CONTACT=null;     // contact id currently being edited (null = add mode)
 function repContactCats(c){ return (c&&c.categories&&c.categories.length)?c.categories:(c&&c.category?[c.category]:[]); }
 function repRankLabel(c){ var p=c.priority; return p==1?'Primary':p==2?'Secondary':p==3?'Tertiary':'—'; }
+// Resolve the customer name on a contact: the new master-customer field, else the legacy linked-lead name.
+function repCustOfContact(c){ if(!c) return ''; if(c.customer) return c.customer; var l=(REP_DATA.leads||[]).find(function(x){return x.id===c.lead_id;}); return l?l.client_name:''; }
+// Resolve the group for a contact's customer (blank if the customer has no group).
+function repGroupOfContact(c){ if(!c) return ''; if(c.group) return c.group; var cust=repCustOfContact(c); return cust?repGroupOfCustomer(cust):''; }
+// Payment grade for a contact, taken from a rep lead of the same customer name.
+function repPayOfContact(c){ var cust=repCustOfContact(c); if(!cust) return ''; var l=(REP_DATA.leads||[]).find(function(x){return String(x.client_name||'').trim().toLowerCase()===cust.toLowerCase();}); return l?l.payment_type:''; }
+// Add Contact: when the Group changes, refill the Customer dropdown from the Customer Master (same as JSS).
+window.repContactGroupChange=function(){
+  var g=(document.getElementById('rc-group')||{}).value||'';
+  var sel=document.getElementById('rc-cust'); if(!sel) return;
+  var list=repCustsInGroup(g);
+  sel.innerHTML='<option value="">'+(g?'— Select customer —':'— Select customer (no group) —')+'</option>'+list.map(function(c){return '<option value="'+repEsc(c)+'">'+repEsc(c)+'</option>';}).join('');
+};
+// Add Contact: reveal a free-text box when the designation is "Others".
+window.repContactDesigChange=function(){
+  var v=(document.getElementById('rc-desig')||{}).value||'';
+  var o=document.getElementById('rc-desig-other'); if(o) o.style.display=(v==='Others')?'block':'none';
+};
 function repContacts(){
   var el=document.getElementById('rep-content'); if(!el) return;
   var leads=repMyLeadList();
@@ -12909,45 +13025,75 @@ function repContacts(){
     REP_CATEGORIES.map(function(c){return '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;background:#f4f7fb;border:1px solid #e3ebf5;border-radius:6px;padding:3px 8px;cursor:pointer"><input type="checkbox" class="rc-cat" value="'+repEsc(c)+'"'+(editCats.indexOf(c)>-1?' checked':'')+' style="margin:0">'+repEsc(c)+'</label>';}).join('')+'</div>';
   var v=function(k){return editing&&editing[k]?repEsc(editing[k]):'';};
   var form=repCard('<div style="font-size:14px;font-weight:800;margin-bottom:4px">'+(editing?'✏ Edit Contact':'📇 Add Contact')+'</div>'+
-    '<div style="font-size:11px;color:#888;margin-bottom:14px">One customer can have several contacts — even in the same category — each with its own designation and rank (Primary / Secondary / Tertiary).</div>'+
+    '<div style="font-size:11px;color:#888;margin-bottom:14px">Pick the group, then the customer (same as the JSS flow). One customer can have several contacts — each with its own designation and rank.</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
-      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Customer <span style="color:#c0392b">*</span></label><select id="rc-lead" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select your customer --</option>'+leadOpts.replace('value="'+(editing?editing.lead_id:'')+'"','value="'+(editing?editing.lead_id:'')+'" selected')+'</select></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Group</label><select id="rc-group" onchange="repContactGroupChange()" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">— Select group —</option>'+(function(){var eg=repGroupOfContact(editing);return repAllGroups().map(function(g){return '<option value="'+repEsc(g)+'"'+(eg===g?' selected':'')+'>'+repEsc(g)+'</option>';}).join('');})()+'</select></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Customer <span style="color:#c0392b">*</span></label><select id="rc-cust" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box">'+(function(){var ec=repCustOfContact(editing),eg=repGroupOfContact(editing);var list=repCustsInGroup(eg);if(ec&&list.indexOf(ec)<0)list=[ec].concat(list);return '<option value="">'+(eg?'— Select customer —':'— Select customer (no group) —')+'</option>'+list.map(function(c){return '<option value="'+repEsc(c)+'"'+(ec===c?' selected':'')+'>'+repEsc(c)+'</option>';}).join('');})()+'</select></div>'+
       '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Name <span style="color:#c0392b">*</span></label><input id="rc-name" value="'+v('name')+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"></div>'+
-      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Designation</label><select id="rc-desig" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+desigOpts+'</select></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Designation</label><select id="rc-desig" onchange="repContactDesigChange()" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+(function(){var d=editing?editing.designation:'';var isOther=d&&REP_DESIGNATIONS.indexOf(d)<0;return REP_DESIGNATIONS.map(function(o){var sel=(d===o)||(isOther&&o==='Others');return '<option'+(sel?' selected':'')+'>'+o+'</option>';}).join('');})()+'</select>'+
+        '<input id="rc-desig-other" placeholder="Enter designation" value="'+(function(){var d=editing?editing.designation:'';return (d&&REP_DESIGNATIONS.indexOf(d)<0)?repEsc(d):'';})()+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box;margin-top:6px;display:'+(function(){var d=editing?editing.designation:'';return (d&&REP_DESIGNATIONS.indexOf(d)<0)?'block':'none';})()+'"></div>'+
       '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Rank</label><select id="rc-rank" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box">'+rankOpts+'</select></div>'+
       '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Phone</label><input id="rc-phone" value="'+v('phone')+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"></div>'+
       '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Email</label><input id="rc-email" value="'+v('email')+'" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Customer Type</label><select id="rc-ctype" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+REP_CUSTOMER_TYPES.map(function(t){return '<option'+(editing&&editing.customer_type===t?' selected':'')+'>'+t+'</option>';}).join('')+'</select></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Stage</label><select id="rc-stage" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"><option value="">-- Select --</option>'+REP_STATUSES.map(function(s){return '<option'+(editing&&editing.stage===s?' selected':'')+'>'+repEsc(s)+'</option>';}).join('')+'</select></div>'+
+      '<div><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Location</label><input id="rc-location" value="'+v('location')+'" placeholder="Location where the contact sits" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;box-sizing:border-box"></div>'+
     '</div>'+
     '<div style="margin-top:12px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:3px">Categories (one or more)</label>'+catBoxes+'</div>'+
     '<div style="display:flex;justify-content:flex-end;gap:12px;align-items:center;margin-top:14px"><span id="rc-msg" style="font-size:12px"></span>'+
       (editing?'<button onclick="repCancelEditContact()" style="height:36px;padding:0 16px;background:#eee;color:#333;border:none;border-radius:8px;font-size:12px;cursor:pointer">Cancel</button>':'')+
       '<button onclick="repSaveContact()" style="height:36px;padding:0 20px;background:#1a4fa0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">'+(editing?'✓ Update Contact':'✓ Add Contact')+'</button></div>');
   // filter bar + list
+  var vc=repVisibleContacts();
+  var uniq=function(arr){var s={},o=[];arr.forEach(function(v){v=String(v||'').trim();if(v&&!s[v]){s[v]=1;o.push(v);}});return o.sort(function(a,b){return a.localeCompare(b);});};
+  var mkSel=function(id,ph,opts){return '<select id="'+id+'" onchange="repContactsFilter()" style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;background:#fff"><option value="">'+ph+'</option>'+opts.map(function(o){return '<option value="'+repEsc(o)+'">'+repEsc(o)+'</option>';}).join('')+'</select>';};
   var filterBar='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'+
-    '<select id="rc-filter-by" onchange="repContactsFilter()" style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:12px;background:#fff"><option value="company">Filter by Company</option><option value="person">Filter by Person</option><option value="phone">Filter by Phone</option><option value="other">Filter by Other (email/designation/category)</option></select>'+
-    '<input id="rc-filter-q" oninput="repContactsFilter()" placeholder="Type to filter…" style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 12px;font-size:12px;width:240px;box-sizing:border-box">'+
+    mkSel('rc-fil-group','All Groups',uniq(vc.map(function(c){return repGroupOfContact(c);})))+
+    mkSel('rc-fil-cust','All Customers',uniq(vc.map(function(c){return repCustOfContact(c);})))+
+    mkSel('rc-fil-cat','All Categories',REP_CATEGORIES)+
+    mkSel('rc-fil-stage','All Stages',REP_STATUSES)+
+    mkSel('rc-fil-loc','All Locations',uniq(vc.map(function(c){return c.location;})))+
+    '<input id="rc-filter-q" oninput="repContactsFilter()" placeholder="Search name / phone / email…" style="height:32px;border:1px solid #ddd;border-radius:6px;padding:0 12px;font-size:12px;width:220px;box-sizing:border-box">'+
     '</div>';
   el.innerHTML=form+repCard('<div style="font-size:13px;font-weight:800;margin-bottom:10px">My Contacts</div>'+filterBar+'<div id="rc-list"></div>');
   repContactsFilter();
 }
+// Contacts visible to the signed-in rep: their own additions plus any linked to their leads (legacy), minus soft-deleted.
+function repVisibleContacts(){
+  var rid=REP_SESSION?REP_SESSION.id:null;
+  var leadIds={}; repMyLeadList().forEach(function(l){leadIds[l.id]=l;});
+  return (REP_DATA.contacts||[]).filter(function(c){ return !c.rep_deleted && (c.created_by===rid || leadIds[c.lead_id]) && !repIsTestName(repCustOfContact(c)); });
+}
 window.repContactsFilter=function(){
-  var leads=repMyLeadList(); var leadIds={}; leads.forEach(function(l){leadIds[l.id]=l;});
-  var by=(document.getElementById('rc-filter-by')||{}).value||'company';
+  var fg=(document.getElementById('rc-fil-group')||{}).value||'';
+  var fc=(document.getElementById('rc-fil-cust')||{}).value||'';
+  var fcat=(document.getElementById('rc-fil-cat')||{}).value||'';
+  var fstage=(document.getElementById('rc-fil-stage')||{}).value||'';
+  var floc=(document.getElementById('rc-fil-loc')||{}).value||'';
   var q=((document.getElementById('rc-filter-q')||{}).value||'').toLowerCase();
-  var contacts=(REP_DATA.contacts||[]).filter(function(c){return leadIds[c.lead_id] && !c.rep_deleted;});
-  if(q){ contacts=contacts.filter(function(c){var l=leadIds[c.lead_id];
-    var hay = by==='company'?(l?l.client_name:'') : by==='person'?c.name : by==='phone'?c.phone : [c.email,c.designation,repContactCats(c).join(' ')].join(' ');
-    return String(hay||'').toLowerCase().indexOf(q)>-1; }); }
-  contacts=contacts.sort(function(a,b){ var ln=(leadIds[a.lead_id]?leadIds[a.lead_id].client_name:''), lm=(leadIds[b.lead_id]?leadIds[b.lead_id].client_name:''); return ln.localeCompare(lm)||((a.priority||9)-(b.priority||9)); });
+  var contacts=repVisibleContacts().filter(function(c){
+    if(fg && repGroupOfContact(c)!==fg) return false;
+    if(fc && repCustOfContact(c)!==fc) return false;
+    if(fcat && repContactCats(c).indexOf(fcat)<0) return false;
+    if(fstage && String(c.stage||'')!==fstage) return false;
+    if(floc && String(c.location||'')!==floc) return false;
+    if(q){ var hay=[repCustOfContact(c),c.name,c.phone,c.email,c.designation,c.location,repContactCats(c).join(' ')].join(' ').toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    return true;
+  });
+  contacts=contacts.sort(function(a,b){ var an=repCustOfContact(a),bn=repCustOfContact(b); return an.localeCompare(bn)||((a.priority||9)-(b.priority||9)); });
   var rows=contacts.map(function(c){
-    var l=leadIds[c.lead_id];
+    var cust=repCustOfContact(c);
     var rankSel='<select onchange="repSetContactRank(\''+c.id+'\',this.value)" style="height:24px;font-size:11px;border:1px solid #ddd;border-radius:5px">'+REP_RANKS.map(function(r){return '<option value="'+r[0]+'"'+(String(c.priority||'')===r[0]?' selected':'')+'>'+r[1]+'</option>';}).join('')+'</select>';
     var catHtml=repContactCats(c).map(function(cat){return '<span style="background:#e8f0fe;color:#1a4fa0;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;margin:1px;display:inline-block">'+repEsc(cat)+'</span>';}).join(' ')||'—';
     return '<tr style="border-top:1px solid #eee">'+
-      '<td style="padding:8px;font-weight:700">'+repEsc(l?l.client_name:'—')+'</td>'+
+      '<td style="padding:8px;font-weight:700">'+repEsc(cust||'—')+'</td>'+
+      '<td style="padding:8px;color:#555">'+repEsc(repGroupOfContact(c)||'—')+'</td>'+
+      '<td style="padding:8px">'+repPayLabel(repPayOfContact(c))+'</td>'+
       '<td style="padding:8px">'+catHtml+'</td>'+
+      '<td style="padding:8px">'+(c.stage?'<span style="background:#eef2ff;color:#3730a3;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">'+repEsc(c.stage)+'</span>':'—')+'</td>'+
       '<td style="padding:8px;font-weight:600">'+repEsc(c.name)+(c.priority==1?' <span style="color:#c9a100" title="Primary">⭐</span>':'')+'</td>'+
       '<td style="padding:8px">'+repEsc(c.designation||'—')+'</td>'+
+      '<td style="padding:8px">'+repEsc(c.location||'—')+'</td>'+
       '<td style="padding:8px">'+rankSel+'</td>'+
       '<td style="padding:8px">'+repEsc(c.phone||'—')+'</td>'+
       '<td style="padding:8px">'+repEsc(c.email||'—')+'</td>'+
@@ -12957,21 +13103,28 @@ window.repContactsFilter=function(){
       '</td>'+
       '</tr>';
   });
-  var body=document.getElementById('rc-list'); if(body) body.innerHTML=repTbl(['Company','Category','Contact','Designation','Rank','Phone','Email','Actions'],rows,'No contacts yet');
+  var body=document.getElementById('rc-list'); if(body) body.innerHTML=repTbl(['Customer','Group','Payment Type','Category','Stage','Contact','Designation','Location','Rank','Phone','Email','Actions'],rows,'No contacts yet');
 };
 window.repEditContact=function(id){ REP_EDIT_CONTACT=id; repContacts(); window.scrollTo(0,0); };
 window.repCancelEditContact=function(){ REP_EDIT_CONTACT=null; repContacts(); };
 window.repSaveContact=async function(){
   var g=function(id){var e=document.getElementById(id);return e?(e.value||'').trim():'';};
   var msg=document.getElementById('rc-msg');
-  var leadId=g('rc-lead'), name=g('rc-name');
-  if(!leadId||!name){ if(msg){msg.style.color='#c0392b';msg.textContent='Customer and Name are required.';} return; }
+  var customer=g('rc-cust'), name=g('rc-name');
+  if(!customer||!name){ if(msg){msg.style.color='#c0392b';msg.textContent='Customer and Name are required.';} return; }
   if(msg){msg.style.color='#888';msg.textContent='Saving…';}
   await repRefresh();
   var rid=REP_SESSION?REP_SESSION.id:null;
   var cats=repCheckedVals('rc-cat');
   var rank=g('rc-rank');
-  var fields={ lead_id:leadId, categories:cats, category:cats[0]||'', name:name, designation:g('rc-desig'),
+  var desig=g('rc-desig'); if(desig==='Others'){ var ot=g('rc-desig-other'); if(ot) desig=ot; }
+  var group=g('rc-group');
+  // Link to an existing rep lead of the same customer name so history/threads stay connected.
+  var matchLead=(REP_DATA.leads||[]).find(function(l){return String(l.client_name||'').trim().toLowerCase()===customer.toLowerCase();});
+  var existing=REP_EDIT_CONTACT?(REP_DATA.contacts||[]).find(function(c){return c.id===REP_EDIT_CONTACT;}):null;
+  var leadId=matchLead?matchLead.id:(existing?(existing.lead_id||''):'');
+  var fields={ lead_id:leadId, customer:customer, group:group, customer_type:g('rc-ctype'), stage:g('rc-stage'), location:g('rc-location'),
+    categories:cats, category:cats[0]||'', name:name, designation:desig,
     phone:g('rc-phone'), email:g('rc-email'), priority:rank?Number(rank):'', is_primary:rank==='1' };
   var contacts=(REP_DATA.contacts||[]).slice();
   if(REP_EDIT_CONTACT){
@@ -12979,9 +13132,9 @@ window.repSaveContact=async function(){
   }else{
     contacts=contacts.concat([Object.assign({id:repUid('contact'),created_by:rid,created_at:new Date().toISOString()},fields)]);
   }
-  // enforce a single holder per rank within the same lead
+  // enforce a single holder per rank within the same customer
   if(rank){ var keepId=REP_EDIT_CONTACT|| contacts[contacts.length-1].id;
-    contacts=contacts.map(function(c){ if(c.lead_id===leadId && c.id!==keepId && String(c.priority)===rank){ return Object.assign({},c,{priority:'',is_primary:false}); } return c; }); }
+    contacts=contacts.map(function(c){ var same=(c.customer&&c.customer===customer)||(leadId&&c.lead_id===leadId); if(same && c.id!==keepId && String(c.priority)===rank){ return Object.assign({},c,{priority:'',is_primary:false}); } return c; }); }
   await repPatch({ contacts:contacts });
   REP_EDIT_CONTACT=null;
   if(msg){msg.style.color='#1B6B3A';msg.textContent='✓ Saved.';}
@@ -13002,7 +13155,8 @@ window.repSetContactRank=async function(id,rank){
   var target=(REP_DATA.contacts||[]).find(function(c){return c.id===id;}); if(!target) return;
   var contacts=(REP_DATA.contacts||[]).map(function(c){
     if(c.id===id) return Object.assign({},c,{priority:rank?Number(rank):'',is_primary:rank==='1'});
-    if(rank && c.lead_id===target.lead_id && String(c.priority)===rank) return Object.assign({},c,{priority:'',is_primary:false});
+    var same=(c.customer&&target.customer&&c.customer===target.customer)||(target.lead_id&&c.lead_id===target.lead_id);
+    if(rank && same && String(c.priority)===rank) return Object.assign({},c,{priority:'',is_primary:false});
     return c;
   });
   await repPatch({ contacts:contacts });

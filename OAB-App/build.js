@@ -28,6 +28,7 @@ function read(p) { return fs.readFileSync(path.join(DIR, p), 'utf8'); }
 let html = read('reference/index.html');
 const early = read('src/integration-early.js');
 const late = read('src/integration-late.js');
+const hr = read('src/integration-hr.js');
 const guard = read('reference/connectivity-guard.js');
 const overrides = read('src/overrides.css');
 let logo = '';
@@ -109,12 +110,15 @@ if (hi === -1) { console.error('FATAL: </head> not found'); process.exit(1); }
 html = html.slice(0, hi) + styleInject + html.slice(hi);
 report.push('injected CSS overrides before </head>: yes');
 
-// 4) Inject LATE layer at the FINAL </body> (the tag appears inside template strings too).
-const lateInject = '\n<script>/* OAB integration — late */\n' + late + '\n</script>\n';
+// 4) Inject LATE + HR layers at the FINAL </body> (the tag appears inside template strings too).
+//    Order matters: LATE first (overrides auth/users/rates), then HR (wraps auth routing,
+//    adds the HR workspace + forced first-login password change).
+const lateInject = '\n<script>/* OAB integration — late */\n' + late + '\n</script>\n'
+  + '<script>/* OAB integration — hr */\n' + hr + '\n</script>\n';
 const bi = html.lastIndexOf('</body>');
 if (bi === -1) { console.error('FATAL: </body> not found'); process.exit(1); }
 html = html.slice(0, bi) + lateInject + html.slice(bi);
-report.push('injected late layer before final </body>: yes');
+report.push('injected late + hr layers before final </body>: yes');
 
 // Write output.
 const outDir = path.join(DIR, 'dist');
