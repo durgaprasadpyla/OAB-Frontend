@@ -186,3 +186,88 @@ div[style*="grid-template-columns"]:has(> .card) {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * OAB DESIGN SYSTEM — global premium enterprise theme.
+ * Injected after the reference's styles, so these win. A cohesive skin applied
+ * through the app's OWN CSS variables + shared component classes, so every screen
+ * (OAB board, Daily Update, Invoice, Purchase, QC, PM, Scrap, Sales, Dashboard,
+ * Users & Access, HR) becomes one modern product. No markup or JS changed.
+ * The formal invoice/packing documents (#inv-doc / #pl-doc) are protected below.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* — Tokens: re-theme the app's variables to a professional blue primary (unifying
+ *   with the login + HR module), softer neutrals, plus gradient/shadow/radius. — */
+:root {
+  --g:  #0e6fb8;  --gm: #2b8fd6;  --gl: #e9f3fb;
+  --blu:#0a5aa0;  --ink:#101d31;  --i2: #3b4a60;  --i3: #6f8098;
+  --bd: #e5eaf2;  --bg: #eef3f9;  --wh: #ffffff;  --red:#dc3545;
+  --ok: #17a34a;  --okl:#e7f6ee;  --warn:#d98a00; --redl:#fdecea;
+  --grad-primary: linear-gradient(135deg,#1a8ad6 0%,#0a5aa0 100%);
+  --sh-sm: 0 1px 2px rgba(16,42,82,.06);
+  --sh:    0 6px 18px rgba(16,42,82,.07);
+  --sh-lg: 0 18px 44px rgba(16,42,82,.18);
+  --r: 12px;
+}
+
+/* — Base — */
+body { background: var(--bg) !important; color: var(--ink); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* — Top app-bar + logo — */
+#hdr { background: linear-gradient(180deg,#ffffff 0%,#f6fafd 100%) !important; border-bottom: 1px solid var(--bd) !important; box-shadow: var(--sh-sm); min-height: 54px; }
+#hdr .logo { font-weight: 800; letter-spacing: .2px; color: var(--ink); }
+#hdr .logo span { color: var(--i3); font-weight: 600; }
+
+/* — Nav tabs → modern pills with a clear active indicator — */
+.ntab { height: 34px !important; padding: 0 14px !important; border-radius: 9px !important; color: var(--i2) !important; font-weight: 600 !important; font-size: 12.5px !important; transition: background .16s ease, color .16s ease, box-shadow .16s ease !important; }
+.ntab:hover { background: var(--gl) !important; color: var(--blu) !important; }
+.ntab.on { background: var(--grad-primary) !important; color: #fff !important; box-shadow: 0 4px 12px rgba(10,90,160,.30) !important; }
+
+/* — Buttons — */
+.btn { border-radius: 9px !important; font-weight: 600 !important; transition: transform .1s ease, box-shadow .16s ease, filter .16s ease, background .16s ease !important; }
+.btn:hover { filter: brightness(1.03); }
+.btn:active { transform: translateY(1px); }
+.btn-g { background: var(--grad-primary) !important; color: #fff !important; box-shadow: 0 4px 12px rgba(10,90,160,.26) !important; }
+.btn-g:hover { box-shadow: 0 6px 16px rgba(10,90,160,.34) !important; }
+.btn-r { background: linear-gradient(135deg,#e5484d,#c0392b) !important; color: #fff !important; box-shadow: 0 4px 12px rgba(192,57,43,.22) !important; }
+.btn-s { background: #fff !important; color: var(--i2) !important; border: 1px solid var(--bd) !important; box-shadow: var(--sh-sm) !important; }
+.btn-s:hover { border-color: var(--gm) !important; color: var(--blu) !important; background: var(--gl) !important; }
+
+/* — Cards — */
+.card { border: 1px solid var(--bd) !important; border-radius: var(--r) !important; box-shadow: var(--sh) !important; background: var(--wh) !important; }
+
+/* — Data tables (documents protected below) — */
+thead th { color: var(--i2); letter-spacing: .2px; }
+tbody tr { transition: background .12s ease; }
+tbody tr:hover td { background: var(--gl); }
+
+/* — Inputs / selects — premium focus ring; keep each control's own size/radius — */
+input:focus, select:focus, textarea:focus, .fg select:focus, .fbar select:focus { border-color: var(--g) !important; box-shadow: 0 0 0 3px rgba(14,111,184,.15) !important; background: #fff !important; }
+input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) { border-color: #c7d3e2 !important; }
+.fg label { color: var(--i2); font-weight: 600; }
+
+/* — Status badges — */
+.hbadge { border-radius: 20px !important; font-weight: 600 !important; }
+
+/* — Alerts: success stays green, danger red, with a left accent — */
+.al { border-radius: 10px !important; border-left: 4px solid transparent; }
+.al-g { background: var(--okl) !important; color: #0f7a37 !important; border-left-color: var(--ok) !important; }
+.al-r { background: var(--redl) !important; color: #b3261e !important; border-left-color: var(--red) !important; }
+
+/* — Modals: refined backdrop + card corners/shadow — */
+#grn-modal, #pl-modal, #pm-modal, #rep-modal, #fg-alloc-body-modal { background: rgba(15,27,45,.55) !important; }
+#grn-modal > div, #pl-modal > div, #pm-modal > div, #rep-modal > div, #fg-alloc-body-modal > div { border-radius: 16px !important; box-shadow: var(--sh-lg) !important; border: 1px solid var(--bd) !important; }
+
+/* — Polish: scrollbars, focus-visible, selection — */
+* { scrollbar-width: thin; scrollbar-color: #c2d0e0 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #c2d0e0; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #a9bcd0; }
+:focus-visible { outline: 2px solid var(--g); outline-offset: 1px; }
+::selection { background: rgba(14,111,184,.18); }
+
+/* — PROTECT the formal invoice / packing-list documents (business output). The
+ *   theme must never bleed into what customers/auditors see. — */
+#inv-doc *, #pl-doc * { transition: none !important; }
+#inv-doc tbody tr:hover td, #pl-doc tbody tr:hover td { background: revert !important; }
+#inv-doc input:focus, #pl-doc input:focus, #inv-doc select:focus, #pl-doc select:focus { box-shadow: none !important; }
+@media print { body { background: #fff !important; } #hdr, .ntab, .card { box-shadow: none !important; } }
