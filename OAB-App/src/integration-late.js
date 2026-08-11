@@ -376,4 +376,105 @@
     }
     if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Invoice PDF'; }
   };
+
+  // ═══════════════════ OAB board PDF — real vector table (not a screenshot) ═══════════════════
+  // The reference downloadOABCurrentPDF() html2canvas-screenshots the tab into a PDF image →
+  // blurry + columns clipped. Regenerate it as a proper text table drawn with jsPDF (crisp,
+  // selectable, auto-paginated, nothing cut). It reuses the EXACT same filtered data + columns
+  // as the Excel export so the PDF matches the on-screen board.
+  window.downloadOABCurrentPDF = function () {
+    try {
+      var $ = function (id) { return document.getElementById(id); };
+      var key = ($('oab-sh') || {}).value || 'SF';
+      var fileLabel = key === 'SF' ? 'StayFresh_OAB' : 'Others_OAB';
+      var title = key === 'SF' ? 'Stay Fresh OAB' : 'Others OAB';
+      var rows = (typeof OAB !== 'undefined' && OAB[key]) ? OAB[key] : [];
+      var q = (($('oab-q') || {}).value || '').toLowerCase();
+      var cf = ($('oab-cf') || {}).value || '', sf = ($('oab-stf') || {}).value || '', spf = ($('oab-spf') || {}).value || '';
+      var custByLoc = (typeof getCustByLoc === 'function') ? getCustByLoc : function () { return {}; };
+      var fil = rows.filter(function (r) {
+        if (r.closed) return false;
+        if (cf && r.customer !== cf) return false;
+        if (sf && r.stage !== sf) return false;
+        if (spf && r.spec !== spf) return false;
+        if (q && ![r.so, r.customer, r.jobName, r.spec, r.poNum, r.dispLoc, r.warehouseName, (custByLoc(r.customer, r.dispLoc) || {}).warehouseName]
+          .some(function (v) { return String(v || '').toLowerCase().indexOf(q) > -1; })) return false;
+        return true;
+      });
+      var ordered = (typeof soOrder === 'function') ? soOrder(fil) : fil;
+      var cols = ['S.No', 'SO#', 'Spec', 'Disp', 'Customer', 'Job Name', 'Sub Brand', 'Location', 'PO#', 'PO Date', 'Age', 'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Mtrs*', 'Prod', 'Stage'];
+      var weights = [0.8, 1.5, 1.3, 1.3, 3.2, 5.0, 2.4, 2.8, 2.4, 1.7, 0.9, 1.6, 1.4, 1.4, 1.0, 1.6, 1.5, 1.7, 1.7];
+      var rightCols = { 0: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1 };
+      var tPoQty = 0, tInv = 0, tMan = 0, tFg = 0, tBal = 0;
+      var body = ordered.map(function (r, i) {
+        var b = Math.max(0, (r.poQty || 0) - (r.invDisp || 0) - (r.manDisp || 0) - (r.fg || 0));
+        var jssRow = (typeof JSS !== 'undefined' && JSS.find) ? JSS.find(function (j) { return j.spec === r.spec; }) : null;
+        var sb = r.subBrand || (jssRow ? jssRow.subBrand : '') || '';
+        var df = r.dispatchForm || (jssRow ? jssRow.dispatchForm : '') || '';
+        var mW = (typeof calcMetres === 'function') ? calcMetres(r, b).withWastage : '';
+        var ps = (typeof getProdStatus === 'function') ? getProdStatus(r.so) : '';
+        var age = (typeof soAgeDays === 'function') ? soAgeDays(r) : null;
+        tPoQty += (r.poQty || 0); tInv += (r.invDisp || 0); tMan += (r.manDisp || 0); tFg += (r.fg || 0); tBal += b;
+        return [i + 1, r.so || '', r.spec || '', df, r.customer || '', r.jobName || '', sb, r.dispLoc || '', r.poNum || '',
+          r.poDate || '', age === null ? '' : age, r.poQty || 0, r.invDisp || 0, r.manDisp || 0, r.fg || 0, b, mW > 0 ? mW : '', ps || '', r.stage || ''];
+      });
+
+      var jsPDF = window.jspdf.jsPDF;
+      var pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3', compress: true });
+      var PW = pdf.internal.pageSize.getWidth(), PH = pdf.internal.pageSize.getHeight(), M = 8;
+      var usable = PW - 2 * M, x0 = M;
+      var wtot = weights.reduce(function (a, b2) { return a + b2; }, 0);
+      var widths = weights.map(function (w) { return w / wtot * usable; });
+      var colX = []; (function () { var cx = x0; for (var i = 0; i < widths.length; i++) { colX.push(cx); cx += widths[i]; } })();
+      var nf = function (v) { return (v === '' || v == null) ? '' : Number(v).toLocaleString('en-IN'); };
+      var now = new Date();
+
+      var y = M;
+      pdf.setTextColor(16, 29, 49); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14);
+      pdf.text('Bloomflex  —  ' + title, x0, y + 4.5);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(90, 100, 120);
+      pdf.text('Order & Production Balance  ·  ' + ordered.length + ' open orders  ·  Generated '
+        + now.toLocaleString('en-IN') + '  ·  Metres include 5% wastage', x0, y + 9.5);
+      pdf.setFontSize(8.5); pdf.setTextColor(16, 29, 49);
+      pdf.text('PO Qty: ' + nf(tPoQty) + '     Dispatched: ' + nf(tInv + tMan) + '     FG: ' + nf(tFg)
+        + '     Balance to produce: ' + nf(tBal), x0, y + 14.5);
+      y += 19;
+
+      var headH = 7, lineH = 3.05;
+      function header() {
+        pdf.setFillColor(14, 111, 184); pdf.rect(x0, y, usable, headH, 'F');
+        pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7);
+        for (var c = 0; c < cols.length; c++) {
+          if (rightCols[c]) pdf.text(String(cols[c]), colX[c] + widths[c] - 1.4, y + 4.6, { align: 'right' });
+          else pdf.text(String(cols[c]), colX[c] + 1.4, y + 4.6);
+        }
+        pdf.setTextColor(20, 20, 20); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7);
+        y += headH;
+      }
+      header();
+
+      for (var ri = 0; ri < body.length; ri++) {
+        var row = body[ri], cellLines = [], maxLines = 1;
+        for (var c = 0; c < row.length; c++) {
+          var txt = rightCols[c] ? nf(row[c]) : String(row[c] == null ? '' : row[c]);
+          var lines = pdf.splitTextToSize(txt, widths[c] - 2.6);
+          cellLines.push(lines); if (lines.length > maxLines) maxLines = lines.length;
+        }
+        var rowH = Math.max(4.8, maxLines * lineH + 1.7);
+        if (y + rowH > PH - M) { pdf.addPage(); y = M; header(); }
+        if (ri % 2 === 1) { pdf.setFillColor(240, 244, 250); pdf.rect(x0, y, usable, rowH, 'F'); }
+        pdf.setTextColor(20, 20, 20);
+        for (var c2 = 0; c2 < row.length; c2++) {
+          if (rightCols[c2]) pdf.text(cellLines[c2], colX[c2] + widths[c2] - 1.4, y + 3.5, { align: 'right' });
+          else pdf.text(cellLines[c2], colX[c2] + 1.4, y + 3.5);
+        }
+        pdf.setDrawColor(224, 230, 240); pdf.setLineWidth(0.1); pdf.line(x0, y + rowH, x0 + usable, y + rowH);
+        y += rowH;
+      }
+      var ds = now.toLocaleDateString('en-IN').replace(/\//g, '-');
+      pdf.save('Bloomflex_' + fileLabel + '_' + ds + '.pdf');
+    } catch (e) {
+      alert('PDF error: ' + (e && e.message ? e.message : e)); console.error(e);
+    }
+  };
 })();
