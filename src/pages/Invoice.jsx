@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
 import { getPM } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
+import { useApi } from '../lib/useApi.js';
 import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
@@ -35,6 +36,16 @@ export default function Invoice() {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const docRef = useRef(null);
+
+  // The invoice register now comes from the normalized /api/invoices endpoint (each
+  // row's `payload` is the exact register entry, so View/PDF/packing-list are
+  // unchanged). The SO picker and jss/prices/customers still read the blob context.
+  const { data: regData, refetch: refetchRegister } = useApi('/api/invoices?limit=500');
+  const register = useMemo(() => (Array.isArray(regData) ? regData : []).map((r) => {
+    const p = r.payload ?? r.PAYLOAD;
+    if (p) { try { return JSON.parse(p); } catch { /* fall back to the flat columns */ } }
+    return r;
+  }), [regData]);
 
   const set = (patch) => setH((x) => ({ ...x, ...patch }));
   const flash = (text, t = 'g') => { setMsg({ text, t }); setTimeout(() => setMsg(null), 6000); };
@@ -72,7 +83,7 @@ export default function Invoice() {
 
   function generate() {
     if (!h.ivNo.trim()) return alert('Enter Invoice Number');
-    if ((mods.oab?.INV_REG || []).some((inv) => inv.no === h.ivNo.trim())) return alert('Invoice number ' + h.ivNo + ' already exists.');
+    if (register.some((inv) => inv.no === h.ivNo.trim())) return alert('Invoice number ' + h.ivNo + ' already exists.');
     if (!h.ivDt) return alert('Enter Invoice Date');
     if (!h.transporter.trim()) return alert('Enter Transporter Name');
     if (!h.placeOfSupply.trim()) return alert('Enter Place of Supply');
@@ -115,7 +126,8 @@ export default function Invoice() {
         fgToUse: p.fgToUse, dispatchForm: p.dispatchForm,
       }));
       const resp = await ordersApi.createInvoice({ header, lines, packingList: plItems.length ? clone(plItems) : [] });
-      await reloadModule('oab');
+      await reloadModule('oab');       // refresh SO balances (invDisp/fg) on the picker
+      await refetchRegister();          // pull the new invoice into the register
       const newNo = (resp && resp.no) || '';
       const m = /(\d+)$/.exec(newNo);
       const lastN = m ? parseInt(m[1], 10) : 0;
@@ -270,7 +282,7 @@ export default function Invoice() {
         </div>
       )}
 
-      <Register mods={mods} onView={(e) => loadRegister(e, false)} onPdf={(e) => loadRegister(e, true)} />
+      <Register register={register} onView={(e) => loadRegister(e, false)} onPdf={(e) => loadRegister(e, true)} />
 
       {showPL && <PackingListModal items={plItems} setItems={setPlItems} invNo={h.ivNo} onClose={() => setShowPL(false)} />}
       {showProforma && <ProformaModal onClose={() => setShowProforma(false)} />}
@@ -289,11 +301,11 @@ function periodRange(period) {
   return ['', ''];
 }
 
-function Register({ mods, onView, onPdf }) {
+function Register({ register, onView, onPdf }) {
   const [period, setPeriod] = useState('thismonth');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const reg = mods.oab?.INV_REG || [];
+  const reg = register || [];
   const [rFrom, rTo] = period === 'custom' ? [from, to] : period === 'all' ? ['', ''] : periodRange(period);
   const rows = reg.filter((e) => (!rFrom || e.date >= rFrom) && (!rTo || e.date <= rTo));
 

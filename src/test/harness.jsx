@@ -37,7 +37,7 @@ function findRow(oab, so) {
  * Options: conflictOnce { [moduleId]: true } — the next /rest POST to that module
  * returns 409 once (simulating a concurrent writer).
  */
-export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, failRead = {} } = {}) {
+export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, failRead = {}, role = 'user', user = 'superstar', meRole = null, meUnauthorized = false } = {}) {
   const saved = [];
   const versions = {};
   Object.entries(KEY_TO_ID).forEach(([key, id]) => { versions[id] = modules[key] != null ? 1 : 0; });
@@ -55,7 +55,11 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
     const method = (opts.method || 'GET').toUpperCase();
     const body = opts.body ? JSON.parse(opts.body) : {};
 
-    if (u.includes('/api/auth/login')) return res(200, { token: 't', username: 'superstar', role: 'user' });
+    if (u.includes('/api/auth/login')) return res(200, { token: 't', username: user, role });
+    if (u.includes('/api/auth/me')) {
+      if (meUnauthorized) return res(401, { error: 'Not authenticated' });   // invalid/expired token
+      return res(200, { username: user, role: meRole || role });             // server-authoritative role
+    }
 
     if (u.includes('/api/seq/')) {
       const type = u.split('/api/seq/')[1].split(/[?#]/)[0].toUpperCase();
@@ -229,6 +233,42 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, (modules.purchase && modules.purchase.pos) || []);   // GET
     }
 
+    // Superadmin observability endpoints (normalized rollups + audit trail + resync).
+    if (u.includes('/api/summary') && method === 'GET') {
+      const oab = modules.oab || {};
+      const count = (pred) => ['SF', 'OT'].reduce((n, k) => n + ((oab.OAB && oab.OAB[k]) || []).filter(pred).length, 0);
+      return res(200, {
+        customers: (modules.customers || []).length,
+        specs: (modules.jss || []).length,
+        suppliers: ((modules.purchase && modules.purchase.asl) || []).length,
+        specsPriced: Object.keys(modules.prices || {}).length,
+        oabRowsOpen: count((r) => !r.closed),
+        oabRowsClosed: count((r) => r.closed),
+        invoices: ((oab.INV_REG) || []).length,
+        invoicedAmount: ((oab.INV_REG) || []).reduce((s, i) => s + num(i.amount), 0),
+        byCustomer: [],
+      });
+    }
+    if (u.includes('/api/audit') && method === 'GET') {
+      return res(200, [
+        { id: 2, entity_type: 'INVOICE', entity_id: 'BL/26-27/1', action: 'CREATE', actor: 'superstar', ts: '2026-08-10T10:05:00', details: '{"qty":100}' },
+        { id: 1, entity_type: 'SALES_ORDER', entity_id: '26/1', action: 'CREATE', actor: 'superstar', ts: '2026-08-10T10:00:00', details: '{"poQty":1000}' },
+      ]);
+    }
+    if (u.includes('/api/admin/resync') && method === 'POST') {
+      return res(200, { status: 'ok', resynced: 8 });
+    }
+    // GET /api/invoices — the normalized invoice register the Invoice screen now reads.
+    // Each row carries `payload` = the exact INV_REG entry (newest first), like the API.
+    if (u.includes('/api/invoices') && method === 'GET') {
+      const regList = (modules.oab && modules.oab.INV_REG) || [];
+      return res(200, regList.map((e) => ({
+        id: e.no, inv_no: e.no, inv_date: e.date, po: e.po, customer: e.customer,
+        qty: e.qty, amount: e.amount, margin: e.margin, items: e.items || [],
+        payload: JSON.stringify(e),
+      })));
+    }
+
     if (u.includes('/rest/v1/oab_data')) {
       if (method === 'GET') {
         const m = /id=eq\.(\d+)/.exec(u);
@@ -258,12 +298,12 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
 }
 
 /** Render a screen inside Router + Auth + Data providers with seeded modules. */
-export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {}, forbidRead = {}, failRead = {} } = {}) {
+export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {}, forbidRead = {}, failRead = {}, meRole = null, meUnauthorized = false } = {}) {
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_user', user);
   localStorage.setItem('blm_role', role);
   const mods = JSON.parse(JSON.stringify(modules));
-  const saved = installFetch(mods, { conflictOnce, forbidRead, failRead });
+  const saved = installFetch(mods, { conflictOnce, forbidRead, failRead, role, user, meRole, meUnauthorized });
   const utils = render(
     <MemoryRouter initialEntries={[route]}>
       <AuthProvider>

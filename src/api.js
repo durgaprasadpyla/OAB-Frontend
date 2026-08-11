@@ -91,6 +91,14 @@ export const usersApi = {
   update: (id, body) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'PUT', body }),
 };
 
+// Superadmin observability & maintenance: server-computed rollups (/api/summary),
+// the append-only audit trail (/api/audit), and a read-model rebuild (/api/admin/resync).
+export const adminApi = {
+  summary: () => api('/api/summary'),
+  audit: (query = '') => api('/api/audit' + query),
+  resync: () => api('/api/admin/resync', { method: 'POST' }),
+};
+
 // Column values come back lowercase from MySQL and uppercase from H2 — read either.
 export function field(row, key) {
   if (row == null) return '';

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { rmRatesApi } from '../api.js';
+import { rmRatesApi, adminApi, field } from '../api.js';
+import { useApi } from '../lib/useApi.js';
 import { balance, num, calcMetres } from '../lib/calc.js';
 import { getPM, getCostPrice } from '../lib/pricing.js';
 import { computeKPIs, dashRange } from '../lib/dashboard.js';
@@ -21,6 +22,8 @@ const TABS = [
   { k: 'trends', label: '📊 Trends & Forecast' },
   { k: 'costing', label: '🧮 SO Costing' },
   { k: 'users', label: '👥 Users & Access' },
+  { k: 'audit', label: '🧾 Audit Log' },
+  { k: 'system', label: '🛠 System' },
 ];
 
 /** Superadmin Dashboard — native port of renderDashboard + its sub-panels. */
@@ -43,7 +46,95 @@ export default function Dashboard() {
       {tab === 'trends' && <Trends />}
       {tab === 'costing' && <SOCosting />}
       {tab === 'users' && <UsersAccess />}
+      {tab === 'audit' && <AuditLog />}
+      {tab === 'system' && <SystemPanel />}
     </div>
+  );
+}
+
+/* ─────────────────────────── Audit Log (/api/audit) ─────────────────────────── */
+const AUDIT_TYPES = ['SALES_ORDER', 'INVOICE', 'OAB_ROW', 'PURCHASE_ORDER'];
+function AuditLog() {
+  const [type, setType] = useState('');
+  const path = '/api/audit?limit=200' + (type ? '&entityType=' + encodeURIComponent(type) : '');
+  const { data, loading, error, refetch } = useApi(path);
+  const rows = Array.isArray(data) ? data : [];
+  return (
+    <div className="card">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>Audit Log — who did what (newest first)</div>
+        <select value={type} onChange={(e) => setType(e.target.value)}>
+          <option value="">All types</option>
+          {AUDIT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={refetch}>↻ Refresh</button>
+      </div>
+      {error && <div className="al al-r">Failed to load audit log: {error}</div>}
+      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
+        <table>
+          <thead><tr><th>When</th><th>Actor</th><th>Entity</th><th>ID</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{loading ? 'Loading…' : 'No audit entries'}</td></tr>
+            ) : rows.map((r) => (
+              <tr key={field(r, 'id')}>
+                <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{String(field(r, 'ts') || '').replace('T', ' ').slice(0, 19)}</td>
+                <td style={{ fontSize: 11 }}>{field(r, 'actor')}</td>
+                <td><span className="tag tb" style={{ fontSize: 9 }}>{field(r, 'entity_type')}</span></td>
+                <td style={{ fontSize: 11 }}>{field(r, 'entity_id')}</td>
+                <td style={{ fontSize: 11 }}>{field(r, 'action')}</td>
+                <td style={{ fontSize: 10, color: 'var(--i3)', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{field(r, 'details')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────── System (/api/summary + /api/admin/resync) ─────────────────────────── */
+function SystemPanel() {
+  const { data, loading, error, refetch } = useApi('/api/summary');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const s = data || {};
+
+  async function resync() {
+    if (!window.confirm('Rebuild all normalized read tables from the module blobs?')) return;
+    setBusy(true); setMsg('');
+    try { const r = await adminApi.resync(); setMsg(`✓ Resynced ${r.resynced} module(s) — read model rebuilt.`); refetch(); }
+    catch (e) { setMsg('Resync failed: ' + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  const kv = (k) => (loading ? '…' : dash(s[k]));
+  return (
+    <>
+      <div className="card">
+        <div className="fbar">
+          <div className="ctitle" style={{ margin: 0 }}>System — server rollups (from the normalized tables)</div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-s" onClick={refetch}>↻ Refresh</button>
+        </div>
+        {error && <div className="al al-r">Failed to load summary: {error}</div>}
+        <div className="stats">
+          <KPI label="Customers" value={kv('customers')} />
+          <KPI label="Specs" value={kv('specs')} />
+          <KPI label="Priced specs" value={kv('specsPriced')} />
+          <KPI label="Open SOs" value={kv('oabRowsOpen')} cls="red" />
+          <KPI label="Closed SOs" value={kv('oabRowsClosed')} />
+          <KPI label="Invoices" value={kv('invoices')} cls="grn" sub={s.invoicedAmount != null ? rupees(s.invoicedAmount, 0) : ''} />
+        </div>
+      </div>
+      <div className="card">
+        <div className="ctitle">Read-model maintenance</div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>Rebuild the normalized tables (customers, oab_row, invoice, …) from the authoritative module blobs. Use if the read model ever drifts from the write model.</div>
+        <button className="btn btn-g" onClick={resync} disabled={busy}>{busy ? 'Resyncing…' : '♻ Rebuild read model (resync)'}</button>
+        {msg && <div className="al al-g" style={{ marginTop: 8 }}>{msg}</div>}
+      </div>
+    </>
   );
 }
 

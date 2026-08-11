@@ -43,6 +43,36 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('auth:expired', onExpired);
   }, [logout]);
 
+  // Validate the stored token on load and take the role/user the SERVER reports as
+  // authoritative — localStorage can be stale (role changed) or tampered (blm_role
+  // edited to see other tabs). An invalid/expired token (401/403) logs out; a network
+  // blip leaves the stored session intact rather than bouncing the user on a hiccup.
+  useEffect(() => {
+    const token = localStorage.getItem('blm_token');
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      let res;
+      try {
+        res = await fetch(API_BASE + '/api/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      } catch {
+        return;   // backend unreachable — keep the session; data calls will surface errors
+      }
+      if (cancelled) return;
+      if (res.ok) {
+        const d = await res.json().catch(() => null);
+        if (d && (d.role || d.username)) {
+          localStorage.setItem('blm_user', d.username);
+          localStorage.setItem('blm_role', d.role);
+          setAuth((a) => ({ ...a, user: d.username, role: d.role }));
+        }
+      } else if (res.status === 401 || res.status === 403) {
+        logout();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [logout]);
+
   return (
     <AuthContext.Provider value={{ ...auth, isAuthed: !!auth.token, login, logout }}>
       {children}
