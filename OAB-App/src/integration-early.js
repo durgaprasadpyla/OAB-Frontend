@@ -36,6 +36,34 @@
   }
   window.__oabGetToken = getToken;
 
+  // ── Client-side mirror of the backend per-module READ authorization ──
+  // (AuthzService.MODULE_READ_ROLES, commit 2d6c096). The reference app loads EVERY module
+  // blob on boot regardless of role; for a module a role may not read, the backend returns
+  // 403. We skip that request entirely (returning an empty module) so a QC/Plant/PM/etc.
+  // session doesn't fire a wall of guaranteed 403s (no console noise, no error banner). The
+  // backend remains the sole enforcer — this is only a UI optimization. Keep in sync with it.
+  var MODULE_READ_ROLES = {
+    1: ['user', 'padmin', 'superadmin', 'plant', 'pm'],   // OAB board / orders
+    2: ['user', 'padmin', 'superadmin', 'qc', 'pm'],      // JSS specs
+    3: ['user', 'padmin', 'superadmin'],                  // prices/costs
+    4: ['user', 'padmin', 'superadmin'],                  // customers
+    5: ['user', 'padmin', 'superadmin', 'plant'],         // production status
+    6: ['purchase', 'padmin', 'superadmin'],              // purchase
+    7: ['pm', 'superadmin'],                              // pm print data
+    8: ['scrap', 'padmin', 'superadmin'],                 // scrap
+    9: ['user', 'padmin', 'superadmin'],                  // FG ledger
+    11: ['qc', 'superadmin'],                             // QC CAPA
+    12: ['sadmin', 'quote', 'sales', 'superadmin']        // sales system
+  };
+  function canReadModule(slot) {
+    var allowed = MODULE_READ_ROLES[slot];
+    if (!allowed) return true;                            // unknown slot → let the request through
+    var role = '';
+    try { role = (localStorage.getItem('blm_role') || '').toLowerCase(); } catch (e) {}
+    if (!role) return true;                               // role unknown (e.g. sales-rep) → let backend decide
+    return allowed.indexOf(role) !== -1;
+  }
+
   // ── 1) localStorage compliance ────────────────────────────────────────────
   // Block reads AND writes of the reference's business-data keys, so every byte of
   // business data comes from (and returns to) the backend. UI/session keys
@@ -129,9 +157,17 @@
         return Promise.resolve(jsonResponse([], 200));
       }
       var slot = slotFromGet(url);
+      // Skip the network call for a module this role may not read (see canReadModule):
+      // returns an empty module instead of firing a guaranteed-403 request.
+      if (slot != null && !canReadModule(slot)) return Promise.resolve(jsonResponse([], 200));
       return realFetch(toBackend(url), { headers: { 'Authorization': 'Bearer ' + token } })
         .then(function (res) {
           if (res.status === 401) { handleAuthExpired(); return res; }
+          // Per-module READ authorization (backend, commit 2d6c096) returns 403 for a module
+          // this role may not read. The reference app loads ALL modules on boot regardless of
+          // role, so a 403 must be treated as an empty module (renders empty, no scary error
+          // banner) — this is exactly the backend's documented "module stays empty" intent.
+          if (res.status === 403) return jsonResponse([], 200);
           if (!res.ok || slot == null) return res;
           // Module 1 carries the invoice HTML: re-inflate the logo token before the app
           // parses it, and hand back a fresh response with the inflated body.
