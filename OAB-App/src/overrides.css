@@ -7,15 +7,151 @@
  * Desktop appearance at full width is unchanged.
  * =========================================================================== */
 
-/* ── (1) Plain login screen ──────────────────────────────────────────────
- * The reference auth modal uses a translucent black backdrop, so the app shows
- * through it. Make it a solid, on-brand backdrop that fully hides the app. */
+/* ── (1) Premium enterprise login ────────────────────────────────────────
+ * The reference auth modal is a plain white box on a translucent backdrop.
+ * integration-login.js reparents its (unchanged) inputs/button into a
+ * two-column card; these styles make it a modern, on-brand sign-in.
+ * Palette is drawn from the Bloomflex logo (cyan/blue). Auth logic untouched. */
 #auth-modal {
-  background: linear-gradient(135deg, #12602f 0%, #0c4623 100%) !important;
+  background:
+    radial-gradient(1100px 700px at 12% 8%, #e3f1fb 0%, rgba(227,241,251,0) 55%),
+    radial-gradient(900px 600px at 92% 96%, #e8f6fb 0%, rgba(232,246,251,0) 55%),
+    linear-gradient(135deg, #eef3f8 0%, #e7eef6 100%) !important;
+  padding: 24px !important;
+  -webkit-font-smoothing: antialiased;
 }
-#auth-modal > div {
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .35) !important;
+/* subtle abstract shapes, kept very light so they never distract from the form */
+#auth-modal::before, #auth-modal::after {
+  content: ""; position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
 }
+#auth-modal::before {
+  width: 460px; height: 460px; top: -160px; left: -140px;
+  background: radial-gradient(circle at 30% 30%, rgba(0,152,212,.16), rgba(0,152,212,0) 70%);
+}
+#auth-modal::after {
+  width: 520px; height: 520px; bottom: -200px; right: -160px;
+  background: radial-gradient(circle at 60% 60%, rgba(0,105,180,.14), rgba(0,105,180,0) 70%);
+}
+
+/* Two-column premium card */
+.blm-login-card {
+  position: relative; z-index: 1;
+  display: flex; width: 940px; max-width: 96vw;
+  min-height: 540px; max-height: 94vh; overflow: hidden;
+  background: #fff; border: 1px solid rgba(15,40,80,.08);
+  border-radius: 20px; box-shadow: 0 30px 70px rgba(9,40,80,.20), 0 4px 12px rgba(9,40,80,.06);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  color: #17233b;
+}
+
+/* LEFT — brand panel */
+.blm-brand {
+  position: relative; flex: 0 0 44%; max-width: 44%;
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: 40px 38px; color: #fff; overflow: hidden;
+  background: linear-gradient(160deg, #06325a 0%, #0a4f86 52%, #0d82ba 100%);
+}
+.blm-brand::before, .blm-brand::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; }
+.blm-brand::before { width: 320px; height: 320px; top: -110px; right: -120px; background: radial-gradient(circle at 40% 40%, rgba(255,255,255,.14), rgba(255,255,255,0) 68%); }
+.blm-brand::after  { width: 260px; height: 260px; bottom: -110px; left: -90px;  background: radial-gradient(circle at 50% 50%, rgba(0,193,222,.28), rgba(0,193,222,0) 70%); }
+.blm-brand-top, .blm-brand-mid, .blm-brand-foot { position: relative; z-index: 1; }
+.blm-brand-logo { display: block; width: 100%; max-width: 260px; height: auto; background: #fff; padding: 14px 18px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.16); }
+.blm-brand .blm-wordmark { font-size: 30px; font-weight: 900; letter-spacing: 3px; }
+.blm-brand-mid h2 { margin: 0 0 10px; font-size: 22px; font-weight: 800; line-height: 1.28; letter-spacing: .2px; }
+.blm-brand-mid p { margin: 0 0 20px; font-size: 13.5px; line-height: 1.6; color: rgba(255,255,255,.82); }
+.blm-brand-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+.blm-brand-list li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: rgba(255,255,255,.94); }
+.blm-brand-list li svg { flex: 0 0 auto; color: #7fe3ff; }
+.blm-brand-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255,255,255,.72); }
+
+/* RIGHT — form panel */
+.blm-form {
+  flex: 1 1 56%; min-width: 0; display: flex; flex-direction: column; justify-content: center;
+  padding: 44px 46px; overflow-y: auto;
+}
+.blm-form-logo { display: none; text-align: center; margin-bottom: 18px; }
+.blm-form-logo img { display: inline-block; width: auto; max-width: 220px; max-height: 66px; height: auto; }
+.blm-form-logo .blm-wordmark { font-size: 26px; font-weight: 900; letter-spacing: 3px; }
+.blm-dark { color: #0a4f86; }
+.blm-form-head h1 { margin: 0 0 6px; font-size: 25px; font-weight: 800; letter-spacing: -.2px; color: #14223b; }
+.blm-form-head p { margin: 0 0 22px; font-size: 13.5px; color: #64748b; }
+
+.blm-fg { margin-bottom: 16px; }
+.blm-fg label { display: block; font-size: 12.5px; font-weight: 600; color: #33425a; margin-bottom: 7px; }
+.blm-inwrap { position: relative; display: flex; align-items: center; }
+.blm-inicon { position: absolute; left: 14px; display: flex; color: #90a2b8; pointer-events: none; }
+.blm-in {
+  width: 100%; height: 50px; box-sizing: border-box;
+  border: 1.5px solid #dbe3ee; border-radius: 11px;
+  padding: 0 14px 0 44px; font-size: 14px; color: #14223b; background: #fbfcfe;
+  outline: none; transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+.blm-in.blm-in, .blm-inwrap .blm-in { }         /* keep specificity over reference input rules */
+.blm-in::placeholder { color: #9aa8bb; }
+.blm-in:hover { border-color: #c3d0e0; }
+.blm-in:focus { border-color: #0098d4; background: #fff; box-shadow: 0 0 0 4px rgba(0,152,212,.15); }
+.blm-inwrap .blm-in[type="password"], .blm-inwrap .blm-in[type="text"].blm-in { padding-right: 46px; }
+.blm-in:disabled { background: #eef2f7; color: #9aa8bb; cursor: not-allowed; }
+
+.blm-toggle {
+  position: absolute; right: 6px; height: 38px; width: 38px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 9px; color: #7d90a8; cursor: pointer; transition: color .15s, background .15s;
+}
+.blm-toggle:hover { color: #0a4f86; background: #eef4fb; }
+.blm-toggle:focus-visible { outline: 2px solid #0098d4; outline-offset: 1px; }
+
+.blm-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 22px; flex-wrap: wrap; }
+.blm-remember { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #46566e; cursor: pointer; user-select: none; }
+.blm-remember input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.blm-check { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1.5px solid #cbd6e4; border-radius: 5px; color: transparent; background: #fff; transition: all .15s; }
+.blm-remember input:checked + .blm-check { background: #0098d4; border-color: #0098d4; color: #fff; }
+.blm-remember input:focus-visible + .blm-check { box-shadow: 0 0 0 3px rgba(0,152,212,.25); }
+.blm-forgot { background: none; border: none; padding: 0; font-size: 13px; font-weight: 600; color: #0a72b8; cursor: pointer; }
+.blm-forgot:hover { color: #075a92; text-decoration: underline; }
+
+/* Primary CTA */
+.blm-cta {
+  position: relative; width: 100%; height: 50px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  border: none; border-radius: 11px; cursor: pointer;
+  background: linear-gradient(135deg, #0098d4 0%, #0069b4 100%); color: #fff;
+  font-size: 15px; font-weight: 700; letter-spacing: .3px;
+  box-shadow: 0 10px 22px rgba(0,105,180,.30); transition: transform .12s ease, box-shadow .15s ease, filter .15s ease;
+}
+.blm-cta:hover { filter: brightness(1.05); box-shadow: 0 12px 26px rgba(0,105,180,.38); }
+.blm-cta:active { transform: translateY(1px); }
+.blm-cta:focus-visible { outline: 3px solid rgba(0,152,212,.4); outline-offset: 2px; }
+.blm-cta:disabled, .blm-cta.blm-loading { cursor: not-allowed; filter: saturate(.85) brightness(.98); box-shadow: none; }
+.blm-spin { display: none; width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: blm-rotate .7s linear infinite; }
+.blm-cta.blm-loading .blm-spin { display: inline-block; }
+@keyframes blm-rotate { to { transform: rotate(360deg); } }
+
+/* Messages (error / info) */
+.blm-msg { min-height: 0; font-size: 13px; line-height: 1.45; text-align: left; margin: 0; }
+.blm-msg:empty { display: none; }
+.blm-msg:not(:empty) { display: block; padding: 11px 13px; border-radius: 10px; margin-bottom: 16px; border: 1px solid; }
+.blm-msg { color: #b3261e; background: #fdecea; border-color: #f6cdc8 !important; }
+.blm-msg.blm-msg-info { color: #0a5aa0; background: #e8f3fc; border-color: #c5e0f5 !important; }
+.blm-form-foot { margin-top: 22px; font-size: 12px; color: #90a0b5; text-align: center; }
+
+/* ── Responsive ── */
+@media (max-width: 860px) {
+  .blm-login-card { flex-direction: column; width: 460px; min-height: 0; max-height: 94vh; }
+  .blm-brand { display: none; }
+  .blm-form { flex: 1 1 auto; padding: 34px 30px; }
+  .blm-form-logo { display: block; }
+}
+@media (max-width: 520px) {
+  #auth-modal { padding: 14px !important; }
+  .blm-login-card { width: 100%; border-radius: 16px; }
+  .blm-form { padding: 28px 20px; }
+  .blm-form-head h1 { font-size: 22px; }
+  .blm-form-logo img { max-width: 190px; max-height: 58px; }
+}
+@media (max-width: 360px) {
+  .blm-form { padding: 22px 15px; }
+}
+/* Respect reduced-motion */
+@media (prefers-reduced-motion: reduce) { .blm-spin { animation: none; } .blm-cta { transition: none; } }
 
 /* Safe, universal: media never exceeds its container. */
 img { max-width: 100%; height: auto; }
@@ -49,3 +185,4 @@ select, input, textarea { max-width: 100%; min-width: 0; }
 div[style*="grid-template-columns"]:has(> .card) {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
 }
+

@@ -31,8 +31,14 @@ const late = read('src/integration-late.js');
 const hr = read('src/integration-hr.js');
 const guard = read('reference/connectivity-guard.js');
 const overrides = read('src/overrides.css');
+const login = read('src/integration-login.js');
 let logo = '';
 try { logo = read('reference/logo-datauri.txt').trim(); } catch (e) { /* optional */ }
+// Login-screen logo — a SEPARATE asset from the invoice logo above, so the branded
+// login can use the official "BLOOMFLEX PRIVATE LIMITED" mark without disturbing the
+// invoice-logo de-dup (which keys on __OAB_LOGO__). Swap this one file to rebrand login.
+let loginLogo = '';
+try { loginLogo = read('reference/login-logo-datauri.txt').trim(); } catch (e) { loginLogo = logo; }
 const report = [];
 
 // 1) Remove the Supabase connectivity-guard script (exact-content replace).
@@ -93,7 +99,8 @@ if (jssMatch) {
 // 3) Inject config + EARLY layer at the very top of <head> (before any app/lib script).
 const headInject =
   '\n<script>/* OAB integration config */window.__OAB_API_BASE__=' + JSON.stringify(apiBase) + ';' +
-  (logo ? 'window.__OAB_LOGO__=' + JSON.stringify(logo) + ';' : '') + '</script>\n' +
+  (logo ? 'window.__OAB_LOGO__=' + JSON.stringify(logo) + ';' : '') +
+  (loginLogo ? 'window.__OAB_LOGIN_LOGO__=' + JSON.stringify(loginLogo) + ';' : '') + '</script>\n' +
   '<script>/* OAB integration — early */\n' + early + '\n</script>\n';
 report.push('invoice-logo de-dup constant injected: ' + (logo ? (logo.length + ' bytes') : 'NO (logo file missing)'));
 const charsetAnchor = '<meta charset="UTF-8">';
@@ -114,11 +121,12 @@ report.push('injected CSS overrides before </head>: yes');
 //    Order matters: LATE first (overrides auth/users/rates), then HR (wraps auth routing,
 //    adds the HR workspace + forced first-login password change).
 const lateInject = '\n<script>/* OAB integration — late */\n' + late + '\n</script>\n'
-  + '<script>/* OAB integration — hr */\n' + hr + '\n</script>\n';
+  + '<script>/* OAB integration — hr */\n' + hr + '\n</script>\n'
+  + '<script>/* OAB integration — login */\n' + login + '\n</script>\n';
 const bi = html.lastIndexOf('</body>');
 if (bi === -1) { console.error('FATAL: </body> not found'); process.exit(1); }
 html = html.slice(0, bi) + lateInject + html.slice(bi);
-report.push('injected late + hr layers before final </body>: yes');
+report.push('injected late + hr + login layers before final </body>: yes');
 
 // Write output.
 const outDir = path.join(DIR, 'dist');
