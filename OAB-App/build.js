@@ -96,6 +96,26 @@ if (jssMatch) {
   report.push('stripped baked-in JSS catalogue: PATTERN NOT FOUND (verify reference)');
 }
 
+// 2d) Brand color remap — the reference hardcodes its green brand color (#1B6B3A + family)
+//     ~230 times in INLINE styles (role panels, headers, buttons, gradients) that the CSS
+//     design-system variables can't reach. Remap the green family to the blue brand so EVERY
+//     role view (QC / Plant / PM / Purchase / Scrap / Sales) matches the themed ops UI.
+//     The INVOICE document template is green-free (verified) → the customer-facing invoice is
+//     unaffected. The internal packing-list's green accent shifts to blue (brand consistency;
+//     layout/fields/logic unchanged).
+const COLOR_REMAP = [
+  [/#1B6B3A/gi, '#0e6fb8'],   // primary  green → blue
+  [/#155029/gi, '#0a5aa0'],   // dark     (gradient partner) → deep blue
+  [/#2E8B57/gi, '#2b8fd6'],   // medium   green → blue
+  [/#E8F5EE/gi, '#e9f2fb'],   // light tint
+  [/#D5EDE0/gi, '#d7e8fb'],   // tint
+  [/#EEF7F2/gi, '#eef4fc'],   // packing row tint
+  [/#D5F0E5/gi, '#d7e8fb'],
+];
+let colorHits = 0;
+COLOR_REMAP.forEach(function (pair) { const m = html.match(pair[0]); if (m) { colorHits += m.length; html = html.replace(pair[0], pair[1]); } });
+report.push('remapped hardcoded green→blue brand colors: ' + colorHits + ' occurrences');
+
 // 3) Inject config + EARLY layer at the very top of <head> (before any app/lib script).
 const headInject =
   '\n<script>/* OAB integration config */window.__OAB_API_BASE__=' + JSON.stringify(apiBase) + ';' +

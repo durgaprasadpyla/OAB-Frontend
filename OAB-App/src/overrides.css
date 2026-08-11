@@ -161,13 +161,14 @@ img { max-width: 100%; height: auto; }
  * desktop width, where there is ample room. */
 select, input, textarea { max-width: 100%; min-width: 0; }
 
-/* ── (2) Responsive hardening ─────────────────────────────────────────────
- * The main app header packs a logo + nav + action buttons on one no-wrap row,
- * which forces a minimum width and pushes content out of alignment when zoomed.
- * Let it (and its flex groups) wrap instead of overflowing. */
-#hdr { flex-wrap: wrap !important; height: auto !important; row-gap: 6px; }
-#hdr #nav { flex-wrap: wrap !important; }
-#hdr > div { flex-wrap: wrap !important; }
+/* ── (2) Header: clean two-tier app-bar (brand + actions on top, nav below) ──
+ * The reference packs logo + nav + actions on one no-wrap row (overflows), and a
+ * plain wrap splits them messily. Instead lay it out deliberately: row 1 = brand
+ * (left) + status/actions (right); row 2 = the full nav — organized at every width. */
+#hdr { flex-wrap: wrap !important; align-items: center !important; height: auto !important; row-gap: 8px !important; column-gap: 12px; padding: 9px 20px 0 !important; justify-content: flex-start !important; }
+#hdr > .logo { order: 1; flex: 1 1 auto; min-width: 0; }
+#hdr > div:last-child { order: 2; flex: 0 0 auto; margin-left: auto; display: flex !important; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+#hdr > #nav { order: 3; flex: 1 1 100% !important; width: 100%; flex-wrap: wrap !important; justify-content: flex-start !important; gap: 4px; margin-top: 4px; padding: 7px 0 6px; border-top: 1px solid var(--bd); }
 
 /* The role-view top bars (plant / qc / pm / purchase / scrap / quote / rep)
  * are their own flex rows — let them wrap too. */
