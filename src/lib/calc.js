@@ -39,6 +39,38 @@ export function calcMetres(r, qty, jss) {
   return { net: Math.round(base), withWastage: Math.round(base * 1.05) };
 }
 
+/**
+ * Weight in KILOGRAMS of the film for `qty` of a spec — `{ net, withWastage }` —
+ * or null when it cannot be derived.
+ *
+ * This is the same physical thing `calcMetres` measures, weighed instead of run
+ * out: film to consume. So it carries the SAME +5% wastage allowance — the JSS
+ * `pouchWeight` is the film weight IN a finished pouch and excludes the trim you
+ * lose, so `withWastage` is what you actually consume, parallel to the metres.
+ *
+ * Rolls are ordered BY WEIGHT — their PO qty is already kilograms — so the
+ * quantity is the net weight directly. Everything else is a piece count, and the
+ * per-piece weight comes from the JSS `pouchWeight` (grams, the
+ * `((H×2)+gusset)×W×GSM ÷ 1,000,000` figure QC computes on the spec).
+ *
+ * Returns null rather than 0 when the spec carries no pouch weight, so callers
+ * can tell "nothing to weigh" apart from "weight not recorded yet" and say so
+ * instead of quietly under-reporting a total.
+ */
+export function calcKg(r, qty, jss) {
+  const df = String((jss && jss.dispatchForm) || r.dispatchForm || '').toLowerCase().trim();
+  const q = num(qty);
+  const roll = df === 'roll' || df === 'rolls' || df === 'kgs' || df === 'kg';
+  let net;
+  if (roll) net = q;
+  else {
+    const pw = num((jss && jss.pouchWeight) || r.pouchWeight);
+    if (!(pw > 0)) return null;
+    net = q * pw / 1000;
+  }
+  return { net, withWastage: net * 1.05 };
+}
+
 function gussetSum(gusset) {
   return String(gusset ?? '').split('+').reduce((s, p) => s + (Number(p.trim()) || 0), 0);
 }

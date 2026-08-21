@@ -2,10 +2,10 @@ import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { ordersApi } from '../api.js';
 import { balance, invBalance } from '../lib/calc.js';
-import { dash, fmtDate } from '../lib/format.js';
-import { STAGES } from '../lib/constants.js';
+import { dash, fmtDate, inr } from '../lib/format.js';
+import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import { BalanceBadge } from '../components/badges.jsx';
-import { fgProduced, fgAddAllocation } from '../lib/fg.js';
+import { fgProduced, fgAddAllocation, fgAvail } from '../lib/fg.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -14,17 +14,29 @@ export default function DailyUpdate() {
   const { mods, reloadModule, save } = useData();
   const [sheet, setSheet] = useState('SF');
   const [q, setQ] = useState('');
+  const [poFilter, setPoFilter] = useState('');
   const [edits, setEdits] = useState({});   // { [so]: {man, inv, fg, stage} }
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [logFor, setLogFor] = useState(null);   // SO whose manual-dispatch log is open
+  const order = useSoOrder();
 
   const prodStatus = (so) => (mods.prodStatus && mods.prodStatus[so]) || 'Ready';
   const rows = useMemo(() => {
     const all = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
     const s = q.toLowerCase();
-    return all.filter((r) => !r.closed && (!s || [r.so, r.customer, r.jobName, r.spec].some((v) => String(v || '').toLowerCase().includes(s))));
-  }, [mods.oab, sheet, q]);
+    const open = all.filter((r) => !r.closed
+      && (!poFilter || r.poNum === poFilter)
+      && (!s || [r.so, r.customer, r.jobName, r.spec, r.poNum].some((v) => String(v || '').toLowerCase().includes(s))));
+    return soOrder(open, order.newestFirst);
+  }, [mods.oab, sheet, q, poFilter, order.newestFirst]);
+
+  // Distinct POs on the open orders of this sheet, for the PO filter. (renderUpd)
+  const pos = useMemo(() => {
+    const all = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
+    return [...new Set(all.filter((r) => !r.closed).map((r) => r.poNum).filter(Boolean))]
+      .sort((a, b) => String(a).localeCompare(String(b)));
+  }, [mods.oab, sheet]);
 
   const setEdit = (so, patch) => setEdits((e) => ({ ...e, [so]: { ...e[so], ...patch } }));
   const flash = (text, t = 'g') => { setMsg({ text, t }); setTimeout(() => setMsg(null), 4000); };
@@ -50,7 +62,6 @@ export default function DailyUpdate() {
         const delta = num(e.fg) - num(r.fg);   // increase in this SO's assigned FG
         if (delta > 0 && r.spec) fgDraws.push({ so: r.so, spec: r.spec, delta });
       }
-      if (prodStatus(r.so) === 'Ready' && e.stage !== undefined && e.stage !== '' && e.stage !== r.stage) { op.stage = e.stage; has = true; }
       if (has) ops.push(op);
     });
     if (over.length) { flash('Manual dispatch exceeds balance — ' + over.join('; '), 'r'); return; }
@@ -95,14 +106,21 @@ export default function DailyUpdate() {
   return (
     <div id="app">
       <div className="pg-ttl">Daily Update</div>
-      <div className="pg-sub">Log manual dispatches, set finished-goods and production stage, or short-close an SO.</div>
+      <div className="pg-sub">Set total manual dispatched, FG, stage and machines. Invoice dispatches are tracked separately and shown read-only.</div>
 
       <div className="fbar">
-        <button className={'btn btn-s' + (sheet === 'SF' ? ' on' : '')} onClick={() => setSheet('SF')}>Stay Fresh</button>
-        <button className={'btn btn-s' + (sheet === 'OT' ? ' on' : '')} onClick={() => setSheet('OT')}>Others</button>
-        <input placeholder="Search SO / customer / job / spec…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
-        <span style={{ flex: 1 }} />
-        <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save All Changes'}</button>
+        <select value={sheet} aria-label="Sheet" onChange={(e) => { setSheet(e.target.value); setPoFilter(''); }}>
+          <option value="SF">Stay Fresh</option>
+          <option value="OT">Others</option>
+        </select>
+        <select value={poFilter} aria-label="Filter by PO" onChange={(e) => setPoFilter(e.target.value)}>
+          <option value="">All POs</option>
+          {pos.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <input placeholder="Search SO / PO # / customer / job / spec..." aria-label="Search orders" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />
+        <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} title={order.title} onClick={order.toggle}>{order.label}</button>
+        <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} aria-label="Refresh" onClick={() => reloadModule('oab')}>↻</button>
+        <button className="btn btn-g" style={{ height: 30, fontSize: 12, marginLeft: 'auto' }} onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '✓ Save All Changes'}</button>
       </div>
 
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
@@ -111,34 +129,41 @@ export default function DailyUpdate() {
         <table>
           <thead>
             <tr>
-              <th>SO#</th><th>Job Name</th><th>Customer</th><th style={{ textAlign: 'right' }}>PO Qty</th>
-              <th style={{ textAlign: 'right' }}>Inv</th><th style={{ textAlign: 'right' }}>Man</th>
+              <th>SO#</th><th style={{ minWidth: 160 }}>Job Name</th><th>Customer</th>
+              <th style={{ minWidth: 90 }}>PO #</th><th style={{ minWidth: 70 }}>Disp Loc</th>
+              <th style={{ textAlign: 'right' }}>PO Qty</th>
+              <th style={{ textAlign: 'right' }}>Inv Disp</th><th style={{ textAlign: 'right' }}>Man Disp</th>
               <th style={{ textAlign: 'right' }}>FG</th><th style={{ textAlign: 'right' }}>Balance</th>
-              <th style={{ width: 90 }}>+ Man Qty</th><th style={{ width: 110 }}>Inv / DC #</th>
-              <th style={{ width: 80 }}>Set FG</th><th style={{ width: 150 }}>Stage</th><th>Close</th>
+              <th style={{ width: 90 }}>Add Man Disp Qty</th><th style={{ width: 110 }}>Man Disp Inv #</th>
+              <th style={{ width: 100 }}>Allocate FG</th><th style={{ width: 80 }}>Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="upd-body">
             {rows.length === 0 ? (
-              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No data</td></tr>
+              <tr><td colSpan={14} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No data</td></tr>
             ) : rows.map((r) => {
               const b = balance(r);
               const e = edits[r.so] || {};
               const logCount = (r.manDispLog || []).length;
-              const isReady = prodStatus(r.so) === 'Ready';
+              const manDispTitle = logCount
+                ? `${logCount} logged manual dispatch${logCount === 1 ? '' : 'es'} — click for the date and Inv/DC # of each`
+                : 'No manual dispatches logged yet for this SO';
+              const avail = fgAvail(mods.fgLedger, r.spec);
+              const typed = e.fg ?? '';
               return (
                 <tr key={r.so}>
                   <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
-                  <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
-                  <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
+                  <td style={{ fontSize: 11 }}><div className="clamp3" title={r.jobName || ''}>{r.jobName || '-'}</div></td>
+                  <td style={{ fontSize: 11 }}><div className="clamp3" title={r.customer || ''}>{r.customer || '-'}</div></td>
+                  <td style={{ fontSize: 11 }}>{r.poNum || '-'}</td>
+                  <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.poQty)}</td>
                   <td style={{ textAlign: 'right', color: 'var(--g)', fontSize: 11 }}>{dash(r.invDisp)}</td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }} title={manDispTitle}>
                     {logCount ? (
                       <button type="button" onClick={() => setLogFor(r.so)}
-                        title="View each manual dispatch — date, Inv/DC # and qty"
                         style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit', color: 'var(--ink)' }}>
-                        {dash(r.manDisp)} <span style={{ color: 'var(--g)', fontSize: 9, textDecoration: 'underline' }}>({logCount})</span>
+                        {dash(r.manDisp)} <span style={{ color: 'var(--i3)', fontSize: 9 }}>({logCount})</span>
                       </button>
                     ) : dash(r.manDisp)}
                   </td>
@@ -147,17 +172,23 @@ export default function DailyUpdate() {
                   <td><input type="number" min="0" placeholder="0" value={e.man ?? ''} onChange={(ev) => setEdit(r.so, { man: ev.target.value })}
                     title="Additional qty being manually dispatched now — added to the existing Man Disp total, not a replacement" /></td>
                   <td><input type="text" placeholder="Inv / DC #" value={e.inv ?? ''} onChange={(ev) => setEdit(r.so, { inv: ev.target.value })} style={{ width: '100%' }} /></td>
-                  <td><input type="number" min="0" placeholder={String(num(r.fg))} value={e.fg ?? ''} onChange={(ev) => setEdit(r.so, { fg: ev.target.value })} /></td>
-                  <td>
-                    <select value={e.stage ?? (r.stage || '')} disabled={!isReady} onChange={(ev) => setEdit(r.so, { stage: ev.target.value })}
-                      title={isReady ? 'Select stage' : 'Enable "Ready" status in Plant Login to select stage'}
-                      style={{ width: '100%', height: 28, fontSize: 11, background: isReady ? '#fff' : '#F3F4F6', color: isReady ? '#111' : '#9CA3AF' }}>
-                      <option value="">— select —</option>
-                      {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                  {/* Allocating FG draws from the spec's finished-goods pool, so the
+                      remaining pool is shown live under the field and turns red when the
+                      typed quantity would overdraw it. (renderUpd / fgUpdHint) */}
+                  <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+                    <div style={{ position: 'relative', width: 78 }}>
+                      <input
+                        type="number" min="0" step="1" placeholder="0" value={typed}
+                        aria-label={`Allocate FG for ${r.so}`}
+                        title={`Allocate finished goods from the FG pool (spec ${r.spec || '-'}) to this SO. Cannot exceed available.`}
+                        onChange={(ev) => setEdit(r.so, { fg: ev.target.value })}
+                        style={{ width: '100%' }}
+                      />
+                      <FgHint avail={avail} typed={typed} />
+                    </div>
                   </td>
                   <td>
-                    <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px', color: 'var(--red)', borderColor: '#F5A8A0' }}
+                    <button className="btn btn-r" style={{ height: 24, fontSize: 10, padding: '0 7px' }}
                       onClick={() => closeSO(r.so)} disabled={busy} title="Short close this SO">Close SO</button>
                   </td>
                 </tr>
@@ -176,6 +207,19 @@ export default function DailyUpdate() {
       )}
     </div>
   );
+}
+
+/**
+ * The live "avail N" hint under an Allocate-FG field: plain while untouched, green
+ * with the remainder once a quantity is typed, red when it would overdraw the pool.
+ * (fgUpdHint)
+ */
+function FgHint({ avail, typed }) {
+  const base = { position: 'absolute', top: '100%', left: 0, fontSize: 9, marginTop: 1, whiteSpace: 'nowrap' };
+  if (typed === '' || typed == null) return <div style={{ ...base, color: 'var(--i3)' }}>avail {inr(avail)}</div>;
+  const v = Number(typed) || 0;
+  if (v > avail) return <div style={{ ...base, color: 'var(--red)' }}>exceeds avail {inr(avail)}!</div>;
+  return <div style={{ ...base, color: 'var(--g)' }}>avail {inr(avail)} → {inr(avail - v)} left</div>;
 }
 
 /** Read-only breakdown of every manual dispatch logged against one SO. */

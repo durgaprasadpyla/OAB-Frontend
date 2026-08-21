@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { today, fmtDate } from '../lib/format.js';
+import { today, fmtDate, inr } from '../lib/format.js';
+import { getPM } from '../lib/pricing.js';
 import {
   fgProduced, fgAllocated, fgAvail, fgAddProduction,
-  fgSpecsWithActivity, fgEntry, fgTodayISO,
+  fgSpecsWithActivity, fgEntry, fgAgeingInfo,
 } from '../lib/fg.js';
 
 // FG Entry — finished-goods ledger (native port of the legacy tab-fg screen).
@@ -18,14 +19,19 @@ export default function FGLedger() {
   const { mods, save } = useData();
   const ledger = mods.fgLedger || {};
   const jss = Array.isArray(mods.jss) ? mods.jss : [];
+  const prices = mods.prices || {};
 
   const [custFilter, setCustFilter] = useState('');
   const [spec, setSpec] = useState('');
+  const [specText, setSpecText] = useState('');   // raw text in the Spec field
+  const [skuText, setSkuText] = useState('');     // raw text in the SKU field
+  const [searchMsg, setSearchMsg] = useState('');
   const [date, setDate] = useState(today());
   const [qty, setQty] = useState('');
   const [msg, setMsg] = useState(null);      // { t:'g'|'y'|'r', text }
   const [busy, setBusy] = useState(false);
   const [sumQ, setSumQ] = useState('');
+  const [sumSort, setSumSort] = useState('value-desc');
 
   const flash = (t, text) => { setMsg({ t, text }); if (t !== 'g') setTimeout(() => setMsg(null), 4500); };
 
@@ -56,12 +62,63 @@ export default function FGLedger() {
   const allocated = fgAllocated(ledger, spec);
   const avail = fgAvail(ledger, spec);
 
-  function onSpec(sp) {
+  /**
+   * Resolve typed text to a spec. Matching is loose (case/space/punctuation
+   * insensitive) and accepts either the bare spec or the "Job Name — SPEC" form
+   * the SKU datalist offers, so picking from either list resolves the same way.
+   * (FG_SPEC_LOOKUP / fgNorm)
+   */
+  const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const specLookup = useMemo(() => {
+    const m = {};
+    specPool.forEach((j) => {
+      const sp = String(j.spec).trim();
+      m[norm(sp)] = sp;
+      m[norm(`${j.jobName || '(no name)'} — ${sp}`)] = sp;
+    });
+    return m;
+  }, [specPool]);
+
+  /** Select a spec and mirror it into the other two fields. (fgSpecInput) */
+  function selectSpec(sp) {
     setSpec(sp);
-    if (sp) { const j = jssFor(sp); if (j.customer) setCustFilter(j.customer); }
+    setSpecText(sp);
+    setSearchMsg('');
+    const j = jssFor(sp);
+    setCustFilter(j.customer || '');
+    setSkuText(`${j.jobName || '(no name)'} — ${sp}`);
     if (!date) setDate(today());
   }
-  function onCust(cu) { setCustFilter(cu); setSpec(''); }
+
+  /** Clear the selection but keep whatever the user typed. */
+  function clearSpec() { setSpec(''); }
+
+  function onSpecText(v) {
+    setSpecText(v);
+    const sp = specLookup[norm(v)];
+    if (sp) selectSpec(sp); else { clearSpec(); setSkuText(''); }
+  }
+  function onSkuText(v) {
+    setSkuText(v);
+    const sp = specLookup[norm(v)];
+    if (sp) selectSpec(sp); else clearSpec();
+  }
+  // Typing a customer narrows the other two lists and drops any current spec.
+  function onCustText(v) { setCustFilter(v); clearSpec(); setSpecText(''); setSkuText(''); }
+
+  /**
+   * Manual search. An exact spec jumps straight to it; otherwise the typed
+   * customer/SKU text is pushed into the summary filter below so every matching
+   * spec can be browsed. (fgSearchTrigger)
+   */
+  function searchFg() {
+    const sp = specLookup[norm(specText)] || specLookup[norm(skuText)];
+    if (sp) { selectSpec(sp); return; }
+    const term = [custFilter, skuText].map((t) => String(t || '').trim()).filter(Boolean).join(' ').trim();
+    if (!term) { setSearchMsg('⚠ Type a Customer Name or SKU, or pick an exact Spec, then Search.'); return; }
+    setSearchMsg('');
+    setSumQ(term);
+  }
 
   async function addProduction() {
     if (!spec) { flash('y', '⚠ Select a spec first'); return; }
@@ -86,17 +143,33 @@ export default function FGLedger() {
     return { prod, alloc };
   }, [ledger, spec]);
 
-  // All-specs summary (specs with any activity), searchable.
+  // All-specs summary / FG valuation (specs with any activity), searchable.
+  // Carries the Price-Master rate, stock value and FIFO ageing of the oldest
+  // unconsumed batch — the legacy "FG Value" tab.
   const summary = useMemo(() => {
     const s = sumQ.trim().toLowerCase();
-    return fgSpecsWithActivity(ledger)
+    const rows = fgSpecsWithActivity(ledger)
       .map((sp) => {
         const j = jssFor(sp);
-        return { spec: sp, customer: j.customer || '', sku: j.jobName || '', prod: fgProduced(ledger, sp), alloc: fgAllocated(ledger, sp), av: fgAvail(ledger, sp) };
+        const av = fgAvail(ledger, sp);
+        const price = Number(getPM(sp, prices).price) || 0;
+        const ag = fgAgeingInfo(ledger, sp);
+        return {
+          spec: sp, customer: j.customer || '', sku: j.jobName || '',
+          prod: fgProduced(ledger, sp), alloc: fgAllocated(ledger, sp), av,
+          price, value: av * price, agingDays: ag.days, ageing: ag.display,
+        };
       })
-      .filter((r) => !s || [r.spec, r.customer, r.sku].some((v) => String(v).toLowerCase().includes(s)))
-      .sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
-  }, [ledger, sumQ, jss]); // eslint-disable-line react-hooks/exhaustive-deps
+      .filter((r) => !s || [r.spec, r.customer, r.sku].some((v) => String(v).toLowerCase().includes(s)));
+
+    const bySpec = (a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true });
+    if (sumSort === 'value-desc') rows.sort((a, b) => b.value - a.value);
+    else if (sumSort === 'aging-desc') rows.sort((a, b) => b.agingDays - a.agingDays);
+    else if (sumSort === 'aging-asc') rows.sort((a, b) => a.agingDays - b.agingDays);
+    else rows.sort(bySpec);
+    return rows;
+  }, [ledger, sumQ, sumSort, jss, prices]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   function jumpTo(sp) {
     const j = jssFor(sp);
@@ -107,37 +180,62 @@ export default function FGLedger() {
 
   return (
     <div id="app">
-      <div className="pg-ttl">📦 FG Entry — Finished-Goods Ledger</div>
+      <div className="pg-ttl">📦 FG Entry — JSS / Finished Goods Sheet</div>
       <div className="pg-sub">
         Record finished goods produced per spec on a given date. Entries are append-only — each day's production
-        is added to the spec's running FG total. Available FG here is what the New-PO prompt and the Daily-Update FG field draw from.
+        is added to the spec's running FG total and can't be edited. Available FG here is what the New PO prompt and the Daily Update FG field draw from.
       </div>
 
+      {/* Spec picker — type-to-search on any of the three fields, the other two
+          auto-fill (fgSpecInput / fgCustInput / fgSkuInput). Typing an exact spec
+          opens it immediately; otherwise "Search FG" filters the summary below,
+          so a partial Customer/SKU still gets you somewhere. Field order matches
+          production: Spec, Customer, SKU. */}
       <div className="card">
-        <div className="ctitle">Select Spec (pick a customer to narrow the list)</div>
+        <div className="ctitle">Select Spec (type or pick any one — the other two auto-fill)</div>
         <div className="g3">
           <div className="fg">
-            <label>Customer</label>
-            <select value={custFilter} onChange={(e) => onCust(e.target.value)}>
-              <option value="">— All customers —</option>
-              {customers.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <label>JSS / Spec #</label>
+            <input
+              list="fg-spec-list" value={specText} aria-label="JSS / Spec #"
+              placeholder="— Select spec — (type to search)"
+              onChange={(e) => onSpecText(e.target.value)}
+            />
+            <datalist id="fg-spec-list">
+              {specOptions.map((j) => <option key={j.spec} value={j.spec}>{j.jobName || ''}</option>)}
+            </datalist>
           </div>
           <div className="fg">
-            <label>JSS / Spec #</label>
-            <select value={spec} onChange={(e) => onSpec(e.target.value)}>
-              <option value="">— Select spec —</option>
-              {specOptions.map((j) => <option key={j.spec} value={j.spec}>{j.spec} — {j.jobName || ''}</option>)}
-            </select>
+            <label>Customer</label>
+            <input
+              list="fg-cust-list" value={custFilter} aria-label="Customer"
+              placeholder="— All customers — (type to search)"
+              onChange={(e) => onCustText(e.target.value)}
+            />
+            <datalist id="fg-cust-list">
+              {customers.map((c) => <option key={c} value={c} />)}
+            </datalist>
           </div>
           <div className="fg">
             <label>SKU / Job Name</label>
-            <select value={spec} onChange={(e) => onSpec(e.target.value)}>
-              <option value="">— Select SKU —</option>
-              {specOptions.map((j) => <option key={j.spec} value={j.spec}>{(j.jobName || '(no name)')} — {j.spec}</option>)}
-            </select>
+            <input
+              list="fg-sku-list" value={skuText} aria-label="SKU / Job Name"
+              placeholder="— Select SKU — (type to search)"
+              onChange={(e) => onSkuText(e.target.value)}
+            />
+            <datalist id="fg-sku-list">
+              {specOptions.map((j) => <option key={j.spec} value={`${j.jobName || '(no name)'} — ${j.spec}`} />)}
+            </datalist>
           </div>
         </div>
+
+        <div className="fbar" style={{ marginTop: 4 }}>
+          <button className="btn btn-g" onClick={searchFg}>🔍 Search FG</button>
+          <span style={{ fontSize: 12, color: 'var(--i2)' }}>
+            Pick an exact Spec to open it directly, or just type a Customer Name / SKU and hit Search to see every matching spec below.
+          </span>
+        </div>
+        {searchMsg && <div className="al al-y" style={{ marginTop: 6 }}>{searchMsg}</div>}
 
         {spec && (
           <div className="al al-g" style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'center' }}>
@@ -209,14 +307,24 @@ export default function FGLedger() {
         </div>
       )}
 
+      {/* Production keeps these as TWO cards: a plain per-spec summary, and a
+          separate FG Value board that only lists stock actually on hand. */}
       <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>All Specs — FG Summary</div>
-          <input placeholder="Search spec / customer / SKU…" value={sumQ} onChange={(e) => setSumQ(e.target.value)} style={{ width: 240, marginLeft: 'auto' }} />
+          <input
+            placeholder="Search spec / customer or group / SKU..." value={sumQ}
+            aria-label="Search FG summary" onChange={(e) => setSumQ(e.target.value)}
+            style={{ width: 260, marginLeft: 'auto' }}
+          />
         </div>
         <div className="tw sy">
           <table>
-            <thead><tr><th>Spec</th><th style={{ minWidth: 160 }}>Customer</th><th style={{ minWidth: 160 }}>SKU / Job Name</th><th style={{ textAlign: 'right' }}>Produced</th><th style={{ textAlign: 'right' }}>Allocated</th><th style={{ textAlign: 'right' }}>Available</th></tr></thead>
+            <thead><tr>
+              <th>Spec</th><th style={{ minWidth: 160 }}>Customer</th><th style={{ minWidth: 160 }}>SKU / Job Name</th>
+              <th style={{ textAlign: 'right' }}>Produced</th><th style={{ textAlign: 'right' }}>Allocated</th>
+              <th style={{ textAlign: 'right' }}>Available</th>
+            </tr></thead>
             <tbody>
               {summary.length === 0 ? (
                 <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>No FG recorded yet</td></tr>
@@ -234,6 +342,7 @@ export default function FGLedger() {
           </table>
         </div>
       </div>
+
     </div>
   );
 }

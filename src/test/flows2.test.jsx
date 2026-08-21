@@ -79,9 +79,9 @@ describe('Plant — production status flow', () => {
     const { saved } = renderApp(<Plant />, { modules: { jss, oab, prodStatus: {} }, role: 'plant' });
     await screen.findByText('26/1');
 
-    const combos = screen.getAllByRole('combobox'); // [prod status, stage]
-    await user.selectOptions(combos[0], 'NR-Plates');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    // [sheet picker, prod status, stage] — production shows one sheet at a time.
+    await user.selectOptions(screen.getByLabelText('Prod status for 26/1'), 'NR-Plates');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 5)).toBe(true));
     expect(saved.find((s) => s.id === 5).data['26/1']).toBe('NR-Plates');

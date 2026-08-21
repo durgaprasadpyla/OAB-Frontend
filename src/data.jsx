@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from './api.js';
+import { snapshotBase, mergeOabModule } from './lib/merge.js';
 
 /**
  * The single source of truth for the OAB app's data, ported from the legacy
@@ -20,13 +21,17 @@ import { api } from './api.js';
  *   id 8  scrap      { scrap buyer details }
  *   id 9  fgLedger   { [spec]: { prod:[{date,qty,ts,id,note}], alloc:[{date,qty,ts,so,src}] } }
  *   id 11 capa       [ QC CAPA records ]
+ *   id 12 sales      { leads, skus, qc_reports, pos, interactions, quotations,
+ *                       sales_users, targets, contacts, substrate_options,
+ *                       nego_msgs, dropdowns }   sadmin/quote/sales/superadmin
+ *   id 13 bom        { [spec]: {baseQty, items:[...], history:[...]} }  superadmin only
  *
  * Each module carries an optimistic-lock `version` from the backend. We read it
  * on load, echo it on save, and — if the server reports a conflict (409, another
  * writer got there first) — reload that module, show a non-destructive notice,
  * and let the user re-apply their edit. A 409 NEVER logs the user out.
  */
-export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8, fgLedger: 9, capa: 11 };
+export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8, fgLedger: 9, capa: 11, sales: 12, bom: 13 };
 
 // Empty-but-valid shapes so every screen can render before anything is saved.
 export function emptyModules() {
@@ -41,6 +46,12 @@ export function emptyModules() {
     scrap: {},
     fgLedger: {},   // { [spec]: { prod:[], alloc:[] } }
     capa: [],       // QC CAPA records
+    // Shared Sales system blob (CSA leads, Quotation Desk, Rep Portal).
+    sales: {
+      leads: [], skus: [], qc_reports: [], pos: [], interactions: [], quotations: [],
+      sales_users: [], targets: [], contacts: [], substrate_options: [], nego_msgs: [], dropdowns: {},
+    },
+    bom: {},        // Bill of Materials, keyed by spec (superadmin-only module)
   };
 }
 
@@ -86,6 +97,10 @@ export function DataProvider({ children }) {
   modsRef.current = mods;
   const versionsRef = useRef(versions);
   versionsRef.current = versions;
+  // Module 1 as this tab last SYNCED it — the "base" of the 3-way merge. Set at
+  // every load and after every successful module-1 save: the two moments local
+  // and server state are known to agree. See lib/merge.js.
+  const baseRef = useRef(null);
 
   const reload = useCallback(async () => {
     setLoading(true); setError('');
@@ -100,6 +115,7 @@ export function DataProvider({ children }) {
       });
       setMods(base);
       setVersions(vers);
+      baseRef.current = snapshotBase(base.oab);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -120,8 +136,10 @@ export function DataProvider({ children }) {
     const id = KEY_TO_ID[key];
     if (!id) return;
     const fresh = await loadOne(id);
-    setMods(m => ({ ...m, [key]: fresh.value != null ? fresh.value : emptyModules()[key] }));
+    const value = fresh.value != null ? fresh.value : emptyModules()[key];
+    setMods(m => ({ ...m, [key]: value }));
     setVersions(m => ({ ...m, [key]: fresh.version }));
+    if (id === 1) baseRef.current = snapshotBase(value);
   }, []);
 
   /** Replace one module and persist it. `next` may be a value or (prev)=>next. */
@@ -129,13 +147,37 @@ export function DataProvider({ children }) {
     const id = KEY_TO_ID[key];
     if (!id) throw new Error('unknown module: ' + key);
     const prev = modsRef.current[key];                 // snapshot for rollback
-    const value = typeof next === 'function' ? next(prev) : next;
+    let value = typeof next === 'function' ? next(prev) : next;
     setMods(m => ({ ...m, [key]: value }));   // optimistic local update
     setSaving(true);
     try {
-      const expected = versionsRef.current[key] ?? 0;
+      let expected = versionsRef.current[key] ?? 0;
+
+      // Module 1 carries the whole board and invoice register in one blob, so a
+      // save ships this tab's copy of EVERY row. Optimistic locking only refuses
+      // a save when the server has moved on — it cannot tell that the fields
+      // inside a same-version blob are stale, which is how a tab that loaded
+      // hours ago silently reverts other people's work. So re-read the server
+      // copy and 3-way merge against it first. See lib/merge.js.
+      if (id === 1) {
+        const fresh = await loadOne(id);
+        if (fresh && fresh.value) {
+          const { merged, stats } = mergeOabModule(baseRef.current, value, fresh.value);
+          value = merged;
+          expected = fresh.version;
+          setMods(m => ({ ...m, [key]: merged }));
+          if (stats.addedRows || stats.addedInv || stats.tookTheirs) {
+            console.info(`[OAB sync] kept remote values on ${stats.tookTheirs} row(s), `
+              + `re-applied local edits on ${stats.merged}, `
+              + `restored ${stats.addedRows} row(s) / ${stats.addedInv} invoice(s)`);
+          }
+        }
+      }
+
       const newVersion = await saveOne(id, value, expected);
       setVersions(m => ({ ...m, [key]: newVersion }));
+      // What we just sent IS the server state now — it becomes the next baseline.
+      if (id === 1) baseRef.current = snapshotBase(value);
       return value;
     } catch (e) {
       if (e && (e.code === 'conflict' || e.status === 409)) {
@@ -145,8 +187,10 @@ export function DataProvider({ children }) {
         let fresh = null;
         try { fresh = await loadOne(id); } catch { /* fall through to rollback */ }
         if (fresh) {
-          setMods(m => ({ ...m, [key]: fresh.value != null ? fresh.value : emptyModules()[key] }));
+          const freshValue = fresh.value != null ? fresh.value : emptyModules()[key];
+          setMods(m => ({ ...m, [key]: freshValue }));
           setVersions(m => ({ ...m, [key]: fresh.version }));
+          if (id === 1) baseRef.current = snapshotBase(freshValue);
         } else {
           setMods(m => ({ ...m, [key]: prev }));
         }

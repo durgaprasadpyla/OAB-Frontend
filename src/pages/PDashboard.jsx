@@ -3,6 +3,8 @@ import { useData } from '../data.jsx';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
+import { buildScrapChart, scrapChartTitle, bestByItem, CHART_BOX } from '../lib/scrapChart.js';
+import { readAttachments, viewAttachment } from '../lib/attach.js';
 
 // Native port of the legacy Purchase Admin ("P Dashboard") — a tabbed admin page
 // over module 6 (purchase) and module 8 (scrap). Ported from index.html:
@@ -109,11 +111,11 @@ function Spark({ recs }) {
 
 const TABS = [
   { k: 'po', label: '📦 PO Tracking' },
-  { k: 'asl', label: '✅ Approved Suppliers' },
-  { k: 'im', label: '🏷 Item Master' },
+  { k: 'asl', label: '🏭 Approved Suppliers' },
+  { k: 'im', label: '🗂 Item Master' },
   { k: 'price', label: '📈 Price Trends' },
   { k: 'pay', label: '💳 Payments' },
-  { k: 'scrap', label: '♻ Scrap Admin' },
+  { k: 'scrap', label: '♻️ Scrap Details' },
 ];
 
 /** Purchase Admin — P Dashboard. Native port of the legacy purchadmin tab. */
@@ -121,8 +123,8 @@ export default function PDashboard() {
   const [tab, setTab] = useState('po');
   return (
     <div id="app">
-      <div className="pg-ttl">Purchase Admin — P Dashboard</div>
-      <div className="pg-sub">PO tracking, approved suppliers, item master, price trends, payments and scrap administration.</div>
+      <div className="pg-ttl">📦 P Dashboard</div>
+      <div className="pg-sub">Every purchase order raised by the Purchase login, and the stage each one is at</div>
       <div className="step-bar" style={{ flexWrap: 'wrap' }}>
         {TABS.map((t) => (
           <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
@@ -192,7 +194,7 @@ function POTracking() {
       </div>
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Purchase Orders <span className="tag tgr">{rows.length}</span></div>
+          <div className="ctitle" style={{ margin: 0 }}>📦 All Purchase Orders — Stage &amp; Status <span className="tag tgr">{rows.length}</span></div>
           <select value={sup} onChange={(e) => setSup(e.target.value)}>
             <option value="">All Suppliers</option>
             {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -290,10 +292,44 @@ function ASLEditor() {
     exportAOA([header, ...rows.map((r) => keys.map((k) => r[k] ?? ''))], 'Approved_Suppliers_' + today());
   }
 
+  // ── Supplier certifications ────────────────────────────────────────────────
+  // Certificates hang off the FIRST ASL row for a company (aslCertRow), so a
+  // supplier listed against several materials still has one document set.
+  const companies = useMemo(() => {
+    const seen = [];
+    const map = {};
+    rows.forEach((r, i) => {
+      const c = r.company || '(unnamed supplier)';
+      if (!map[c]) { map[c] = i; seen.push(c); }      // index of the cert-bearing row
+    });
+    return seen.map((c) => ({ company: c, idx: map[c], certs: arr(rows[map[c]].certs) }));
+  }, [rows]);
+
+  async function addCerts(idx, fileList) {
+    const { docs, errors } = await readAttachments(fileList);
+    if (errors.length) flash('r', errors.join(' '));
+    if (!docs.length) return;
+    const next = rows.map((r, j) => (j === idx ? { ...r, certs: [...arr(r.certs), ...docs] } : r));
+    setRows(next);
+    try {
+      await save('purchase', { ...purchase, asl: next });
+      flash('g', `✓ ${docs.length} document(s) attached.`);
+    } catch (e) { flash('r', 'Save failed: ' + e.message); }
+  }
+
+  async function deleteCert(idx, ci) {
+    const cur = arr(rows[idx].certs);
+    if (!window.confirm(`Remove "${cur[ci] ? cur[ci].name : 'this document'}"?`)) return;
+    const next = rows.map((r, j) => (j === idx ? { ...r, certs: arr(r.certs).filter((_, k) => k !== ci) } : r));
+    setRows(next);
+    try { await save('purchase', { ...purchase, asl: next }); flash('g', '✓ Document removed.'); }
+    catch (e) { flash('r', 'Save failed: ' + e.message); }
+  }
+
   return (
     <div className="card">
       <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>Approved Supplier List <span className="tag tgr">{rows.length}</span></div>
+        <div className="ctitle" style={{ margin: 0 }}>🏭 Approved Supplier List <span className="tag tgr">{rows.length}</span></div>
         <input placeholder="Search company / material / code…" value={q} onChange={(e) => setQ(e.target.value)} />
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={addRow}>＋ Add Row</button>
@@ -338,6 +374,51 @@ function ASLEditor() {
         </table>
       </div>
       <div className="pg-sub" style={{ margin: '8px 0 0' }}>Item-code identity (description/type/UOM) is also editable in the Item Master tab. “Save ASL” persists the whole list.</div>
+
+      <div className="ctitle" style={{ marginTop: 18 }}>Supplier Certifications</div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Food-grade, ISO and other compliance documents per supplier (images or PDF up to 1.5MB).
+        Images are downscaled before storing, to keep the purchase blob within its size budget.
+      </div>
+      <div className="tw sy" style={{ maxHeight: 320 }}>
+        <table>
+          <thead><tr><th style={{ minWidth: 200 }}>Supplier</th><th>Documents</th><th style={{ width: 150 }}></th></tr></thead>
+          <tbody>
+            {companies.length === 0 ? (
+              <tr><td colSpan={3} style={emptyTd}>No suppliers yet</td></tr>
+            ) : companies.map(({ company, idx, certs }) => (
+              <tr key={company}>
+                <td style={{ fontWeight: 600 }}>{company}</td>
+                <td>
+                  {certs.length === 0
+                    ? <span style={{ fontSize: 10.5, color: 'var(--i3)' }}>No certifications uploaded yet</span>
+                    : certs.map((c, ci) => (
+                      <span key={ci} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 12, padding: '2px 8px', margin: '2px 4px 2px 0', fontSize: 10.5 }}>
+                        {c.type === 'pdf' ? 'PDF' : 'IMG'}
+                        <button
+                          onClick={() => viewAttachment(c)}
+                          title={`View ${c.name}`}
+                          style={{ background: 'none', border: 'none', color: 'var(--blu)', cursor: 'pointer', padding: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        >{c.name}</button>
+                        <button onClick={() => deleteCert(idx, ci)} title={`Remove ${c.name}`} style={{ background: 'transparent', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 11, padding: 0 }}>&#10005;</button>
+                      </span>
+                    ))}
+                </td>
+                <td>
+                  <label className="btn btn-s" style={{ cursor: 'pointer' }}>
+                    + Add document
+                    <input
+                      type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
+                      aria-label={`Add certification for ${company}`}
+                      onChange={(e) => { addCerts(idx, e.target.files); e.target.value = ''; }}
+                    />
+                  </label>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -388,7 +469,7 @@ function ItemMaster() {
     <>
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Catalog Item Codes <span className="tag tgr">{extra.length}</span></div>
+          <div className="ctitle" style={{ margin: 0 }}>🗂 Item Master <span className="tag tgr">{extra.length}</span></div>
           <input placeholder="Search item…" value={q} onChange={(e) => setQ(e.target.value)} />
           <span style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={addItem}>＋ New Item Code</button>
@@ -460,6 +541,14 @@ function PriceTrends() {
   const matches = (g) => !q || g.item.toLowerCase().includes(q.toLowerCase()) || g.recs.some((r) => String(r.supplier || '').toLowerCase().includes(q.toLowerCase()));
   const summaryGroups = groups.filter(matches);
 
+  // Trend chart over the same history: one line per supplier for a chosen item,
+  // or one line per item across all suppliers. (purchRenderPriceChart 7040)
+  const [chartItem, setChartItem] = useState('');
+  const chart = useMemo(
+    () => buildScrapChart(priceHistory, { itemFil: chartItem, seriesKey: 'supplier' }),
+    [priceHistory, chartItem],
+  );
+
   // Flat detail, newest first, with Δ vs the previous rate for the same supplier+item. (purchRenderPriceHistory 6993)
   const detail = useMemo(() => {
     let rows = priceHistory.slice();
@@ -484,6 +573,48 @@ function PriceTrends() {
       <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>Price Trends by Item <span className="tag tgr">{summaryGroups.length}</span></div>
+        </div>
+        <div className="fbar">
+          <select value={chartItem} onChange={(e) => setChartItem(e.target.value)} aria-label="Chart item">
+            <option value="">All items (one line each)</option>
+            {groups.map((g) => <option key={g.item} value={g.item}>{g.item}</option>)}
+          </select>
+          <span style={{ fontSize: 11, color: 'var(--i2)' }}>
+            {chartItem ? 'One line per supplier for this item.' : 'One line per item across all suppliers.'}
+          </span>
+        </div>
+        {!chart ? (
+          <div style={emptyTd}>No price points yet — they build up as POs are raised.</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 6 }}>
+              {chart.series.map((sr) => (
+                <span key={sr.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginRight: 14, marginBottom: 4, fontSize: 11, color: 'var(--i2)' }}>
+                  <span style={{ width: 14, height: 3, borderRadius: 2, background: sr.color, display: 'inline-block' }} />{sr.label}
+                </span>
+              ))}
+            </div>
+            <div style={{ background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 10, padding: '10px 6px 4px', maxWidth: 640 }}>
+              <svg viewBox={`0 0 ${CHART_BOX.W} ${CHART_BOX.H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="Supplier price trend">
+                {chart.yTicks.map((t, i) => (
+                  <g key={'y' + i}>
+                    <line x1={CHART_BOX.mL} y1={t.y.toFixed(1)} x2={CHART_BOX.W - CHART_BOX.mR} y2={t.y.toFixed(1)} stroke="#eef1f6" strokeWidth="1" strokeDasharray="3 4" />
+                    <text x={CHART_BOX.mL - 6} y={(t.y + 3).toFixed(1)} textAnchor="end" fontSize="8.5" fill="#b6bfcc">{t.label}</text>
+                  </g>
+                ))}
+                {chart.xTicks.map((t) => (
+                  <text key={t.d} x={t.x.toFixed(1)} y={CHART_BOX.H - CHART_BOX.mB + 16} textAnchor="middle" fontSize="8.5" fill="#b6bfcc">{fmtDate(t.d).slice(0, 6)}</text>
+                ))}
+                {chart.series.map((sr) => <path key={'p' + sr.key} d={sr.path} fill="none" stroke={sr.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+                {chart.series.map((sr) => sr.points.map((pt, i) => (
+                  <circle key={sr.key + i} cx={pt.x.toFixed(1)} cy={pt.y.toFixed(1)} r="3" fill={sr.color}><title>{pt.tip}</title></circle>
+                )))}
+              </svg>
+            </div>
+            {chart.truncated && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Showing first 6 series — narrow with the item filter.</div>}
+          </>
+        )}
+        <div className="fbar" style={{ marginTop: 12 }}>
           <input placeholder="Search item / supplier / PO…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         {priceHistory.length === 0 && <div className="al al-b">No price records yet — these are captured automatically when a PO is generated.</div>}
@@ -510,7 +641,7 @@ function PriceTrends() {
       </div>
 
       <div className="card">
-        <div className="ctitle">Price History <span className="tag tgr">{detail.length}</span></div>
+        <div className="ctitle">📈 Price Fluctuation Records <span className="tag tgr">{detail.length}</span></div>
         <div className="tw sy" style={{ maxHeight: 360 }}>
           <table>
             <thead><tr><th>Date</th><th>Supplier</th><th>Item</th><th style={rt}>Rate</th><th style={rt}>Δ</th><th>PO #</th></tr></thead>
@@ -584,7 +715,7 @@ function Payments() {
       </div>
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Supplier Payments <span className="tag tgr">{rows.length}</span></div>
+          <div className="ctitle" style={{ margin: 0 }}>💳 Supplier Payments <span className="tag tgr">{rows.length}</span></div>
           <select value={sup} onChange={(e) => setSup(e.target.value)}>
             <option value="">All Suppliers</option>
             {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -647,6 +778,8 @@ function ScrapAdmin() {
   const [buyers, setBuyers] = useState(() => clone(arr(scrap.buyers)));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [buyerFil, setBuyerFil] = useState('');
+  const [itemFil, setItemFil] = useState('');
 
   const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3500); };
   const buyerName = (id) => { const b = buyers.find((x) => x.id === id); return b ? b.name : id; }; // (scrapBuyerName 4896)
@@ -658,8 +791,28 @@ function ScrapAdmin() {
     return { total, cash, acct };
   }, [txns]);
 
-  const recentPrices = useMemo(() => prices.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 50), [prices]);
-  const recentSales = useMemo(() => txns.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 50), [txns]);
+  const recentPrices = useMemo(() => prices.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))), [prices]);
+  const recentSales = useMemo(() => txns.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))), [txns]);
+
+  // Today's posted buying prices, with the best rate per item starred — the
+  // "who do I sell to today?" board. (scrapAdminToday 5090)
+  const todaysPrices = useMemo(() => {
+    const t = today();
+    const rows = prices.filter((p) => p.date === t)
+      .slice().sort((a, b) => String(buyerName(a.buyer)).localeCompare(String(buyerName(b.buyer))));
+    const best = bestByItem(rows);
+    return rows.map((p) => ({ ...p, best: best[p.item] && best[p.item].buyer === p.buyer }));
+  }, [prices, buyers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Item filter options: every item ever priced, plus the master item list.
+  const itemOptions = useMemo(
+    () => [...new Set(prices.map((p) => p.item).concat(arr(scrap.items)))].filter(Boolean).sort(),
+    [prices, scrap.items],
+  );
+  const chart = useMemo(
+    () => buildScrapChart(prices, { buyerFil, itemFil, labelOf: buyerName }),
+    [prices, buyerFil, itemFil, buyers], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const setCell = (i, f, v) => setBuyers((bs) => bs.map((b, j) => (j === i ? { ...b, [f]: v } : b)));
   function removeBuyer(i) { setBuyers((bs) => bs.filter((_, j) => j !== i)); }
@@ -689,7 +842,7 @@ function ScrapAdmin() {
 
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Scrap Buyers <span className="tag tgr">{buyers.length}</span></div>
+          <div className="ctitle" style={{ margin: 0 }}>✎ Scrap Buyers <span className="tag tgr">{buyers.length}</span></div>
           <span style={{ flex: 1 }} />
           <button className="btn btn-g" onClick={saveBuyers} disabled={busy}>{busy ? 'Saving…' : '💾 Save Buyers'}</button>
         </div>
@@ -717,6 +870,76 @@ function ScrapAdmin() {
 
       <div className="g2" style={{ alignItems: 'start' }}>
         <div className="card">
+          <div className="ctitle">🏷️ Today's Buying Prices — all buyers <span className="tag tgr">{todaysPrices.length}</span></div>
+          <div className="tw sy" style={{ maxHeight: 260 }}>
+            <table>
+              <thead><tr><th>Buyer</th><th>Item</th><th style={rt}>Rate ₹</th><th style={{ textAlign: 'center' }}>Best?</th></tr></thead>
+              <tbody>
+                {todaysPrices.length === 0 ? <tr><td colSpan={4} style={emptyTd}>No buying prices posted today.</td></tr> : todaysPrices.map((p, i) => (
+                  <tr key={i} style={p.best ? { background: '#EAF7EF' } : undefined}>
+                    <td style={{ fontSize: 11 }}>{buyerName(p.buyer)}</td>
+                    <td>{p.item}</td>
+                    <td style={{ ...rt, fontWeight: 700 }}>{inr(p.rate, 2)}</td>
+                    <td style={{ textAlign: 'center' }}>{p.best ? <span style={{ color: 'var(--g)', fontWeight: 700 }}>★ best</span> : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="fbar">
+            <div className="ctitle" style={{ margin: 0 }}>📈 Scrap Price Trends</div>
+            <span style={{ fontSize: 11, color: 'var(--i3)' }}>{scrapChartTitle({ buyerFil, itemFil, labelOf: buyerName })}</span>
+            <span style={{ flex: 1 }} />
+            <select value={buyerFil} onChange={(e) => setBuyerFil(e.target.value)} aria-label="Filter by buyer">
+              <option value="">All Buyers</option>
+              {buyers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <select value={itemFil} onChange={(e) => setItemFil(e.target.value)} aria-label="Filter by item">
+              <option value="">All Items</option>
+              {itemOptions.map((i) => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </div>
+          {!chart ? (
+            <div style={emptyTd}>No price points yet. As buyers post prices and sales are recorded, trends appear here.</div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                {chart.series.map((sr) => (
+                  <span key={sr.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginRight: 14, marginBottom: 4, fontSize: 11, color: 'var(--i2)' }}>
+                    <span style={{ width: 14, height: 3, borderRadius: 2, background: sr.color, display: 'inline-block' }} />{sr.label}
+                  </span>
+                ))}
+              </div>
+              <div style={{ background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 10, padding: '10px 6px 4px', maxWidth: 640 }}>
+                <svg viewBox={`0 0 ${CHART_BOX.W} ${CHART_BOX.H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="Scrap buying price trend">
+                  {chart.yTicks.map((t, i) => (
+                    <g key={'y' + i}>
+                      <line x1={CHART_BOX.mL} y1={t.y.toFixed(1)} x2={CHART_BOX.W - CHART_BOX.mR} y2={t.y.toFixed(1)} stroke="#eef1f6" strokeWidth="1" strokeDasharray="3 4" />
+                      <text x={CHART_BOX.mL - 6} y={(t.y + 3).toFixed(1)} textAnchor="end" fontSize="8.5" fill="#b6bfcc">{t.label}</text>
+                    </g>
+                  ))}
+                  {chart.xTicks.map((t) => (
+                    <text key={t.d} x={t.x.toFixed(1)} y={CHART_BOX.H - CHART_BOX.mB + 16} textAnchor="middle" fontSize="8.5" fill="#b6bfcc">{fmtDate(t.d).slice(0, 6)}</text>
+                  ))}
+                  {chart.series.map((sr) => (
+                    <path key={'p' + sr.key} d={sr.path} fill="none" stroke={sr.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                  ))}
+                  {chart.series.map((sr) => sr.points.map((pt, i) => (
+                    <circle key={sr.key + i} cx={pt.x.toFixed(1)} cy={pt.y.toFixed(1)} r="3" fill={sr.color}><title>{pt.tip}</title></circle>
+                  )))}
+                </svg>
+              </div>
+              {chart.truncated && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Showing first 6 series — use the filters to narrow.</div>}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="g2" style={{ alignItems: 'start' }}>
+        <div className="card">
           <div className="ctitle">Recent Buying Prices <span className="tag tgr">{prices.length}</span></div>
           <div className="tw sy" style={{ maxHeight: 320 }}>
             <table>
@@ -737,7 +960,7 @@ function ScrapAdmin() {
 
         <div className="card">
           <div className="fbar">
-            <div className="ctitle" style={{ margin: 0 }}>Recent Scrap Sales <span className="tag tgr">{txns.length}</span></div>
+            <div className="ctitle" style={{ margin: 0 }}>💰 Scrap Sales <span className="tag tgr">{txns.length}</span></div>
             <span style={{ flex: 1 }} />
             <button className="btn btn-s" onClick={exportSales} disabled={!txns.length}>⬇ Export</button>
           </div>

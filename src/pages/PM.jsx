@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { balance, num } from '../lib/calc.js';
 import { dash, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
+import CsaPanel from '../components/CsaPanel.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -31,6 +32,7 @@ const rt = { textAlign: 'right' };
 export default function PM() {
   const { mods, save } = useData();
   const [q, setQ] = useState('');
+  const [tab, setTab] = useState('print');
   const [edits, setEdits] = useState({});   // { [so]: {printDate?, printedKg?, printedMt?} }
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -112,9 +114,20 @@ export default function PM() {
     exportAOA([header, ...body], `Bloomflex_Printing_Progress_${today()}.xlsx`, 'Printing Progress');
   }
 
+  if (tab === 'csa') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">Production</div>
+        <PmTabs tab={tab} setTab={setTab} />
+        <CsaPanel role="pm" />
+      </div>
+    );
+  }
+
   return (
     <div id="app">
       <div className="pg-ttl">Production — Printing Progress</div>
+      <PmTabs tab={tab} setTab={setTab} />
       <div className="pg-sub">Printed quantity vs. total order weight/metres for every open sale order, across both sheets.</div>
 
       <div className="fbar">
@@ -179,6 +192,21 @@ export default function PM() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+const PM_TABS = [
+  { k: 'print', label: '🖨 Printing Progress' },
+  { k: 'csa', label: '🔬 CSA — plant comments' },
+];
+
+function PmTabs({ tab, setTab }) {
+  return (
+    <div className="step-bar" style={{ flexWrap: 'wrap' }}>
+      {PM_TABS.map((t) => (
+        <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
+      ))}
     </div>
   );
 }

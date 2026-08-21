@@ -42,7 +42,7 @@ npm test         # Vitest (run once);  npm run test:watch to watch
   save whole blobs.
 - **`src/auth.jsx`** — JWT sign-in; token/user/role in `localStorage`.
 - **`src/lib/*`** — business math (kept in the browser for display). `seq.js` holds
-  the single, authoritative document-number formats (invoice = `BL/<yy>-<yy>/<n>`,
+  the single, authoritative document-number formats (invoice = `BFX/<yyyy>-<yy>/<0nn>`,
   matching the backend `SequenceService`).
 - **`src/lib/roles.js`** — client-side route gating (UX). Authorization is
   **enforced on the server**; the client gate is convenience only.

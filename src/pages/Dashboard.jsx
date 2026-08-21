@@ -10,18 +10,31 @@ import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
+import BomPanel from '../components/BomPanel.jsx';
+import KamPanel from '../components/KamPanel.jsx';
+import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
+import FgValuePanel from '../components/FgValuePanel.jsx';
+import DropdownAdmin from '../components/DropdownAdmin.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+// Tab order and labels are production's (the dash-tab-* buttons in the monolith).
+// SO Costing / Audit Log / System are additions this app has and production does
+// not; they sit at the end so the shared tabs stay in the order people know.
 const TABS = [
-  { k: 'summary', label: '📈 Summary' },
+  { k: 'summary', label: '📊 Summary' },
+  { k: 'trends', label: '📈 Trends & Forecast' },
   { k: 'price', label: '💰 Price Master' },
+  { k: 'fgval', label: '💹 FG Value' },
   { k: 'jss', label: '📋 JSS Editor' },
-  { k: 'customers', label: '🏢 Customers' },
   { k: 'delete', label: '🗑 Delete SOs' },
-  { k: 'trends', label: '📊 Trends & Forecast' },
+  { k: 'customers', label: '🏢 Customers' },
+  { k: 'kam', label: '🎯 Customer KAM & Targets' },
+  { k: 'users', label: '👤 Users & Access' },
+  { k: 'dropdowns', label: '🧩 Drop-down selections' },
+  { k: 'bom', label: '🧱 BOM' },
+  { k: 'material', label: '🧮 Raw Material' },
   { k: 'costing', label: '🧮 SO Costing' },
-  { k: 'users', label: '👥 Users & Access' },
   { k: 'audit', label: '🧾 Audit Log' },
   { k: 'system', label: '🛠 System' },
 ];
@@ -31,8 +44,11 @@ export default function Dashboard() {
   const [tab, setTab] = useState('summary');
   return (
     <div id="app">
-      <div className="pg-ttl">Dashboard</div>
-      <div className="pg-sub">Gross margins, sales, projections and master-data editing — super-admin only.</div>
+      <div className="pg-ttl">📊 Business Dashboard</div>
+      <div className="pg-sub">Sales, open orders, dispatch and loss of business analysis</div>
+      {/* Raw-material rates sit ABOVE the tabs in production — they feed every
+          margin figure on the screen, whichever tab is open. */}
+      <RmRatesBar />
       <div className="step-bar" style={{ flexWrap: 'wrap' }}>
         {TABS.map((t) => (
           <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
@@ -45,6 +61,11 @@ export default function Dashboard() {
       {tab === 'delete' && <DeleteSOs />}
       {tab === 'trends' && <Trends />}
       {tab === 'costing' && <SOCosting />}
+      {tab === 'kam' && <KamPanel />}
+      {tab === 'bom' && <BomPanel />}
+      {tab === 'material' && <RawMaterialPanel />}
+      {tab === 'fgval' && <FgValuePanel />}
+      {tab === 'dropdowns' && <DropdownAdmin />}
       {tab === 'users' && <UsersAccess />}
       {tab === 'audit' && <AuditLog />}
       {tab === 'system' && <SystemPanel />}
@@ -139,25 +160,17 @@ function SystemPanel() {
 }
 
 /* ─────────────────────────── Summary ─────────────────────────── */
-function Summary() {
-  const { mods, save } = useData();
-  const [filter, setFilter] = useState('month');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [client, setClient] = useState('');
+/**
+ * ⚗ Raw Material Rates (₹/kg) + Customer Master upload — production renders this
+ * above the Dashboard tab bar, not inside a tab, because the rates drive the cost
+ * and margin figures on every tab. (dash-tab section 1 / pushMaterialRates)
+ */
+function RmRatesBar() {
+  const { save } = useData();
   const [rates, setRates] = useState({ bopp: 0, afbopp: 0, afldpe: 0 });
-  const [showDrill, setShowDrill] = useState(false);
   const [msg, setMsg] = useState('');
 
-  // RM ₹/kg rates are server-side now (shared across devices), not localStorage.
   useEffect(() => { rmRatesApi.get().then((r) => setRates((cur) => ({ ...cur, ...r }))).catch(() => {}); }, []);
-
-  const ctx = { prices: mods.prices, jss: mods.jss, matRates: rates };
-  const range = filter === 'custom' ? { from, to } : dashRange(filter);
-  const clients = useMemo(() => [...new Set(['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).map((r) => r.customer).filter(Boolean))].sort(), [mods.oab]);
-  const k = useMemo(() => computeKPIs(mods.oab, { from: range.from, to: range.to, client }, ctx), [mods.oab, range.from, range.to, client, rates, mods.prices, mods.jss]);
-
-  const sales = [...k.periodInv, ...k.periodManual].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   async function pushRates() {
     try {
@@ -186,20 +199,45 @@ function Summary() {
   }
 
   return (
-    <>
-      <div className="card">
-        <div className="ctitle">Raw-Material Rates (₹/kg) &amp; Master Data</div>
-        <div className="g4">
-          <div className="fg"><label>BOPP</label><input type="number" value={rates.bopp || ''} onChange={(e) => setRates({ ...rates, bopp: num(e.target.value) })} /></div>
-          <div className="fg"><label>AF-BOPP</label><input type="number" value={rates.afbopp || ''} onChange={(e) => setRates({ ...rates, afbopp: num(e.target.value) })} /></div>
-          <div className="fg"><label>AF-LDPE</label><input type="number" value={rates.afldpe || ''} onChange={(e) => setRates({ ...rates, afldpe: num(e.target.value) })} /></div>
-          <div className="fg"><label>&nbsp;</label><button className="btn btn-g" onClick={pushRates}>Push Rates</button></div>
-        </div>
-        <div className="fg" style={{ marginTop: 6 }}><label>Upload Customer Master (.xlsx — columns: Customer, Billing, Shipping, Warehouse, DispatchLoc, Contact, Phone, GSTIN, State)</label>
-          <input type="file" accept=".xlsx,.xls" onChange={(e) => uploadCM(e.target.files[0])} /></div>
-        {msg && <div className="al al-g" style={{ marginTop: 8 }}>{msg}</div>}
+    <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--i2)', marginBottom: 10 }}>
+        ⚗ Raw Material Rates (₹/kg)
+        <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--i3)', marginLeft: 8 }}>Cost = Pouch Weight ÷ 1000 × Rate</span>
       </div>
+      <div className="g4">
+        <div className="fg"><label>BOPP</label><input type="number" min="0" step="0.01" placeholder="₹/kg" value={rates.bopp || ''} onChange={(e) => setRates({ ...rates, bopp: num(e.target.value) })} /></div>
+        <div className="fg"><label>AF BOPP</label><input type="number" min="0" step="0.01" placeholder="₹/kg" value={rates.afbopp || ''} onChange={(e) => setRates({ ...rates, afbopp: num(e.target.value) })} /></div>
+        <div className="fg"><label>AF LDPE</label><input type="number" min="0" step="0.01" placeholder="₹/kg" value={rates.afldpe || ''} onChange={(e) => setRates({ ...rates, afldpe: num(e.target.value) })} /></div>
+        <div className="fg"><label>&nbsp;</label><button className="btn btn-g" onClick={pushRates}>✓ Push Rates</button></div>
+      </div>
+      <div className="fg" style={{ marginTop: 6 }}><label>Upload Customer Master (.xlsx — columns: Customer, Billing, Shipping, Warehouse, DispatchLoc, Contact, Phone, GSTIN, State)</label>
+        <input type="file" accept=".xlsx,.xls" onChange={(e) => uploadCM(e.target.files[0])} /></div>
+      {msg && <div className="al al-g" style={{ marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
 
+function Summary() {
+  const { mods } = useData();
+  const [filter, setFilter] = useState('month');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [client, setClient] = useState('');
+  const [rates, setRates] = useState({ bopp: 0, afbopp: 0, afldpe: 0 });
+  const [showDrill, setShowDrill] = useState(false);
+
+  // RM ₹/kg rates are server-side now (shared across devices), not localStorage.
+  useEffect(() => { rmRatesApi.get().then((r) => setRates((cur) => ({ ...cur, ...r }))).catch(() => {}); }, []);
+
+  const ctx = { prices: mods.prices, jss: mods.jss, matRates: rates };
+  const range = filter === 'custom' ? { from, to } : dashRange(filter);
+  const clients = useMemo(() => [...new Set(['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).map((r) => r.customer).filter(Boolean))].sort(), [mods.oab]);
+  const k = useMemo(() => computeKPIs(mods.oab, { from: range.from, to: range.to, client }, ctx), [mods.oab, range.from, range.to, client, rates, mods.prices, mods.jss]);
+
+  const sales = [...k.periodInv, ...k.periodManual].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  return (
+    <>
       <div className="fbar">
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="day">Today</option><option value="month">This Month</option><option value="last_month">Last Month</option><option value="custom">Custom</option>
@@ -276,42 +314,106 @@ function KPI({ label, value, cls, color, sub, onClick }) {
 }
 
 /* ─────────────────────────── Price Master ─────────────────────────── */
+const TRANSPORT_OPTS = ['At Actuals', 'Customer', 'Bloomflex', 'Included'];
+const PM_FILTERS = [{ k: 'all', label: 'All' }, { k: 'active', label: 'Active' }, { k: 'redundant', label: 'Redundant' }];
+
+/**
+ * Price Master — sale & cost per spec, with the live margin. (renderPMEdit 8134)
+ *
+ * Rows come from the JSS master, so a spec that appears under several
+ * customers/job names is listed once per entry and is reachable by searching any
+ * of them. Price data is keyed by TRIMMED spec, so those sibling rows always show
+ * — and edit — the same figures. Specs that exist only in the Price Master (no
+ * JSS row) are appended, so nothing priced is ever hidden.
+ */
 function PriceMaster() {
   const { mods, save } = useData();
   const [edits, setEdits] = useState(() => clone(mods.prices || {}));
   const [q, setQ] = useState('');
+  const [statusF, setStatusF] = useState('all');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
-  const specs = useMemo(() => {
-    const set = new Set(Object.keys(edits));
-    (mods.jss || []).forEach((j) => { if (j.spec) set.add(j.spec); });
-    return [...set].sort();
+  const rows = useMemo(() => {
+    const jss = (mods.jss || []).filter((j) => String(j.spec || '').trim());
+    const seen = new Set(jss.map((j) => String(j.spec).trim()));
+    // Priced specs with no JSS entry still need a row, or they become uneditable.
+    const orphans = Object.keys(edits).filter((sp) => sp && !seen.has(String(sp).trim()))
+      .map((sp) => ({ spec: sp, _orphan: true }));
+    return [...jss, ...orphans];
   }, [mods.jss, edits]);
-  const filtered = specs.filter((s) => !q || s.toLowerCase().includes(q.toLowerCase()));
-  const setCell = (spec, field, val) => setEdits((e) => ({ ...e, [spec]: { price: 0, costPrice: 0, transport: 'At Actuals', ...e[spec], [field]: field === 'transport' ? val : num(val) } }));
 
-  async function saveAll() { setBusy(true); try { await save('prices', edits); setMsg('✅ Price Master saved'); setTimeout(() => setMsg(''), 4000); } catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); } }
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return rows.filter((j) => {
+      if (statusF === 'active' && j.status !== 'Active') return false;
+      if (statusF === 'redundant' && j.status !== 'Redundant') return false;
+      if (!s) return true;
+      return [j.spec, j.customer, j.jobName, j.subBrand].some((v) => String(v || '').toLowerCase().includes(s));
+    });
+  }, [rows, q, statusF]);
+
+  const setCell = (spec, field, val) => setEdits((e) => ({
+    ...e,
+    [spec]: { price: 0, costPrice: 0, transport: 'At Actuals', ...e[spec], [field]: field === 'transport' ? val : num(val) },
+  }));
+
+  async function saveAll() {
+    setBusy(true);
+    try { await save('prices', edits); setMsg('✅ Price Master saved'); setTimeout(() => setMsg(''), 4000); }
+    catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
+  }
 
   return (
     <div className="card">
       <div className="fbar">
         <div className="ctitle" style={{ margin: 0 }}>Price Master — sale &amp; cost per spec</div>
-        <input placeholder="Search spec…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input placeholder="Search spec / customer / job / sub-brand…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 260 }} />
+        {PM_FILTERS.map((f) => (
+          <button key={f.k} className={'btn btn-s' + (statusF === f.k ? ' on' : '')} onClick={() => setStatusF(f.k)}
+            style={statusF === f.k ? { background: 'var(--blu)', color: '#fff' } : undefined}>{f.label}</button>
+        ))}
         <span style={{ flex: 1 }} />
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save Price Master'}</button>
       </div>
       {msg && <div className="al al-g">{msg}</div>}
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
         <table>
-          <thead><tr><th>Spec</th><th style={{ width: 130 }}>Sale ₹</th><th style={{ width: 130 }}>Cost ₹</th><th>Transport</th></tr></thead>
+          <thead><tr>
+            <th>Spec</th><th>Customer</th><th>Sub Brand</th><th style={{ minWidth: 220 }}>Job Name</th><th>Dispatch Form</th>
+            <th style={{ width: 110, textAlign: 'right' }}>Sale ₹</th><th style={{ width: 110, textAlign: 'right' }}>Cost ₹</th>
+            <th style={{ width: 120 }}>Transport</th><th style={{ width: 100, textAlign: 'right' }}>Margin</th>
+          </tr></thead>
           <tbody>
-            {filtered.map((s) => { const e = edits[s] || {}; return (
-              <tr key={s}><td><span className="tag tb" style={{ fontSize: 10 }}>{s}</span></td>
-                <td><input type="number" step="0.01" value={e.price ?? ''} onChange={(ev) => setCell(s, 'price', ev.target.value)} style={{ width: '100%' }} /></td>
-                <td><input type="number" step="0.01" value={e.costPrice ?? ''} onChange={(ev) => setCell(s, 'costPrice', ev.target.value)} style={{ width: '100%' }} /></td>
-                <td><input value={e.transport ?? ''} placeholder="At Actuals" onChange={(ev) => setCell(s, 'transport', ev.target.value)} style={{ width: '100%' }} /></td>
-              </tr>); })}
+            {filtered.length === 0 ? (
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
+            ) : filtered.map((j, i) => {
+              const spec = String(j.spec).trim();
+              const e = edits[spec] || {};
+              const sp = num(e.price);
+              const cp = num(e.costPrice);
+              // A margin needs BOTH figures — one alone would read as a full profit.
+              const margin = (sp && cp) ? sp - cp : null;
+              return (
+                <tr key={spec + '|' + i}>
+                  <td><span className="tag tb" style={{ fontSize: 10 }}>{spec}</span></td>
+                  <td style={{ fontSize: 11 }}>{j.customer || '-'}</td>
+                  <td style={{ fontSize: 11, color: 'var(--i3)' }}>{j.subBrand || '-'}</td>
+                  <td style={{ fontSize: 11, whiteSpace: 'normal', wordBreak: 'break-word' }}>{j.jobName || '-'}</td>
+                  <td style={{ fontSize: 11 }}>{j.dispatchForm || '-'}</td>
+                  <td><input type="number" step="0.01" aria-label={`Sale price for ${spec}`} value={e.price ?? ''} onChange={(ev) => setCell(spec, 'price', ev.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+                  <td><input type="number" step="0.01" aria-label={`Cost price for ${spec}`} value={e.costPrice ?? ''} onChange={(ev) => setCell(spec, 'costPrice', ev.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+                  <td>
+                    <select value={e.transport ?? 'At Actuals'} aria-label={`Transport for ${spec}`} onChange={(ev) => setCell(spec, 'transport', ev.target.value)} style={{ width: '100%' }}>
+                      {TRANSPORT_OPTS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: margin === null ? 'var(--i3)' : margin >= 0 ? 'var(--g)' : 'var(--red)' }}>
+                    {margin === null ? '-' : '₹' + margin.toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

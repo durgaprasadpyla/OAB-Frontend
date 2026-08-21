@@ -15,17 +15,18 @@ export function isSOFormat(s) {
 }
 
 /**
- * Next invoice number, e.g. "BL/26-27/329". Returns { no, next }.
+ * Next invoice number, e.g. "BFX/2026-27/093". Returns { no, next }.
  *
- * Single, authoritative definition of the invoice-number format. It matches the
- * invoice screen (financial-year prefix, Apr-start) and the backend
- * SequenceService; the old divergent "BF/<yy>/<n>" form has been retired.
+ * Single, authoritative definition of the invoice-number format, matching the
+ * backend SequenceService: BFX company code (client's series since Aug 2026),
+ * Apr-start financial year as <yyyy>-<yy>, number zero-padded to 3 digits.
+ * The legacy "BL/<yy>-<yy>/<n>" series is retired (historical entries keep it).
  * `dateIso` (optional) selects the financial year; defaults to today.
  */
 export function nextInvNo(lastInvNo, dateIso) {
   const [y1, y2] = financialYear(dateIso).split('-');
   const n = num(lastInvNo) + 1;
-  return { no: `BL/${y1.slice(-2)}-${y2.slice(-2)}/${n}`, next: n };
+  return { no: `BFX/${y1}-${y2.slice(-2)}/${String(n).padStart(3, '0')}`, next: n };
 }
 
 // nextPONum was removed: purchase PO numbers are now assigned server-side

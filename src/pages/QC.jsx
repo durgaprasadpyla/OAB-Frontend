@@ -3,6 +3,8 @@ import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import CapaPanel from '../components/CapaPanel.jsx';
+import CertificatePanel from '../components/CertificatePanel.jsx';
+import CsaPanel from '../components/CsaPanel.jsx';
 
 // QC / JSS spec entry, ported from the legacy showQCView + initQCForm +
 // saveQCSpec + qcCalcPW + renderQCTable + exportJSSExcel. Persists to the
@@ -54,6 +56,7 @@ export default function QC() {
 
   const [form, setForm] = useState(BLANK);
   const [q, setQ] = useState('');
+  const [tab, setTab] = useState('spec');
   const [msg, setMsg] = useState(null); // { type: 'g' | 'r', text }
   const [busy, setBusy] = useState(false);
 
@@ -143,9 +146,38 @@ export default function QC() {
     exportAOA([header, ...rows], 'Bloomflex_JSS_Master_' + today().replace(/-/g, '_'), 'JSS Master');
   }
 
+  if (tab === 'cert') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">QC</div>
+        <QcTabs tab={tab} setTab={setTab} />
+        <CertificatePanel />
+      </div>
+    );
+  }
+  if (tab === 'csa') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">QC</div>
+        <QcTabs tab={tab} setTab={setTab} />
+        <CsaPanel role="qc" />
+      </div>
+    );
+  }
+  if (tab === 'capa') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">QC</div>
+        <QcTabs tab={tab} setTab={setTab} />
+        <CapaPanel />
+      </div>
+    );
+  }
+
   return (
     <div id="app">
       <div className="pg-ttl">QC — JSS Spec Entry</div>
+      <QcTabs tab={tab} setTab={setTab} />
       <div className="pg-sub">Add a new JSS master spec and review the full spec list.</div>
 
       <div className="card">
@@ -252,8 +284,24 @@ export default function QC() {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
 
-      <CapaPanel />
+// Labels and order match production's QC tab bar (qcSwitch).
+const QC_TABS = [
+  { k: 'spec', label: '➕ Add JSS Spec' },
+  { k: 'cert', label: '📄 Certificates (COA / Food Grade)' },
+  { k: 'capa', label: '🛠 CAPA' },
+  { k: 'csa', label: '🧪 CSA Reports' },
+];
+
+function QcTabs({ tab, setTab }) {
+  return (
+    <div className="step-bar" style={{ flexWrap: 'wrap' }}>
+      {QC_TABS.map((t) => (
+        <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
+      ))}
     </div>
   );
 }

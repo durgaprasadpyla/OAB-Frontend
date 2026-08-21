@@ -46,7 +46,7 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
 /**
  * Reserve the next server-authoritative document number (type ∈ 'SO'|'INV'|'PO').
  * The server increments an atomic counter so concurrent creators never collide.
- * Returns the formatted number string, e.g. "BL/26-27/329".
+ * Returns the formatted number string, e.g. "BFX/2026-27/093".
  */
 export async function allocateNumber(type) {
   const r = await api('/api/seq/' + encodeURIComponent(type), { method: 'POST' });
@@ -105,3 +105,50 @@ export function field(row, key) {
   const v = row[key] ?? row[key.toUpperCase()];
   return v == null ? '' : v;
 }
+
+// ── Human Resources (module: hr_* tables, /api/hr/**) ──────────────────────
+// Server-enforced: the whole controller is @PreAuthorize HR or SUPERADMIN, so a
+// wrong role gets a 403 (err.code='forbidden') and the HR area simply stays shut.
+const qs = (params) => {
+  const p = Object.entries(params || {}).filter(([, v]) => v !== '' && v != null);
+  return p.length ? '?' + p.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&') : '';
+};
+
+export const hrApi = {
+  dashboard: () => api('/api/hr/dashboard'),
+  meta: () => api('/api/hr/meta'),
+
+  listEmployees: (filters) => api('/api/hr/employees' + qs(filters)),
+  getEmployee: (id) => api('/api/hr/employees/' + encodeURIComponent(id)),
+  createEmployee: (body) => api('/api/hr/employees', { method: 'POST', body }),
+  updateEmployee: (id, body) => api('/api/hr/employees/' + encodeURIComponent(id), { method: 'PUT', body }),
+  setEmployeeStatus: (id, status, remarks) =>
+    api(`/api/hr/employees/${encodeURIComponent(id)}/status`, { method: 'POST', body: { status, remarks } }),
+
+  listDocuments: (id) => api(`/api/hr/employees/${encodeURIComponent(id)}/documents`),
+  addDocument: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/documents`, { method: 'POST', body }),
+  deleteDocument: (docId) => api('/api/hr/documents/' + encodeURIComponent(docId), { method: 'DELETE' }),
+
+  listDepartments: (p) => api('/api/hr/departments' + qs(p)),
+  createDepartment: (body) => api('/api/hr/departments', { method: 'POST', body }),
+  updateDepartment: (id, body) => api('/api/hr/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listDesignations: (p) => api('/api/hr/designations' + qs(p)),
+  createDesignation: (body) => api('/api/hr/designations', { method: 'POST', body }),
+  updateDesignation: (id, body) => api('/api/hr/designations/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listLeaveTypes: (p) => api('/api/hr/leave-types' + qs(p)),
+  createLeaveType: (body) => api('/api/hr/leave-types', { method: 'POST', body }),
+  updateLeaveType: (id, body) => api('/api/hr/leave-types/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listLeaveRequests: (filters) => api('/api/hr/leave-requests' + qs(filters)),
+  createLeaveRequest: (body) => api('/api/hr/leave-requests', { method: 'POST', body }),
+  approveLeave: (id, comment) => api(`/api/hr/leave-requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { comment } }),
+  rejectLeave: (id, comment) => api(`/api/hr/leave-requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { comment } }),
+
+  audit: (p) => api('/api/hr/audit' + qs(p)),
+};
+
+/** Forced password change after a first login or an admin reset. */
+export const changePassword = (currentPassword, newPassword) =>
+  api('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });

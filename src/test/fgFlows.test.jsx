@@ -25,7 +25,9 @@ describe('FG Entry — record production', () => {
     const { saved } = renderApp(<FGLedger />, { modules: { jss, fgLedger: {} } });
     await screen.findByText(/FG Entry/);
 
-    await user.selectOptions(fieldByLabel(/JSS \/ Spec/), 'A1');
+    // The spec picker is a type-to-search combobox now (matching production),
+    // so type the spec rather than selecting an option.
+    await user.type(screen.getByLabelText('JSS / Spec #'), 'A1');
     await user.type(fieldByLabel(/FG Produced on this date/), '20000');
     await user.click(screen.getByRole('button', { name: /Add Production/ }));
 
@@ -44,19 +46,19 @@ describe('New PO — FG drawdown prompt', () => {
     const { saved } = renderApp(<NewPO />, {
       modules: { jss, prices, customers, oab: oabModule({ lastSO: { y: '26', n: 400 } }), fgLedger: ledgerA1() },
     });
-    await screen.findByText('New PO / Enter SO');
+    await screen.findByText('New PO Entry');
 
-    await user.type(fieldByLabel('PO Number'), 'PO-100');
-    await user.selectOptions(fieldByLabel('Customer'), 'Acme');
-    await user.click(screen.getByRole('button', { name: /Next → Select SKUs/ }));
+    await user.type(fieldByLabel(/PO Number/), 'PO-100');
+    await user.selectOptions(screen.getByLabelText('Customer'), 'Acme');
+    await user.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
 
     const checks = screen.getAllByRole('checkbox');
     await user.click(checks[checks.length - 1]);
     await user.type(screen.getByRole('spinbutton'), '500');
-    await user.click(screen.getByRole('button', { name: /Next → Confirm/ }));
+    await user.click(screen.getByRole('button', { name: /Review →/ }));
 
     expect(await screen.findByText('26/401')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Create 1 SO/ }));
+    await user.click(screen.getByRole('button', { name: /Add to OAB/ }));
 
     // The drawdown modal appears because A1 has 5000 available. Step 4 has no
     // inputs, so the modal's FG field is the only spinbutton on screen.
@@ -108,9 +110,11 @@ describe('QC CAPA register', () => {
   it('adds a CAPA record to module 11', async () => {
     const user = userEvent.setup();
     const { saved } = renderApp(<QC />, { modules: { jss, capa: [] }, role: 'qc' });
+    // CAPA now lives on its own QC tab, alongside Spec Entry and Certificates.
+    await user.click(await screen.findByText(/CAPA/));
     await screen.findByText(/QC CAPA/);
 
-    // Scope to the CAPA card — the QC spec form above it also has a "Customer" field.
+    // Scope to the CAPA card in case another card gains a "Customer" field.
     await user.click(screen.getByRole('button', { name: /\+ New CAPA/ }));
     const capaCard = screen.getByText(/QC CAPA/).closest('.card');
     await user.type(within(capaCard).getByText(/^Customer$/).closest('.fg').querySelector('input'), 'Acme');

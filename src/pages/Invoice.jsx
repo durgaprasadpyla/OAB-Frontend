@@ -19,7 +19,7 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 const emptyHeader = (lastInvNo) => ({
   ivNo: nextInvNo(lastInvNo).no, ivDt: today(), po: '', transporter: '', dcNo: '', vehicle: '', driver: '',
-  placeOfSupply: '', paymentTerms: '30 days', freight: '0', gstType: 'IGST',
+  placeOfSupply: '', warehouseName: '', paymentTerms: '30 days', freight: '0', gstType: 'IGST',
   customer: '', billingAddr: '', shippingAddr: '', billingGstin: '', shippingGstin: '', contactPerson: '', contactNo: '',
 });
 
@@ -27,7 +27,8 @@ const emptyHeader = (lastInvNo) => ({
 export default function Invoice() {
   const { mods, reloadModule } = useData();
   const [h, setH] = useState(() => emptyHeader(mods.oab && mods.oab.lastInvNo));
-  const [lines, setLines] = useState({});   // { [so]: {checked, qty, fg, rate} }
+  const [lines, setLines] = useState({});   // { [so]: {checked, qty, rate} }
+  const [posOptions, setPosOptions] = useState([]);   // Place-of-Supply choices for the picked PO
   const [pendInv, setPendInv] = useState(null);
   const [plItems, setPlItems] = useState([]);
   const [showPL, setShowPL] = useState(false);
@@ -35,6 +36,7 @@ export default function Invoice() {
   const [autoPdf, setAutoPdf] = useState(false);
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const docRef = useRef(null);
 
   // The invoice register now comes from the normalized /api/invoices endpoint (each
@@ -60,10 +62,18 @@ export default function Invoice() {
     const loc = first.dispLoc || '';
     const cm = getCustByLoc(mods.customers, cu, loc) || getCustLocations(mods.customers, cu)[0] || null;
     const locs = getCustLocations(mods.customers, cu);
-    const placeOfSupply = (cm && (cm.warehouseName || cm.dispatchLoc)) || first.warehouseName || loc || '';
+    // Place of Supply is picked from the customer's dispatch locations, defaulting to
+    // the warehouse the SO was created against. (onInvPO)
+    const defWH = first.warehouseName || loc || '';
+    const opts = locs.length
+      ? locs.map((l) => ({ value: l.warehouseName || l.dispatchLoc, label: (l.warehouseName ? l.warehouseName + ' — ' : '') + l.dispatchLoc }))
+      : (loc ? [{ value: loc, label: loc }] : []);
+    const match = opts.find((o) => o.value === defWH || o.label.includes(defWH));
+    const placeOfSupply = (match && match.value) || (opts[0] && opts[0].value) || '';
+    const warehouseName = (cm && cm.warehouseName) || first.warehouseName || '';
     const billingGstin = (cm && cm.gstin) || '';
     setH((x) => ({
-      ...x, po, customer: cu, placeOfSupply,
+      ...x, po, customer: cu, placeOfSupply, warehouseName,
       billingAddr: (cm && cm.billingAddr) || x.billingAddr,
       shippingAddr: (cm && (cm.shippingAddr || cm.billingAddr)) || x.shippingAddr,
       billingGstin, shippingGstin: billingGstin,
@@ -75,8 +85,8 @@ export default function Invoice() {
     const l = {};
     rows.forEach((r) => { l[r.so] = { checked: false, qty: '', fg: '', rate: getPM(r.spec, mods.prices).price || '' }; });
     setLines(l);
+    setPosOptions(opts);
     setPendInv(null);
-    void locs;
   }
 
   const setLine = (so, patch) => setLines((l) => ({ ...l, [so]: { ...l[so], ...patch } }));
@@ -94,13 +104,17 @@ export default function Invoice() {
       const e = lines[r.so];
       const qty = num(e.qty), rate = num(e.rate);
       const b = invBalance(r);
-      const fgToUse = Math.min(num(e.fg), num(r.fg));
+      // FG allocated to this SO is consumed automatically, up to the invoice qty —
+      // it is never entered by hand. (buildInvoice)
+      const fgToUse = Math.min(qty, num(r.fg));
       if (qty <= 0) return alert('Enter qty > 0 for: ' + (r.jobName || r.spec));
       if (qty > b) return alert(`Invoice qty (${qty.toLocaleString('en-IN')}) exceeds available balance (${b.toLocaleString('en-IN')}) for:\n${r.jobName || r.spec}`);
-      if (fgToUse > 0 && fgToUse > qty) return alert('FG to include cannot exceed Invoice Qty for: ' + (r.jobName || r.spec));
       out.push({
         key: r.jobType === 'StayFresh' ? 'SF' : 'OT', so: r.so, spec: r.spec, jobName: r.jobName,
         qty, rate, fgToUse, lineTotal: qty * rate, dispatchForm: r.dispatchForm || '',
+        // The printed sheet shows the PO date and falls back to the dispatch location
+        // for a missing Ship To, so both travel with the line. (renderInvoiceDoc)
+        poDate: r.poDate || '', dispLoc: r.dispLoc || '',
       });
     }
     setPendInv(out);
@@ -141,9 +155,13 @@ export default function Invoice() {
     }
   }
 
-  function savePDF() {
-    try { saveInvoicePdf(h, pendInv, h.ivNo || 'invoice'); }   // true vector PDF (crisp, ~16 KB)
-    catch (e) { alert('PDF failed: ' + e.message); }
+  // Capture the rendered #inv-doc — the same document the screen and the printer
+  // show — at the 300-dpi-class settings production uses. (saveInvoicePDF)
+  async function savePDF() {
+    setPdfBusy(true);
+    try { await saveInvoicePdf(docRef.current, h.ivNo || 'invoice', h.customer); }
+    catch (e) { alert('PDF error: ' + e.message); }
+    finally { setPdfBusy(false); }
   }
 
   // Re-open a register invoice into the preview (and optionally auto-download).
@@ -162,15 +180,15 @@ export default function Invoice() {
 
   useEffect(() => {
     if (autoPdf && pendInv && docRef.current) {
-      try { saveInvoicePdf(h, pendInv, h.ivNo || 'invoice'); } catch { /* ignore */ }
+      saveInvoicePdf(docRef.current, h.ivNo || 'invoice', h.customer).catch(() => { /* ignore */ });
       setAutoPdf(false);
     }
-  }, [autoPdf, pendInv, h.ivNo]);
+  }, [autoPdf, pendInv, h.ivNo, h.customer]);
 
   return (
     <div id="app">
       <div className="pg-ttl">Invoice</div>
-      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; prices → generate → confirm updates OAB.
+      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; enter prices → generate → print PDF → confirm updates OAB.
         &nbsp;·&nbsp;
         <a href="#" onClick={(e) => { e.preventDefault(); setShowProforma(true); }} style={{ color: 'var(--g)', fontWeight: 600 }}>🧾 Create Proforma Invoice</a>
       </div>
@@ -199,7 +217,12 @@ export default function Invoice() {
               <div className="fg"><label>Driver Name &amp; Mobile</label><input value={h.driver} onChange={(e) => set({ driver: e.target.value })} /></div>
             </div>
             <div className="g2">
-              <div className="fg"><label>Place of Supply *</label><input value={h.placeOfSupply} onChange={(e) => set({ placeOfSupply: e.target.value })} /></div>
+              <div className="fg"><label>Place of Supply *</label>
+                <select value={h.placeOfSupply} onChange={(e) => set({ placeOfSupply: e.target.value })}>
+                  <option value="">— Select —</option>
+                  {posOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
               <div className="fg"><label>Payment Terms</label><input value={h.paymentTerms} onChange={(e) => set({ paymentTerms: e.target.value })} /></div>
             </div>
             <div className="g2">
@@ -244,15 +267,23 @@ export default function Invoice() {
                         <input type="checkbox" className="cb" checked={!!e.checked} onChange={(ev) => setLine(r.so, { checked: ev.target.checked })} />
                         <span style={{ flex: 1 }}>
                           <div style={{ fontSize: 11, fontWeight: 600 }}>{r.jobName || r.spec}</div>
-                          <div style={{ fontSize: 10, color: 'var(--i3)' }}>SO: {r.so} · Available: <strong style={{ color: b > 0 ? 'var(--red)' : 'var(--g)' }}>{dash(b)}</strong> · FG: <strong style={{ color: '#E67E22' }}>{dash(r.fg)}</strong></div>
+                          <div style={{ fontSize: 10, color: 'var(--i3)' }}>SO: {r.so} &nbsp;·&nbsp; Available: <strong style={{ color: b > 0 ? 'var(--red)' : 'var(--g)' }}>{dash(b)}</strong> &nbsp;·&nbsp; FG in stock: <strong style={{ color: '#E67E22' }}>{dash(r.fg)}</strong></div>
                         </span>
                       </label>
                       <div className="g3">
-                        <div><div style={{ fontSize: 9, color: 'var(--i3)' }}>Invoice Qty (max {dash(b)})</div>
-                          <input type="number" min="1" max={b} placeholder="0" disabled={b <= 0} value={e.qty ?? ''} onChange={(ev) => setLine(r.so, { qty: ev.target.value })} style={inpS} /></div>
-                        <div><div style={{ fontSize: 9, color: 'var(--i3)' }}>FG to include (max {dash(r.fg)})</div>
-                          <input type="number" min="0" max={num(r.fg)} placeholder="0" disabled={!(num(r.fg) > 0)} value={e.fg ?? ''} onChange={(ev) => setLine(r.so, { fg: ev.target.value })} style={inpS} /></div>
-                        <div><div style={{ fontSize: 9, color: 'var(--i3)' }}>Rate / Piece (₹)</div>
+                        <div><div style={{ fontSize: 9, color: 'var(--i3)', marginBottom: 2 }}>Invoice Qty (max {dash(b)})</div>
+                          <input type="number" min="1" max={b} placeholder="0" disabled={b <= 0} title={b <= 0 ? 'No balance left' : undefined} value={e.qty ?? ''} onChange={(ev) => setLine(r.so, { qty: ev.target.value })} style={inpS} /></div>
+                        {/* FG is consumed automatically up to the invoice qty — read-only,
+                            exactly as the .iv-fguse cell is in production. */}
+                        <div><div style={{ fontSize: 9, color: 'var(--i3)', marginBottom: 2 }}>FG to be used (auto)</div>
+                          <div
+                            title={num(r.fg) > 0
+                              ? 'FG allocated to this SO is consumed automatically, up to the invoice quantity. Any FG beyond the invoice qty stays with the SO.'
+                              : 'No FG allocated to this SO'}
+                            style={{ ...inpS, display: 'flex', alignItems: 'center', background: 'var(--bg)', fontWeight: 600, color: num(r.fg) > 0 ? '#E67E22' : 'var(--i3)' }}
+                          >{num(r.fg) > 0 ? dash(Math.min(num(e.qty), num(r.fg))) + ' of ' + dash(r.fg) : '—'}</div>
+                        </div>
+                        <div><div style={{ fontSize: 9, color: 'var(--i3)', marginBottom: 2 }}>Rate per Piece (₹)</div>
                           <input type="number" step="0.01" min="0" placeholder="0.00" value={e.rate ?? ''} onChange={(ev) => setLine(r.so, { rate: ev.target.value })} style={inpS} /></div>
                       </div>
                     </div>
@@ -271,7 +302,7 @@ export default function Invoice() {
         <div style={{ marginTop: 8 }}>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn btn-s" onClick={() => setPendInv(null)}>← Back to Edit</button>
-            <button className="btn btn-g" onClick={savePDF}>⬇ Save as PDF</button>
+            <button className="btn btn-g" onClick={savePDF} disabled={pdfBusy}>{pdfBusy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
             <button className="btn btn-b" onClick={confirm} disabled={busy}>{busy ? 'Saving…' : '✓ Confirm & Update OAB'}</button>
             <button className="btn btn-s" style={{ background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--g)' }}
@@ -282,9 +313,23 @@ export default function Invoice() {
         </div>
       )}
 
-      <Register register={register} onView={(e) => loadRegister(e, false)} onPdf={(e) => loadRegister(e, true)} />
+      <Register
+        po={h.po}
+        register={register}
+        onView={(e) => loadRegister(e, false)}
+        onPdf={(e) => loadRegister(e, true)}
+        // Load the invoice, then open its packing list — the register's PL button
+        // must work on an invoice that is not currently in the builder.
+        onPackingList={(e) => { loadRegister(e, false); setShowPL(true); }}
+      />
 
-      {showPL && <PackingListModal items={plItems} setItems={setPlItems} invNo={h.ivNo} onClose={() => setShowPL(false)} />}
+      {showPL && (
+        <PackingListModal
+          items={plItems} setItems={setPlItems} invNo={h.ivNo}
+          header={h} lines={pendInv || []}
+          onClose={() => setShowPL(false)}
+        />
+      )}
       {showProforma && <ProformaModal onClose={() => setShowProforma(false)} />}
     </div>
   );
@@ -301,40 +346,133 @@ function periodRange(period) {
   return ['', ''];
 }
 
-function Register({ register, onView, onPdf }) {
+/**
+ * Certificate status for one register row — mirrors the monolith's invCertCell.
+ * Hourglass while nothing is issued, a dot when some invoice lines are certified,
+ * a tick when all are. Certificates themselves are raised in QC -> Certificates.
+ */
+function certState(inv, type) {
+  const items = (inv.items && inv.items.length) ? inv.items : [{ spec: inv.spec || '' }];
+  const done = items.filter((it) => {
+    const c = inv.certs && inv.certs[`${type}|${it.spec || ''}`];
+    return c && c.done;
+  });
+  if (!done.length) return { mark: '⏳', any: false, all: false };
+  const all = done.length >= items.length;
+  return { mark: all ? '✓' : '●', any: true, all };
+}
+
+function CertBadge({ inv, type, label }) {
+  const st = certState(inv, type);
+  return (
+    <span
+      title={st.any ? `${label} issued${st.all ? '' : ' for some lines'}` : `${label} not issued yet`}
+      style={{
+        display: 'inline-block', height: 20, lineHeight: '18px', padding: '0 7px', margin: '0 2px',
+        borderRadius: 10, fontSize: 9, fontWeight: 700,
+        background: st.any ? 'var(--gl)' : 'transparent',
+        color: st.any ? 'var(--g)' : 'var(--red)',
+        border: `1px solid ${st.any ? 'var(--gm)' : 'transparent'}`,
+      }}
+    >{label} {st.mark}</span>
+  );
+}
+
+function Register({ po, register, onView, onPdf, onPackingList }) {
   const [period, setPeriod] = useState('thismonth');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const reg = register || [];
-  const [rFrom, rTo] = period === 'custom' ? [from, to] : period === 'all' ? ['', ''] : periodRange(period);
-  const rows = reg.filter((e) => (!rFrom || e.date >= rFrom) && (!rTo || e.date <= rTo));
+  const [poFilter, setPoFilter] = useState('');
+  const [q, setQ] = useState('');
+  const [sort, setSort] = useState('newest');
+  // A specific-PO lookup always shows that PO's full history regardless of the period
+  // filter — a deliberate, narrow lookup rather than the general browse view, and the
+  // filter bar is hidden while it is scoped. (renderInvRegisterForPO)
+  const scoped = !!po;
+  const reg = scoped ? (register || []).filter((e) => e.po === po) : (register || []);
+  const [rFrom, rTo] = scoped ? ['', ''] : period === 'custom' ? [from, to] : period === 'all' ? ['', ''] : periodRange(period);
+
+  // Every PO present in the register, for the PO filter. (_invRegPopulatePOs)
+  const pos = useMemo(
+    () => [...new Set(reg.map((e) => e.po).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b))),
+    [reg],
+  );
+
+  const rows = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const out = reg.filter((e) => {
+      if (rFrom && e.date < rFrom) return false;
+      if (rTo && e.date > rTo) return false;
+      if (poFilter && e.po !== poFilter) return false;
+      if (t && ![e.no, e.po, e.customer].some((v) => String(v || '').toLowerCase().includes(t))) return false;
+      return true;
+    });
+    return out.sort((a, b) => (sort === 'newest'
+      ? String(b.date || '').localeCompare(String(a.date || ''))
+      : String(a.date || '').localeCompare(String(b.date || ''))));
+  }, [reg, rFrom, rTo, poFilter, q, sort]);
 
   return (
     <div style={{ marginTop: 24 }}>
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-          <div className="ctitle" style={{ marginBottom: 0 }}>Invoice Register</div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} style={{ height: 30 }}>
+          <div className="ctitle" style={{ marginBottom: 0 }}>{scoped ? 'Previous Invoices for PO: ' + po : 'Invoice Register'}</div>
+          <div style={{ display: scoped ? 'none' : 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={period} aria-label="Period" onChange={(e) => setPeriod(e.target.value)} style={{ height: 30 }}>
               <option value="thismonth">This Month</option><option value="lastmonth">Last Month</option>
               <option value="custom">Custom Range</option><option value="all">All Time</option>
             </select>
             {period === 'custom' && <><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ height: 30 }} /><span style={{ fontSize: 12, color: 'var(--i3)' }}>to</span><input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ height: 30 }} /></>}
-            <span style={{ fontSize: 11, color: 'var(--i3)' }}>{rows.length} invoice(s)</span>
+            <select value={poFilter} aria-label="Filter by PO" onChange={(e) => setPoFilter(e.target.value)} style={{ height: 30 }}>
+              <option value="">All POs</option>
+              {pos.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <select value={sort} aria-label="Sort invoices" onChange={(e) => setSort(e.target.value)} style={{ height: 30 }}>
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+            <input
+              type="text" value={q} placeholder="Search invoice # / PO / customer…"
+              aria-label="Search invoices" onChange={(e) => setQ(e.target.value)} style={{ height: 30, width: 220 }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--i3)' }}>
+              {rows.length} invoice{rows.length === 1 ? '' : 's'}
+              {poFilter ? ' · PO ' + poFilter : q.trim() ? ' · matching "' + q.trim() + '"' : ''}
+            </span>
           </div>
         </div>
         <div className="tw sy" style={{ maxHeight: 300 }}>
           <table>
-            <thead><tr><th>Invoice No</th><th>Date</th><th>PO #</th><th>Customer</th><th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Amount</th><th style={{ textAlign: 'center' }}>Actions</th></tr></thead>
+            <thead><tr>
+              <th>Invoice No</th><th>Date</th><th>PO #</th><th>Customer</th>
+              <th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Amount</th>
+              <th style={{ textAlign: 'center' }}>Certificates</th><th style={{ textAlign: 'center' }}>PDF</th>
+            </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No invoices in this period</td></tr>
+              {rows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>{
+                scoped ? 'No invoices for PO ' + po
+                  : poFilter ? 'No invoices for PO ' + poFilter
+                    : q.trim() ? 'No invoices match your search'
+                      : 'No invoices in this period — try "Last Month" or "All Time" above'
+              }</td></tr>
                 : rows.map((e, i) => (
                   <tr key={e.no + i}>
-                    <td><strong>{e.no}</strong></td><td>{fmtDate(e.date)}</td><td style={{ fontSize: 11 }}>{e.po}</td><td style={{ fontSize: 11 }}>{e.customer}</td>
+                    {/* The invoice number itself opens the invoice, as in production. */}
+                    <td>
+                      <button
+                        aria-label={`Open invoice ${e.no}`} onClick={() => onView(e)}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blu)', fontWeight: 700, fontSize: 12 }}
+                      >{e.no}</button>
+                    </td>
+                    <td>{fmtDate(e.date)}</td><td style={{ fontSize: 11 }}>{e.po}</td><td style={{ fontSize: 11 }}>{e.customer}</td>
                     <td style={{ textAlign: 'right' }}>{dash(e.qty)}</td><td style={{ textAlign: 'right' }}>{rupees(e.amount)}</td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => onView(e)}>View</button>{' '}
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => onPdf(e)}>PDF</button>
+                      <CertBadge inv={e} type="coa" label="COA" />
+                      <CertBadge inv={e} type="fg" label="FG" />
+                    </td>
+                    <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>{' '}
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`Packing list for ${e.no}`} onClick={() => onPackingList(e)}>📦 PL</button>
                     </td>
                   </tr>
                 ))}

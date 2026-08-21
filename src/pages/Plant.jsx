@@ -5,7 +5,7 @@ import { balance } from '../lib/calc.js';
 import { dash, today } from '../lib/format.js';
 import { STAGES, PROD_STATUSES } from '../lib/constants.js';
 import { exportAOA } from '../lib/xlsx.js';
-import { printElement } from '../lib/pdf.js';
+import { useSoOrder, soOrder } from '../lib/soOrder.js';
 
 /**
  * Production Floor — native port of the legacy plant view (showPlantView /
@@ -20,8 +20,9 @@ import { printElement } from '../lib/pdf.js';
 export default function Plant() {
   const { mods, save, reloadModule } = useData();
 
-  // Sheet filter (All / SF / OT), default All.
-  const [filter, setFilter] = useState('All');
+  // Production shows ONE sheet at a time, picked in the header bar. (plant-oab-sh)
+  const [sheet, setSheet] = useState('SF');
+  const order = useSoOrder();
   // Local edits, keyed by `${sheet}|${so}` -> { ps, st }. Cleared on save.
   const [edits, setEdits] = useState({});
   const [busy, setBusy] = useState(false);
@@ -29,20 +30,11 @@ export default function Plant() {
   const [err, setErr] = useState('');
   const tableRef = useRef(null);
 
-  // Flatten both sheets (SF first), open rows only.
-  const rows = useMemo(() => {
-    const out = [];
-    ['SF', 'OT'].forEach((sheet) => {
-      const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
-      arr.forEach((r) => { if (!r.closed) out.push({ r, sheet }); });
-    });
-    return out;
-  }, [mods.oab]);
-
-  const visible = useMemo(
-    () => (filter === 'All' ? rows : rows.filter((x) => x.sheet === filter)),
-    [rows, filter],
-  );
+  // Open rows of the chosen sheet, in the shared newest/oldest order.
+  const visible = useMemo(() => {
+    const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
+    return soOrder(arr.filter((r) => !r.closed), order.newestFirst).map((r) => ({ r, sheet }));
+  }, [mods.oab, sheet, order.newestFirst]);
 
   // Effective (edited-or-stored) prod status + stage for one row.
   function eff(sheet, r) {
@@ -127,80 +119,112 @@ export default function Plant() {
 
   function onExcel() {
     const header = ['SO#', 'Sheet', 'Spec', 'Customer', 'Job', 'Disp Loc', 'PO Qty', 'Balance', 'Prod Status', 'Stage'];
-    const body = visible.map(({ r, sheet }) => {
-      const { ps, st } = eff(sheet, r);
-      return [r.so, sheet, r.spec || '', r.customer || '', r.jobName || '', r.dispLoc || '',
+    const body = visible.map(({ r, sheet: sh }) => {
+      const { ps, st } = eff(sh, r);
+      return [r.so, sh, r.spec || '', r.customer || '', r.jobName || '', r.dispLoc || '',
         Number(r.poQty) || 0, balance(r), ps, st];
     });
     exportAOA([header, ...body], `Plant_${today()}.xlsx`, 'Production Floor');
   }
 
+  /**
+   * Print the board for the floor: a popup window with the table only, A3 landscape,
+   * selects hidden so the printed sheet reads as a report. (printPlantOAB)
+   */
+  function onPrint() {
+    const el = tableRef.current;
+    if (!el) return;
+    const label = sheet === 'SF' ? 'Stay Fresh OAB' : 'Others OAB';
+    const win = window.open('', '_blank', 'width=1100,height=800');
+    if (!win) { alert('Allow pop-ups to print the board.'); return; }
+    const css = '@page{size:A3 landscape;margin:10mm}body{font-family:Arial,sans-serif;font-size:10px}'
+      + 'table{width:100%;border-collapse:collapse}'
+      + 'th{background:#0e6fb8!important;color:#fff!important;padding:5px 7px;font-size:9px}'
+      + 'td{padding:4px 7px;border-bottom:1px solid #eee}select{display:none}'
+      + '@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}';
+    win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + label + '</title><style>'
+      + css + '</style></head><body>' + el.innerHTML + '</body></html>');
+    win.document.close();
+    setTimeout(() => win.print(), 600);
+  }
+
   return (
     <div id="app">
-      <div className="pg-ttl">Production Floor</div>
-      <div className="pg-sub">
-        Open sales orders across both sheets — set production status and stage. {visible.length} SOs.
+      <div className="fbar">
+        <select value={sheet} aria-label="Sheet" onChange={(e) => setSheet(e.target.value)}>
+          <option value="SF">Stay Fresh OAB</option><option value="OT">Others OAB</option>
+        </select>
+        <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} title={order.title} onClick={order.toggle}>{order.label}</button>
+        <span style={{ flex: 1 }} />
+        {/* Production only shows the save button once something is actually changed. */}
+        {dirty && (
+          <button
+            className="btn" style={{ height: 30, fontSize: 12, background: '#E67E22', color: '#fff', fontWeight: 700 }}
+            disabled={busy} onClick={onSave}
+          >{busy ? '⏳ Saving…' : 'Save Changes'}</button>
+        )}
+        <span style={{ fontSize: 11, color: dirty ? 'var(--warn)' : 'var(--i3)' }}>
+          {dirty ? '⚠ Unsaved changes' : msg}
+        </span>
+        <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} onClick={onPrint}>🖨 PDF</button>
+        <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} onClick={onExcel}>⬇ Excel</button>
       </div>
 
-      {msg ? <div className="al al-g">{msg}</div> : null}
       {err ? <div className="al al-r">{err}</div> : null}
 
-      <div className="fbar">
-        {['All', 'SF', 'OT'].map((k) => (
-          <button
-            key={k}
-            className={'btn btn-s' + (filter === k ? ' on' : '')}
-            onClick={() => setFilter(k)}
-          >
-            {k === 'All' ? 'All' : k === 'SF' ? 'Stay Fresh' : 'Others'}
-          </button>
-        ))}
-        <span style={{ flex: 1 }} />
-        <button className="btn btn-g" disabled={!dirty || busy} onClick={onSave}>
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        <button className="btn btn-s" onClick={onExcel}>Download Excel</button>
-        <button className="btn btn-s" onClick={() => printElement(tableRef.current)}>Print</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--g)' }}>
+          {sheet === 'SF' ? 'Stay Fresh OAB' : 'Others OAB'} — Production Status
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--i3)' }}>{new Date().toLocaleString('en-IN')} &nbsp;|&nbsp; {visible.length} SOs</div>
       </div>
 
       <div className="tw sy" ref={tableRef}>
         <table>
           <thead>
             <tr>
-              <th>SO#</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>Disp Loc</th>
+              <th>#</th><th>SO#</th><th>Spec</th><th>Customer</th><th style={{ minWidth: 160 }}>Job Name</th><th>Location</th>
               <th style={{ textAlign: 'right' }}>PO Qty</th>
+              <th style={{ textAlign: 'right' }}>Dispatched</th>
               <th style={{ textAlign: 'right' }}>Balance</th>
+              <th style={{ textAlign: 'right' }} title="Days since PO date">Age</th>
               <th style={{ minWidth: 120 }}>Prod Status</th>
               <th style={{ minWidth: 150 }}>Stage</th>
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr><td colSpan={10} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No open SOs</td></tr>
-            ) : visible.map(({ r, sheet }, i) => {
-              const { ps, isReady, st } = eff(sheet, r);
+              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No open SOs</td></tr>
+            ) : visible.map(({ r, sheet: sh }, i) => {
+              const { ps, isReady, st } = eff(sh, r);
               const nr = !isReady;
+              const age = ageDays(r.poDate);
               return (
-                <tr key={sheet + '|' + r.so} className={'zebra' + (nr ? ' nr' : '')}>
+                <tr key={sh + '|' + r.so} className={'zebra' + (nr ? ' nr' : '')}>
+                  <td style={{ fontSize: 11, color: 'var(--i3)' }}>{i + 1}</td>
                   <td>
                     <span className="so-pill" style={nr ? { fontSize: 10, background: 'var(--red)' } : { fontSize: 10 }}>
                       {r.so}
                     </span>
                   </td>
-                  <td><span className={'tag ' + (sheet === 'SF' ? 'tg' : 'tr')}>{sheet}</span></td>
                   <td style={{ fontSize: 11, color: 'var(--i3)' }}>{r.spec || '-'}</td>
                   <td style={{ fontSize: 11, fontWeight: 600 }}>{r.customer || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.poQty)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash((Number(r.invDisp) || 0) + (Number(r.manDisp) || 0))}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: balance(r) > 0 ? 'var(--red)' : 'var(--g)' }}>
                     {dash(balance(r))}
                   </td>
+                  <td
+                    style={{ textAlign: 'right', fontSize: 11, fontWeight: 600, color: age == null ? '#888' : age > 90 ? '#C0392B' : age > 45 ? '#B8860B' : '#333' }}
+                    title="Days since PO date"
+                  >{age == null ? '-' : age + ' d'}</td>
                   <td>
                     <select
-                      value={ps}
-                      onChange={(e) => onPs(sheet, r, e.target.value)}
-                      style={{ ...cellSel, width: 118, background: nr ? '#FDECEA' : '#E8F5EE' }}
+                      value={ps} aria-label={`Prod status for ${r.so}`}
+                      onChange={(e) => onPs(sh, r, e.target.value)}
+                      style={{ ...cellSel, width: 110, background: nr ? '#FDECEA' : '#e9f2fb' }}
                     >
                       {PROD_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -208,12 +232,12 @@ export default function Plant() {
                   <td>
                     <select
                       value={st}
-                      disabled={!isReady}
+                      disabled={!isReady} aria-label={`Stage for ${r.so}`}
                       title={isReady ? 'Select stage' : 'Set Prod Status to "Ready" to select stage'}
-                      onChange={(e) => onSt(sheet, r, e.target.value)}
+                      onChange={(e) => onSt(sh, r, e.target.value)}
                       style={{
                         ...cellSel,
-                        width: 150,
+                        width: 140,
                         background: isReady ? '#fff' : '#F3F4F6',
                         color: isReady ? '#111' : '#9CA3AF',
                         cursor: isReady ? 'pointer' : 'not-allowed',
@@ -234,3 +258,11 @@ export default function Plant() {
 }
 
 const cellSel = { height: 26, fontSize: 11, border: '1px solid var(--bd)', borderRadius: 4, padding: '0 4px' };
+
+/** Whole days since an SO's PO date, or null. (soAgeDays) */
+function ageDays(poDate) {
+  if (!poDate) return null;
+  const d = new Date(poDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}

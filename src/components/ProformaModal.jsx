@@ -1,15 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { getPM } from '../lib/pricing.js';
 import { gstBreakup } from '../lib/calc.js';
 import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
 import { today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
-import { saveInvoicePdf } from '../lib/invoicePdf.js';
+import { saveDocPdf, PLAIN_PDF } from '../lib/invoicePdf.js';
+import ProformaDoc from './ProformaDoc.jsx';
 
 // Proforma Invoice generator (native port of the legacy showProformaModal / pf*).
 // A standalone quote / advance-payment document — NOT linked to OAB orders. Same
-// GST math as the tax invoice; exports Excel + a vector PDF (proforma variant).
+// GST math as the tax invoice; exports Excel + a PDF captured from <ProformaDoc>,
+// which is the same document pfSavePDF() renders into #pf-doc in production.
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const isTelangana = (cm) => {
@@ -31,6 +33,9 @@ export default function ProformaModal({ onClose }) {
   }));
   const [rows, setRows] = useState([blankRow()]);
   const [msg, setMsg] = useState(null);
+  const [docRows, setDocRows] = useState(null);   // priced rows, only while a PDF is being captured
+  const [busy, setBusy] = useState(false);
+  const docRef = useRef(null);
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 5000); };
 
@@ -108,22 +113,30 @@ export default function ProformaModal({ onClose }) {
     flash('g', '✓ Excel downloaded');
   }
 
-  function savePdf() {
+  // Render the document off-screen, capture it, then clear it — the same
+  // hidden #pf-doc render target production uses. (pfSavePDF)
+  async function savePdf() {
     const items = validate(); if (!items) return;
-    const header = {
-      ivNo: f.no, ivDt: f.date, customer: f.customer, paymentTerms: f.pt, gstType: f.gstType,
-      billingAddr: f.billingAddr, shippingAddr: f.shippingAddr, billingGstin: f.billingGstin, shippingGstin: f.shippingGstin, freight: num(f.freight),
-    };
-    const lines = items.map((r) => ({ spec: r.spec, jobName: r.jobName, qty: r.qty, rate: r.rate, dispatchForm: r.dispatchForm }));
-    try { saveInvoicePdf(header, lines, 'Proforma_' + f.no.replace(/\//g, '-'), { proforma: true, notes: f.notes }); flash('g', '✓ PDF downloaded'); }
-    catch (e) { flash('r', 'PDF failed: ' + e.message); }
+    setDocRows(items);
+    setBusy(true);
+    try {
+      await new Promise((r) => setTimeout(r, 60));   // let the document paint before capture
+      const fname = 'Proforma_' + f.no.replace(/\//g, '-') + '_' + f.customer.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20) + '.pdf';
+      await saveDocPdf(docRef.current, fname, PLAIN_PDF);
+      flash('g', '✓ PDF downloaded: ' + fname);
+    } catch (e) {
+      flash('r', 'PDF error: ' + e.message);
+    } finally {
+      setBusy(false);
+      setDocRows(null);
+    }
   }
 
   const g = calc.g;
   return (
     <div style={overlay} onClick={onClose}>
       <div style={sheet} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', background: 'linear-gradient(180deg,#1B6B3A,#155029)', color: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', background: 'linear-gradient(180deg,#0e6fb8,#0a5aa0)', color: '#fff' }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800 }}>🧾 Create Proforma Invoice</div>
             <div style={{ fontSize: 11, opacity: 0.85 }}>Not linked to OAB — for quotes / advance-payment requests only</div>
@@ -133,7 +146,7 @@ export default function ProformaModal({ onClose }) {
 
         <div style={{ padding: '16px 20px' }}>
           {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
-          <div className="ctitle" style={{ fontSize: 12, color: '#1B6B3A' }}>Proforma Details</div>
+          <div className="ctitle" style={{ fontSize: 12, color: '#0e6fb8' }}>Proforma Details</div>
           <div className="g4">
             <div className="fg"><label>Proforma No</label><input value={f.no} onChange={(e) => set({ no: e.target.value })} /></div>
             <div className="fg"><label>Date</label><input type="date" value={f.date} onChange={(e) => set({ date: e.target.value })} /></div>
@@ -163,7 +176,7 @@ export default function ProformaModal({ onClose }) {
             </div>
           </div>
 
-          <div className="ctitle" style={{ fontSize: 12, color: '#1B6B3A' }}>Customer / Consignee Details</div>
+          <div className="ctitle" style={{ fontSize: 12, color: '#0e6fb8' }}>Customer / Consignee Details</div>
           <div className="g2">
             <div className="fg"><label>Billing Address</label><textarea rows={2} value={f.billingAddr} onChange={(e) => set({ billingAddr: e.target.value })} /></div>
             <div className="fg"><label>Shipping Address (if different)</label><textarea rows={2} value={f.shippingAddr} onChange={(e) => set({ shippingAddr: e.target.value })} /></div>
@@ -179,7 +192,7 @@ export default function ProformaModal({ onClose }) {
             <div className="fg"><label>Special Notes</label><textarea rows={2} value={f.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Printed on the PDF above the signature block" /></div>
           </div>
 
-          <div className="ctitle" style={{ fontSize: 12, color: '#1B6B3A' }}>SKUs &amp; Pricing</div>
+          <div className="ctitle" style={{ fontSize: 12, color: '#0e6fb8' }}>SKUs &amp; Pricing</div>
           <div className="tw">
             <table>
               <thead><tr><th style={{ minWidth: 220 }}>SKU (Spec)</th><th style={{ textAlign: 'right', width: 90 }}>Qty</th><th style={{ textAlign: 'right', width: 110 }}>Rate (₹)</th><th style={{ textAlign: 'right', width: 120 }}>Amount (₹)</th><th style={{ width: 40 }} /></tr></thead>
@@ -210,16 +223,23 @@ export default function ProformaModal({ onClose }) {
               <Row k="Freight" v={num(f.freight) > 0 ? rupees(g.freight) : '-'} />
               {f.gstType === 'IGST' ? <Row k="IGST 18%" v={rupees(g.igst)} /> : <><Row k="CGST 9%" v={rupees(g.cgst)} /><Row k="SGST 9%" v={rupees(g.sgst)} /></>}
               {g.roundOff !== 0 && <Row k="Round Off" v={rupees(g.roundOff)} />}
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid var(--bd)', fontWeight: 800, color: '#1B6B3A', fontSize: 14 }}><span>Total Amount</span><span>{rupees(g.invAmount)}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid var(--bd)', fontWeight: 800, color: '#0e6fb8', fontSize: 14 }}><span>Total Amount</span><span>{rupees(g.invAmount)}</span></div>
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14, flexWrap: 'wrap' }}>
             <button className="btn btn-s" style={{ background: '#217346', color: '#fff' }} onClick={saveExcel}>⬇ Save as Excel</button>
-            <button className="btn btn-g" onClick={savePdf}>⬇ Save as PDF</button>
+            <button className="btn btn-g" onClick={savePdf} disabled={busy}>{busy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
           </div>
         </div>
       </div>
+
+      {/* Off-screen render target for the PDF capture (production's #pf-doc). */}
+      {docRows && (
+        <div style={{ position: 'fixed', left: -9999, top: 0 }} aria-hidden="true">
+          <ProformaDoc ref={docRef} f={f} rows={docRows} />
+        </div>
+      )}
     </div>
   );
 }

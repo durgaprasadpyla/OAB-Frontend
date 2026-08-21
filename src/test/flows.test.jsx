@@ -20,19 +20,19 @@ describe('New PO flow', () => {
   it('creates an SO into module 1 with the next SO number', async () => {
     const user = userEvent.setup();
     const { saved } = renderApp(<NewPO />, { modules: { jss, prices, customers, oab: oabModule({ lastSO: { y: '26', n: 400 } }) } });
-    await screen.findByText('New PO / Enter SO');
+    await screen.findByText('New PO Entry');
 
-    await user.type(fieldByLabel('PO Number'), 'PO-100');
-    await user.selectOptions(fieldByLabel('Customer'), 'Acme');   // auto-selects the single dispatch location
-    await user.click(screen.getByRole('button', { name: /Next → Select SKUs/ }));
+    await user.type(fieldByLabel(/PO Number/), 'PO-100');
+    await user.selectOptions(screen.getByLabelText('Customer'), 'Acme');   // auto-selects the single dispatch location
+    await user.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
 
     const checks = screen.getAllByRole('checkbox');
     await user.click(checks[checks.length - 1]);                  // the SKU row (last checkbox)
     await user.type(screen.getByRole('spinbutton'), '500');       // PO qty
-    await user.click(screen.getByRole('button', { name: /Next → Confirm/ }));
+    await user.click(screen.getByRole('button', { name: /Review →/ }));
 
     expect(await screen.findByText('26/401')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Create 1 SO/ }));
+    await user.click(screen.getByRole('button', { name: /Add to OAB/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
     expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/sales-orders'); // granular endpoint, not a blob save

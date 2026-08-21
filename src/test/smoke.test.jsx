@@ -13,6 +13,8 @@ import QC from '../pages/QC.jsx';
 import PM from '../pages/PM.jsx';
 import Scrap from '../pages/Scrap.jsx';
 import Purchase from '../pages/Purchase.jsx';
+import FGLedger from '../pages/FGLedger.jsx';
+import HR from '../pages/HR.jsx';
 
 // One realistic dataset covering all 8 modules.
 const seed = {
@@ -35,16 +37,18 @@ async function seen(matcher) {
 }
 
 describe('screen smoke — every page renders with seeded data, no crash', () => {
-  it('Login', async () => { renderApp(<Login />, {}); await seen(/Sign in to continue/i); });
+  it('Login', async () => { renderApp(<Login />, {}); await seen(/Sign in to your account to continue/i); });
   it('New PO', async () => { renderApp(<NewPO />, { modules: seed }); await seen(/New PO/); });
   it('OAB board', async () => { renderApp(<OabBoard />, { modules: seed, route: '/oab?sheet=SF' }); await seen(/Production Balance/); await seen('26/1'); });
   it('Daily Update', async () => { renderApp(<DailyUpdate />, { modules: seed }); await seen('Daily Update'); await seen('26/1'); });
   it('Invoice', async () => { renderApp(<Invoice />, { modules: seed }); await seen(/Select PO/); });
   it('Dashboard (superadmin)', async () => { renderApp(<Dashboard />, { modules: seed, role: 'superadmin' }); await seen(/Sale Margin/); });
   it('P Dashboard (padmin)', async () => { renderApp(<PDashboard />, { modules: seed, role: 'padmin' }); await seen(/PO Tracking/); });
-  it('Plant', async () => { renderApp(<Plant />, { modules: seed, role: 'plant' }); await seen(/Production Floor/); await seen('26/1'); });
+  it('Plant', async () => { renderApp(<Plant />, { modules: seed, role: 'plant' }); await seen(/Production Status/); await seen('26/1'); });
   it('QC', async () => { renderApp(<QC />, { modules: seed, role: 'qc' }); await seen(/JSS Spec Entry/); });
   it('PM', async () => { renderApp(<PM />, { modules: seed, role: 'pm' }); await seen(/Printing Progress/); await seen('26/1'); });
   it('Scrap', async () => { renderApp(<Scrap />, { modules: seed, role: 'scrap' }); await seen(/Buyer1/); });
   it('Purchase', async () => { renderApp(<Purchase />, { modules: seed, role: 'purchase' }); await seen(/Generate PO|Sup1/); });
+  it('FG Ledger', async () => { renderApp(<FGLedger />, { modules: seed }); await seen(/JSS \/ Finished Goods Sheet/); });
+  it('HR (hr role)', async () => { renderApp(<HR />, { role: 'hr', hr: { dashboard: {}, employees: [] } }); await seen('Human Resources'); });
 });

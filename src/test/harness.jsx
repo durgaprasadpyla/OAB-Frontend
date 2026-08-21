@@ -37,7 +37,7 @@ function findRow(oab, so) {
  * Options: conflictOnce { [moduleId]: true } — the next /rest POST to that module
  * returns 409 once (simulating a concurrent writer).
  */
-export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, failRead = {}, role = 'user', user = 'superstar', meRole = null, meUnauthorized = false } = {}) {
+export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, failRead = {}, role = 'user', user = 'superstar', meRole = null, meUnauthorized = false, hr = null, mustChangePassword = false } = {}) {
   const saved = [];
   const versions = {};
   Object.entries(KEY_TO_ID).forEach(([key, id]) => { versions[id] = modules[key] != null ? 1 : 0; });
@@ -55,10 +55,10 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
     const method = (opts.method || 'GET').toUpperCase();
     const body = opts.body ? JSON.parse(opts.body) : {};
 
-    if (u.includes('/api/auth/login')) return res(200, { token: 't', username: user, role });
+    if (u.includes('/api/auth/login')) return res(200, { token: 't', username: user, role, mustChangePassword });
     if (u.includes('/api/auth/me')) {
       if (meUnauthorized) return res(401, { error: 'Not authenticated' });   // invalid/expired token
-      return res(200, { username: user, role: meRole || role });             // server-authoritative role
+      return res(200, { username: user, role: meRole || role, mustChangePassword }); // server-authoritative role + forced-change flag
     }
 
     if (u.includes('/api/seq/')) {
@@ -269,6 +269,78 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       })));
     }
 
+    // ── HR (/api/hr/**) — served from the `hr` fixture when a test supplies one.
+    // Without a fixture every HR call 403s, which is what a non-HR role really sees.
+    if (u.includes('/api/hr/')) {
+      if (!hr) return res(403, { error: 'forbidden' });
+      const path = u.split('/api/hr/')[1].split('?')[0];
+      const query = Object.fromEntries(new URLSearchParams(u.includes('?') ? u.split('?')[1] : ''));
+
+      if (method === 'GET') {
+        if (path === 'dashboard') return res(200, hr.dashboard || {});
+        if (path === 'meta') {
+          return res(200, hr.meta || { statuses: ['Active', 'On Notice', 'Inactive', 'Resigned', 'Terminated', 'On Leave'], employmentTypes: ['Full-time'], genders: ['Male', 'Female', 'Other'] });
+        }
+        if (path === 'employees') {
+          let list = hr.employees || [];
+          if (query.q) list = list.filter((e) => [e.fullName, e.empCode].some((v) => String(v || '').toLowerCase().includes(query.q.toLowerCase())));
+          if (query.status) list = list.filter((e) => e.status === query.status);
+          if (query.departmentId) list = list.filter((e) => String(e.departmentId) === String(query.departmentId));
+          return res(200, list);
+        }
+        if (path === 'departments') return res(200, hr.departments || []);
+        if (path === 'designations') return res(200, hr.designations || []);
+        if (path === 'leave-types') return res(200, hr.leaveTypes || []);
+        if (path === 'leave-requests') {
+          let list = hr.leaveRequests || [];
+          if (query.status) list = list.filter((r) => r.status === query.status);
+          return res(200, list);
+        }
+        if (path === 'audit') return res(200, hr.audit || []);
+        if (/^employees\/\d+\/documents$/.test(path)) return res(200, hr.documents || []);
+      }
+
+      // Writes are recorded so tests can assert the request, then applied to the
+      // fixture so a follow-up reload reflects them.
+      saved.push({ hrPath: path, method, body });
+      if (path === 'employees' && method === 'POST') {
+        // Mirror HrService.createEmployee's two rejections so the UI's error
+        // handling is exercised against the real contract, not a permissive stub.
+        if (!body.empCode) return res(400, 'Employee ID is required');
+        if (!body.firstName) return res(400, 'First name is required');
+        if ((hr.employees || []).some((e) => e.empCode === body.empCode)) {
+          return res(409, `Employee ID '${body.empCode}' already exists`);
+        }
+        const row = { id: (hr.employees || []).length + 900, fullName: `${body.firstName} ${body.lastName || ''}`.trim(), ...body };
+        hr.employees = [...(hr.employees || []), row];
+        return res(201, row);
+      }
+      if (/^employees\/\d+\/status$/.test(path)) {
+        const id = Number(path.split('/')[1]);
+        hr.employees = (hr.employees || []).map((e) => (e.id === id ? { ...e, status: body.status } : e));
+        return res(200, hr.employees.find((e) => e.id === id));
+      }
+      if (/^leave-requests\/\d+\/(approve|reject)$/.test(path)) {
+        const id = Number(path.split('/')[1]);
+        const status = path.endsWith('approve') ? 'Approved' : 'Rejected';
+        hr.leaveRequests = (hr.leaveRequests || []).map((r) => (r.id === id ? { ...r, status } : r));
+        return res(200, { id, status });
+      }
+      if (path === 'leave-requests' && method === 'POST') {
+        const row = { id: (hr.leaveRequests || []).length + 500, status: 'Pending', ...body };
+        hr.leaveRequests = [...(hr.leaveRequests || []), row];
+        return res(201, row);
+      }
+      return res(200, { ok: true });
+    }
+
+    if (u.includes('/api/auth/change-password')) {
+      saved.push({ endpoint: '/api/auth/change-password', body });
+      if (!body.currentPassword || !body.newPassword) return res(400, { error: 'missing' });
+      if (body.currentPassword === 'wrong') return res(400, 'Current password is incorrect');
+      return res(200, { ok: true });
+    }
+
     if (u.includes('/rest/v1/oab_data')) {
       if (method === 'GET') {
         const m = /id=eq\.(\d+)/.exec(u);
@@ -298,12 +370,16 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
 }
 
 /** Render a screen inside Router + Auth + Data providers with seeded modules. */
-export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {}, forbidRead = {}, failRead = {}, meRole = null, meUnauthorized = false } = {}) {
+export function renderApp(ui, { modules = {}, role = 'user', user = 'superstar', route = '/', conflictOnce = {}, forbidRead = {}, failRead = {}, meRole = null, meUnauthorized = false, hr = null, mustChangePassword = false, repId = '' } = {}) {
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_user', user);
   localStorage.setItem('blm_role', role);
+  // Sales reps live in the module-12 blob, so their screens key off blm_rep_id
+  // rather than the username. (auth.jsx repLogin)
+  if (repId) { localStorage.setItem('blm_rep_id', repId); localStorage.setItem('blm_rep_name', user); }
+  else { localStorage.removeItem('blm_rep_id'); localStorage.removeItem('blm_rep_name'); }
   const mods = JSON.parse(JSON.stringify(modules));
-  const saved = installFetch(mods, { conflictOnce, forbidRead, failRead, role, user, meRole, meUnauthorized });
+  const saved = installFetch(mods, { conflictOnce, forbidRead, failRead, role, user, meRole, meUnauthorized, hr, mustChangePassword });
   const utils = render(
     <MemoryRouter initialEntries={[route]}>
       <AuthProvider>

@@ -4,6 +4,7 @@ import { purchaseApi } from '../api.js';
 import { parsePaymentDays, num } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
+import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 
 // ── Local helpers (kept in this file — shared libs are read-only for this port) ──
 
@@ -45,6 +46,7 @@ export default function Purchase() {
 
   // GRN state
   const [grnFor, setGrnFor] = useState(null); // poNum being received
+  const [docPo, setDocPo] = useState(null);   // PO being previewed as a document
   const [grnRef, setGrnRef] = useState('');
   const [grnDate, setGrnDate] = useState(today());
   const [grnQty, setGrnQty] = useState({}); // { itemIndex: value }
@@ -54,6 +56,18 @@ export default function Purchase() {
   const purchase = mods.purchase || {};
   const asl = Array.isArray(purchase.asl) ? purchase.asl : [];
   const pos = Array.isArray(purchase.pos) ? purchase.pos : [];
+
+  // Follow-up nudge: open POs past their expected delivery, most overdue first.
+  // Days late is measured against today; a closed PO can no longer be late.
+  // (pvRenderNudges 7000)
+  const overdue = useMemo(() => {
+    const todayMs = new Date(today() + 'T00:00:00').getTime();
+    return pos
+      .filter((p) => !p.closed && !p.manualClosed && p.expectedDelivery)
+      .map((p) => ({ po: p, late: Math.floor((todayMs - new Date(p.expectedDelivery + 'T00:00:00').getTime()) / 86400000) }))
+      .filter((x) => x.late > 0)
+      .sort((a, b) => b.late - a.late);
+  }, [pos]);
 
   const suppliers = useMemo(
     () => [...new Set(asl.map((r) => r.company).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
@@ -203,6 +217,19 @@ export default function Purchase() {
       <div className="pg-ttl">Purchase</div>
       <div className="pg-sub">Raise purchase orders, receive goods (GRN) and track bills payable.</div>
 
+      {overdue.length > 0 && (
+        <div className="al al-y" role="status" aria-label="Overdue purchase orders">
+          ⚠ Follow-up needed — <strong>{overdue.length}</strong> PO{overdue.length === 1 ? '' : 's'} overdue:{' '}
+          {overdue.slice(0, 6).map(({ po, late }, i) => (
+            <span key={po.poNum}>
+              {i > 0 && ' • '}
+              <strong>{po.poNum}</strong> ({po.supplier || 'no supplier'}, {late}d late)
+            </span>
+          ))}
+          {overdue.length > 6 && <> …and {overdue.length - 6} more</>}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
         {TABS.map(([k, label]) => (
           <button key={k} className={'btn ' + (tab === k ? 'btn-g' : 'btn-s')} onClick={() => setTab(k)}>{label}</button>
@@ -337,6 +364,9 @@ export default function Purchase() {
                             ) : (
                               <button className="btn btn-s" style={{ height: 27, padding: '0 10px' }} onClick={() => reopen(po)} disabled={busy}>Reopen</button>
                             )}
+                            <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginLeft: 4 }}
+                              onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`}
+                              aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
                           </td>
                         </tr>
 
@@ -452,6 +482,8 @@ export default function Purchase() {
           )}
         </div>
       )}
+
+      {docPo && <PurchaseOrderModal po={docPo} asl={asl} onClose={() => setDocPo(null)} />}
     </div>
   );
 }

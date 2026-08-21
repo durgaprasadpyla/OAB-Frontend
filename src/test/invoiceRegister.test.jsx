@@ -20,7 +20,8 @@ describe('Invoice register — served from /api/invoices (normalized)', () => {
     renderApp(<Invoice />, { modules: seed });
     const regCard = (await screen.findByText('Invoice Register')).closest('.card');
     // Switch the period filter off so the assertion is clock-independent.
-    fireEvent.change(within(regCard).getByRole('combobox'), { target: { value: 'all' } });
+    // The register now has Period / PO / Sort selects, so target Period by name.
+    fireEvent.change(within(regCard).getByLabelText('Period'), { target: { value: 'all' } });
     await within(regCard).findByText('BL/26-27/99');
     expect(within(regCard).getByText('BL/26-27/99')).toBeTruthy();
   });
