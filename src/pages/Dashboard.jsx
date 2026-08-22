@@ -7,7 +7,7 @@ import { getPM, getCostPrice } from '../lib/pricing.js';
 import { custGroups, custGroupOf, custsInGroup, specGroup } from '../lib/master.js';
 import { computeKPIs, dashRange } from '../lib/dashboard.js';
 import { dash, rupees, fmtDate, inr } from '../lib/format.js';
-import { exportAOA } from '../lib/xlsx.js';
+import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
@@ -530,7 +530,19 @@ function PriceMaster() {
 // Dispatch-form + status option lists, matching the legacy JSS editor.
 const JSS_DISP_FORMS = ['Pouch', 'Roll', 'Bulk Bags', 'Label', 'Sleeve', 'Punch', 'Lids', 'Roll Form'];
 const JSS_STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
-const jssInp = { width: '100%', height: 26, fontSize: 11, boxSizing: 'border-box' };
+const JSS_STATUS_FILTERS = [['all', 'All Status'], ['active', 'Active Only'], ['sample', 'Sample Only'], ['inactive', 'Inactive Only'], ['redundant', 'Redundant Only']];
+// Legacy JSS-editor look (renderJSSEdit): compact bordered cells + a green sticky header.
+const jssInp = { width: '100%', height: 26, border: '1px solid #ddd', borderRadius: 4, padding: '0 5px', fontSize: 11, boxSizing: 'border-box' };
+const jssTh = { padding: '7px 8px', textAlign: 'left', fontSize: 11, whiteSpace: 'nowrap', color: '#fff', background: '#1B6B3A' };
+const jssTd = { padding: '3px 5px' };
+// [field, header label, min-width] — exact legacy column order (no Gusset; Spec editable).
+const JSS_COLS = [
+  ['spec', 'Spec No.*', 80], ['jobType', 'Job Type', 100], ['group', 'Group', 120], ['customer', 'Customer', 140],
+  ['subBrand', 'Sub Brand', 100], ['jobName', 'Job Name*', 200], ['printLoc', 'Print Loc', 80], ['mic', 'MIC', 60],
+  ['gsm', 'GSM', 60], ['material', 'Material*', 130], ['filmWidth', 'Film W', 70], ['width', 'W', 50],
+  ['height', 'H', 50], ['pouchWeight', 'Pouch Wt (g)', 100], ['dispatchForm', 'Disp Form*', 80],
+  ['machineRunOn', 'Machine', 90], ['status', 'Status', 80],
+];
 
 function JssEditor() {
   const { mods, save } = useData();
@@ -591,96 +603,130 @@ function JssEditor() {
     catch (e) { setMsg('Delete failed: ' + e.message); } finally { setBusy(false); }
   }
 
+  // Export the JSS master to Excel (legacy exportJSSExcel) and import it back
+  // (legacy importJSSExcel) — rows are matched by Spec No., updated or appended.
+  function exportJSS() {
+    const header = JSS_COLS.map(([, label]) => label.replace('*', ''));
+    exportAOA([header, ...rows.map((r) => JSS_COLS.map(([k]) => r[k] ?? ''))], 'JSS_Master', 'JSS');
+  }
+  async function importJSS(file) {
+    if (!file) return;
+    try {
+      const aoa = await readSheetAOA(file);
+      if (!aoa || aoa.length < 2) { setMsg('Import: no data rows found'); return; }
+      const hdr = aoa[0].map((h) => String(h || '').trim().toLowerCase());
+      const idxOf = {};
+      JSS_COLS.forEach(([k, label]) => {
+        let idx = hdr.indexOf(label.replace('*', '').trim().toLowerCase());
+        if (idx < 0) idx = hdr.indexOf(k.toLowerCase());
+        if (idx >= 0) idxOf[k] = idx;
+      });
+      if (idxOf.spec == null) { setMsg('Import: a "Spec No." column is required.'); return; }
+      const next = [...rows]; let updated = 0, added = 0;
+      for (let r = 1; r < aoa.length; r++) {
+        const spec = String(aoa[r][idxOf.spec] ?? '').trim();
+        if (!spec) continue;
+        const patch = {}; Object.entries(idxOf).forEach(([k, idx]) => { patch[k] = String(aoa[r][idx] ?? '').trim(); });
+        const at = next.findIndex((x) => String(x.spec || '').trim() === spec);
+        if (at >= 0) { next[at] = { ...next[at], ...patch }; updated++; } else { next.push(patch); added++; }
+      }
+      setRows(next);
+      setMsg(`Imported ${updated} updated, ${added} added — review, then Save All Changes.`);
+    } catch (e) { setMsg('Import failed: ' + e.message); }
+  }
+
+  // Per-column body cell for a row (legacy order); selects for group/customer/disp/status,
+  // pouch-weight with a recalc button, plain text for the rest.
   const txt = (i, field, w) => (
     <input value={rows[i][field] ?? ''} onChange={(e) => setCell(i, field, e.target.value)} style={{ ...jssInp, width: w }} />
   );
+  function cell(i, r, field) {
+    if (field === 'group') return (
+      <select value={r.group || ''} onChange={(e) => setGroup(i, e.target.value)} style={jssInp}>
+        <option value="">— No group —</option>
+        {!(!r.group || groups.includes(r.group)) && <option value={r.group}>{r.group}</option>}
+        {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+      </select>
+    );
+    if (field === 'customer') {
+      const custOpts = custsInGroup(customers, r.group);
+      const inList = !r.customer || custOpts.includes(r.customer);
+      return (
+        <select value={r.customer || ''} onChange={(e) => setCell(i, 'customer', e.target.value)} style={jssInp}>
+          <option value="">— Select customer —</option>
+          {!inList && <option value={r.customer}>{r.customer}</option>}
+          {custOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      );
+    }
+    if (field === 'dispatchForm') {
+      const inList = !r.dispatchForm || JSS_DISP_FORMS.includes(r.dispatchForm);
+      return (
+        <select value={r.dispatchForm || ''} onChange={(e) => setCell(i, 'dispatchForm', e.target.value)} style={jssInp}>
+          <option value="">—</option>
+          {!inList && <option value={r.dispatchForm}>{r.dispatchForm}</option>}
+          {JSS_DISP_FORMS.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+    }
+    if (field === 'status') return (
+      <select value={r.status || ''} onChange={(e) => setCell(i, 'status', e.target.value)} style={jssInp}>
+        <option value="">—</option>
+        {JSS_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    );
+    if (field === 'pouchWeight') return (
+      <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+        <input type="number" step="0.0001" value={r.pouchWeight ?? ''} placeholder="auto"
+          onChange={(e) => setCell(i, 'pouchWeight', e.target.value)} style={{ ...jssInp, flex: 1, minWidth: 60 }} />
+        <button title="Recalculate from H / W / GSM" onClick={() => recalcPW(i)}
+          style={{ height: 26, width: 22, flexShrink: 0, border: 'none', background: '#1B6B3A', color: '#fff', borderRadius: 3, fontSize: 10, cursor: 'pointer', padding: 0 }}>↺</button>
+      </div>
+    );
+    return txt(i, field);
+  }
 
   return (
     <div className="card">
-      <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>JSS Editor — edit spec master ({rows.length})</div>
-        <input placeholder="Search spec / customer / job / group…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 230 }} />
-        <select value={statusFil} onChange={(e) => setStatusFil(e.target.value)} aria-label="Status filter">
-          <option value="all">All statuses</option>
-          {JSS_STATUSES.map((s) => <option key={s} value={s.toLowerCase()}>{s} only</option>)}
-        </select>
+      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+        <div className="ctitle" style={{ margin: 0 }}>📋 JSS Editor — edit JSS entries (changes reflect in QC JSS report)</div>
         <span style={{ flex: 1 }} />
-        <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save JSS'}</button>
+        <input placeholder="Search spec / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 220 }} />
+        <select value={statusFil} onChange={(e) => setStatusFil(e.target.value)} aria-label="Status filter">
+          {JSS_STATUS_FILTERS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+        </select>
+        <button onClick={saveAll} disabled={busy}
+          style={{ height: 30, padding: '0 14px', background: '#1B6B3A', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>{busy ? 'Saving…' : '💾 Save All Changes'}</button>
+        <button onClick={exportJSS}
+          style={{ height: 30, padding: '0 12px', background: '#1A4FA0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>⬇ Export Excel</button>
+        <label title="Import JSS specs (same columns as the export). Existing specs update by Spec No.; new ones are added."
+          style={{ height: 30, display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: '#8A5A00', color: '#fff', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+          ⬆ Import Excel
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={(e) => { importJSS(e.target.files[0]); e.target.value = ''; }} />
+        </label>
       </div>
+      <div style={{ fontSize: 11, color: 'var(--i3)', margin: '2px 0 8px' }}>Click any field to edit. Save All Changes to sync with the QC JSS report. Fields marked * are required.</div>
       {msg && <div className="al al-g">{msg}</div>}
-      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
-        <table>
-          <thead><tr>
-            <th>Spec</th><th>Job Type</th><th style={{ minWidth: 120 }}>Group</th><th style={{ minWidth: 130 }}>Customer</th>
-            <th>Sub Brand</th><th style={{ minWidth: 130 }}>Job Name</th><th>Print Loc</th><th>Mic</th><th>GSM</th>
-            <th>Material</th><th>Film W</th><th>W</th><th>H</th><th>Gusset</th><th style={{ minWidth: 92 }}>Pouch Wt</th>
-            <th>Disp Form</th><th>Machine</th><th>Status</th><th></th>
-          </tr></thead>
+      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
+            <tr style={{ background: '#1B6B3A' }}>
+              {JSS_COLS.map(([k, label, w]) => <th key={k} style={{ ...jssTh, minWidth: w }}>{label}</th>)}
+              <th style={{ ...jssTh, minWidth: 60, textAlign: 'center' }}>Actions</th>
+            </tr>
+          </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={19} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
-            ) : filtered.map(({ r, i }) => {
-              const custOpts = custsInGroup(customers, r.group);
-              const custInList = !r.customer || custOpts.includes(r.customer);
-              const grpInList = !r.group || groups.includes(r.group);
-              const dfInList = !r.dispatchForm || JSS_DISP_FORMS.includes(r.dispatchForm);
-              return (
-                <tr key={i}>
-                  <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec}</span></td>
-                  <td>{txt(i, 'jobType', 74)}</td>
-                  <td>
-                    <select value={r.group || ''} onChange={(e) => setGroup(i, e.target.value)} style={jssInp}>
-                      <option value="">— No group —</option>
-                      {!grpInList && <option value={r.group}>{r.group}</option>}
-                      {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                  </td>
-                  <td>
-                    <select value={r.customer || ''} onChange={(e) => setCell(i, 'customer', e.target.value)} style={jssInp}>
-                      <option value="">— Select customer —</option>
-                      {!custInList && <option value={r.customer}>{r.customer}</option>}
-                      {custOpts.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </td>
-                  <td>{txt(i, 'subBrand', 100)}</td>
-                  <td>{txt(i, 'jobName', 130)}</td>
-                  <td>{txt(i, 'printLoc', 60)}</td>
-                  <td>{txt(i, 'mic', 46)}</td>
-                  <td>{txt(i, 'gsm', 46)}</td>
-                  <td>{txt(i, 'material', 90)}</td>
-                  <td>{txt(i, 'filmWidth', 54)}</td>
-                  <td>{txt(i, 'width', 46)}</td>
-                  <td>{txt(i, 'height', 46)}</td>
-                  <td>{txt(i, 'gusset', 54)}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                      <input type="number" step="0.0001" value={r.pouchWeight ?? ''} placeholder="auto"
-                        onChange={(e) => setCell(i, 'pouchWeight', e.target.value)} style={{ ...jssInp, width: 62 }} />
-                      <button className="btn btn-s" style={{ height: 26, padding: '0 6px', fontSize: 12 }}
-                        title="Recalculate from H / W / GSM" onClick={() => recalcPW(i)}>↺</button>
-                    </div>
-                  </td>
-                  <td>
-                    <select value={r.dispatchForm || ''} onChange={(e) => setCell(i, 'dispatchForm', e.target.value)} style={jssInp}>
-                      <option value="">—</option>
-                      {!dfInList && <option value={r.dispatchForm}>{r.dispatchForm}</option>}
-                      {JSS_DISP_FORMS.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  </td>
-                  <td>{txt(i, 'machineRunOn', 60)}</td>
-                  <td>
-                    <select value={r.status || ''} onChange={(e) => setCell(i, 'status', e.target.value)} style={jssInp}>
-                      <option value="">—</option>
-                      {JSS_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px', color: 'var(--red)', borderColor: '#F5A8A0' }}
-                      disabled={busy} onClick={() => delRow(i)}>Del</button>
-                  </td>
-                </tr>
-              );
-            })}
+              <tr><td colSpan={JSS_COLS.length + 1} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
+            ) : filtered.map(({ r, i }, idx) => (
+              <tr key={i} style={{ background: idx % 2 ? '#f8f8f8' : '' }}>
+                {JSS_COLS.map(([k]) => <td key={k} style={jssTd}>{cell(i, r, k)}</td>)}
+                <td style={{ ...jssTd, textAlign: 'center' }}>
+                  <button title="Permanently delete this spec" disabled={busy} onClick={() => delRow(i)}
+                    style={{ height: 26, padding: '0 10px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>Del</button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
