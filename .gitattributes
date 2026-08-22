@@ -1,0 +1,3 @@
+# Workflow files run on Linux runners; force LF so bash run: steps have no CR.
+/.github/workflows/*.yml text eol=lf
+/.github/workflows/*.yaml text eol=lf
