@@ -533,7 +533,7 @@ const JSS_STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
 const JSS_STATUS_FILTERS = [['all', 'All Status'], ['active', 'Active Only'], ['sample', 'Sample Only'], ['inactive', 'Inactive Only'], ['redundant', 'Redundant Only']];
 // Legacy JSS-editor look (renderJSSEdit): compact bordered cells + a green sticky header.
 const jssInp = { width: '100%', height: 26, border: '1px solid #ddd', borderRadius: 4, padding: '0 5px', fontSize: 11, boxSizing: 'border-box' };
-const jssTh = { padding: '7px 8px', textAlign: 'left', fontSize: 11, whiteSpace: 'nowrap', color: '#fff', background: '#1B6B3A' };
+const jssTh = { padding: '7px 8px', textAlign: 'left', fontSize: 11, whiteSpace: 'nowrap', color: '#fff', background: 'var(--g)' };
 const jssTd = { padding: '3px 5px' };
 // [field, header label, min-width] — exact legacy column order (no Gusset; Spec editable).
 const JSS_COLS = [
@@ -680,7 +680,7 @@ function JssEditor() {
         <input type="number" step="0.0001" value={r.pouchWeight ?? ''} placeholder="auto"
           onChange={(e) => setCell(i, 'pouchWeight', e.target.value)} style={{ ...jssInp, flex: 1, minWidth: 60 }} />
         <button title="Recalculate from H / W / GSM" onClick={() => recalcPW(i)}
-          style={{ height: 26, width: 22, flexShrink: 0, border: 'none', background: '#1B6B3A', color: '#fff', borderRadius: 3, fontSize: 10, cursor: 'pointer', padding: 0 }}>↺</button>
+          style={{ height: 26, width: 22, flexShrink: 0, border: 'none', background: 'var(--g)', color: '#fff', borderRadius: 3, fontSize: 10, cursor: 'pointer', padding: 0 }}>↺</button>
       </div>
     );
     return txt(i, field);
@@ -695,12 +695,9 @@ function JssEditor() {
         <select value={statusFil} onChange={(e) => setStatusFil(e.target.value)} aria-label="Status filter">
           {JSS_STATUS_FILTERS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
         </select>
-        <button onClick={saveAll} disabled={busy}
-          style={{ height: 30, padding: '0 14px', background: '#1B6B3A', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>{busy ? 'Saving…' : '💾 Save All Changes'}</button>
-        <button onClick={exportJSS}
-          style={{ height: 30, padding: '0 12px', background: '#1A4FA0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>⬇ Export Excel</button>
-        <label title="Import JSS specs (same columns as the export). Existing specs update by Spec No.; new ones are added."
-          style={{ height: 30, display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: '#8A5A00', color: '#fff', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+        <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save All Changes'}</button>
+        <button className="btn btn-b" onClick={exportJSS}>⬇ Export Excel</button>
+        <label className="btn btn-s" title="Import JSS specs (same columns as the export). Existing specs update by Spec No.; new ones are added.">
           ⬆ Import Excel
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={(e) => { importJSS(e.target.files[0]); e.target.value = ''; }} />
         </label>
@@ -710,7 +707,7 @@ function JssEditor() {
       <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
-            <tr style={{ background: '#1B6B3A' }}>
+            <tr style={{ background: 'var(--g)' }}>
               {JSS_COLS.map(([k, label, w]) => <th key={k} style={{ ...jssTh, minWidth: w }}>{label}</th>)}
               <th style={{ ...jssTh, minWidth: 60, textAlign: 'center' }}>Actions</th>
             </tr>
