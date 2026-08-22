@@ -127,10 +127,13 @@ export default function Invoice() {
     if (!pendInv) return;
     setBusy(true);
     try {
-      // The server assigns the invoice number and recomputes total/GST/margin,
-      // bumps invDisp and consumes FG — all in one transaction. The client's
-      // preview number/amounts are ignored; we render/PDF from the returned doc.
+      // The server recomputes total/GST/margin, bumps invDisp and consumes FG in one
+      // transaction (client amounts are ignored). The invoice NUMBER is now sent: the
+      // server keeps its atomic counter but honours a manually-entered number when it's
+      // ahead of the counter (to correct a series that fell behind manual invoicing) and
+      // jumps the counter past it, so the next number continues forward, never back.
       const header = {
+        invNo: h.ivNo.trim(),
         po: h.po, date: h.ivDt, customer: h.customer, placeOfSupply: h.placeOfSupply,
         billingAddr: h.billingAddr, shippingAddr: h.shippingAddr, billingGstin: h.billingGstin,
         shippingGstin: h.shippingGstin, contactPerson: h.contactPerson, contactNo: h.contactNo,
