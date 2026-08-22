@@ -748,12 +748,22 @@ function DeleteSOs() {
     catch (e) { alert('Delete failed: ' + e.message); } finally { setBusy(false); }
   }
 
-  // Edit an SO's PO#, PO Date and Dispatch Location, then persist through the
-  // normal module-1 save. Unlike delete, an edit is a field change, so the 3-way
-  // merge keeps exactly what we changed (base vs mine differ only on those
-  // fields → mine wins) without clobbering anyone else's work. (legacy editSOPONum 3623)
-  async function editPO(row) {
-    const newPO = window.prompt(`Edit PO number for SO ${row.so} (${row.customer || ''}):`, row.poNum || '');
+  // Edit an SO's Spec No., PO#, PO Date and Dispatch Location, then persist through
+  // the normal module-1 save. Unlike delete, an edit is a field change, so the 3-way
+  // merge keeps exactly what we changed (base vs mine differ only on those fields →
+  // mine wins, matched by SO#) without clobbering anyone else's work. Spec is a plain
+  // column keyed by SO server-side, so re-pointing it is safe; the JSS/price/metre
+  // lookups simply follow the new spec. (legacy editSOPONum 3623)
+  async function editSO(row) {
+    const newSpec = window.prompt(`Edit Spec No. for SO ${row.so} (${row.customer || ''}):`, row.spec || '');
+    if (newSpec === null) return;
+    const spec = newSpec.trim();
+    // Soft guard: a spec with no JSS entry can't compute metres/weight/price. Warn, don't block.
+    if (spec && spec !== String(row.spec || '').trim()
+      && !(mods.jss || []).some((j) => String(j.spec || '').trim() === spec)) {
+      if (!window.confirm(`Spec "${spec}" is not in the JSS master, so metres, weight and price won't calculate for this SO until a matching JSS entry exists. Save the new spec anyway?`)) return;
+    }
+    const newPO = window.prompt(`Edit PO number for SO ${row.so}:`, row.poNum || '');
     if (newPO === null) return;
     const newDate = window.prompt(`Edit PO Date for SO ${row.so} (YYYY-MM-DD):`, row.poDate || '');
     if (newDate === null) return;
@@ -763,6 +773,7 @@ function DeleteSOs() {
     const arr = (next.OAB && next.OAB[row._key]) || [];
     const target = arr.find((x) => x.so === row.so);
     if (!target) { alert('SO not found — the list may be out of date.'); return; }
+    target.spec = spec;
     target.poNum = newPO.trim();
     target.poDate = newDate.trim();
     target.dispLoc = newLoc.trim();
@@ -777,7 +788,7 @@ function DeleteSOs() {
         <div className="ctitle" style={{ margin: 0 }}>Delete Sales Orders</div>
         <input placeholder="Search SO / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="al al-y">Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit PO# to correct the PO number, PO date or dispatch location without deleting the order.</div>
+      <div className="al al-y">Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit SO to correct the Spec No., PO number, PO date or dispatch location without deleting the order.</div>
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
           <thead><tr><th>SO</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th><th>Status</th><th></th></tr></thead>
@@ -785,7 +796,7 @@ function DeleteSOs() {
             {rows.map((r, i) => (
               <tr key={i}><td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td><td>{r._key}</td><td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td><td style={{ fontSize: 11 }}>{r.customer}</td><td style={{ fontSize: 11 }}>{r.jobName}</td><td style={{ fontSize: 11 }}>{r.poNum || '-'}</td><td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td><td style={{ textAlign: 'right' }}>{dash(r.poQty)}</td><td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(num(r.invDisp) + num(r.manDisp))}</td><td>{r.closed ? <span className="tag tg" style={{ fontSize: 9 }}>Closed</span> : <span className="tag ty" style={{ fontSize: 9 }}>Open</span>}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
-                  <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editPO(r)}>✎ Edit PO#</button>
+                  <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editSO(r)}>✎ Edit SO</button>
                   <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', color: 'var(--red)', borderColor: '#F5A8A0' }} disabled={busy} onClick={() => del(r.so)}>Delete</button>
                 </td></tr>
             ))}
