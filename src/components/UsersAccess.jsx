@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react';
 import { usersApi } from '../api.js';
 
 // Users & Access (superadmin) — manage the real app_user accounts via the
-// backend admin endpoints. Add users, change roles, enable/disable, reset
-// passwords. Passwords are write-only; the server never returns hashes.
+// backend admin endpoints. Add users, change roles, set a contact/WhatsApp
+// phone, enable/disable, reset passwords. Passwords are write-only; the server
+// never returns hashes (so they cannot be displayed — reset only).
 //
-// NOTE: production also wanted a per-user PHONE column and a per-user module
-// ACL here, but both need a DB/backend change (new app_user columns + admin
-// endpoints). They are deliberately NOT added on the client — the app_user
-// table has no such fields today. Wire them up backend-first, then surface here.
+// NOTE: per-user MODULE access (an ACL beyond the single role) is still a
+// backend redesign and is not offered here; access is governed by the role.
 
 // Descriptive role labels, mirroring the monolith's ROLE_OPTIONS (index.html 6194),
 // extended with the roles the React port added: superadmin, sadmin, quote, hr.
@@ -34,7 +33,7 @@ export default function UsersAccess() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [nu, setNu] = useState({ username: '', password: '', role: 'user' });
+  const [nu, setNu] = useState({ username: '', password: '', role: 'user', phone: '' });
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
 
@@ -51,8 +50,8 @@ export default function UsersAccess() {
     if ((nu.password || '').length < 4) { flash('r', 'Password must be at least 4 characters'); return; }
     setBusy(true);
     try {
-      await usersApi.create({ username: nu.username.trim(), password: nu.password, role: nu.role });
-      setNu({ username: '', password: '', role: 'user' });
+      await usersApi.create({ username: nu.username.trim(), password: nu.password, role: nu.role, phone: nu.phone.trim() });
+      setNu({ username: '', password: '', role: 'user', phone: '' });
       flash('g', 'User created');
       await load();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
@@ -61,6 +60,12 @@ export default function UsersAccess() {
   async function changeRole(u, role) {
     setBusy(true);
     try { await usersApi.update(u.id, { role }); flash('g', `${u.username} → ${role}`); await load(); }
+    catch (e) { flash('r', e.message); await load(); } finally { setBusy(false); }
+  }
+
+  async function changePhone(u, phone) {
+    setBusy(true);
+    try { await usersApi.update(u.id, { phone }); flash('g', `${u.username} phone updated`); await load(); }
     catch (e) { flash('r', e.message); await load(); } finally { setBusy(false); }
   }
 
@@ -87,9 +92,10 @@ export default function UsersAccess() {
         <div className="g4">
           <div className="fg"><label>Username</label><input value={nu.username} onChange={(e) => setNu((x) => ({ ...x, username: e.target.value }))} autoComplete="off" /></div>
           <div className="fg"><label>Password</label><input type="password" value={nu.password} onChange={(e) => setNu((x) => ({ ...x, password: e.target.value }))} autoComplete="new-password" /></div>
+          <div className="fg"><label>Phone</label><input value={nu.phone} onChange={(e) => setNu((x) => ({ ...x, phone: e.target.value }))} placeholder="contact / WhatsApp" autoComplete="off" /></div>
           <div className="fg"><label>Role</label><select value={nu.role} onChange={(e) => setNu((x) => ({ ...x, role: e.target.value }))}>{ROLE_OPTIONS.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}</select></div>
-          <div className="fg"><label>&nbsp;</label><button className="btn btn-g" onClick={addUser} disabled={busy}>+ Add User</button></div>
         </div>
+        <div className="act"><button className="btn btn-g" onClick={addUser} disabled={busy}>+ Add User</button></div>
       </div>
 
       <div className="card">
@@ -98,13 +104,19 @@ export default function UsersAccess() {
         {loading ? <div className="pg-sub" style={{ margin: 0 }}>Loading users…</div> : (
           <div className="tw sy">
             <table>
-              <thead><tr><th>Username</th><th style={{ width: 160 }}>Role</th><th style={{ width: 100 }}>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+              <thead><tr><th>Username</th><th style={{ width: 140 }}>Phone</th><th style={{ width: 160 }}>Role</th><th style={{ width: 100 }}>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
               <tbody>
                 {users.length === 0 ? (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No users</td></tr>
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No users</td></tr>
                 ) : users.map((u) => (
                   <tr key={u.id}>
                     <td style={{ fontWeight: 600 }}>{u.username}</td>
+                    <td>
+                      {/* Inline-editable: saves on blur when the value changed. key re-inits after reload. */}
+                      <input key={u.id + '|' + (u.phone || '')} defaultValue={u.phone || ''} placeholder="—" disabled={busy}
+                        onBlur={(e) => { const v = e.target.value.trim(); if (v !== (u.phone || '')) changePhone(u, v); }}
+                        style={{ height: 26, fontSize: 12, width: '100%' }} />
+                    </td>
                     <td>
                       <select value={u.role} disabled={busy} onChange={(e) => changeRole(u, e.target.value)} style={{ height: 28, fontSize: 12, width: '100%' }}>
                         {ROLE_OPTIONS.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}
@@ -125,7 +137,7 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted.</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Passwords are reset-only (never shown).</p>
       </div>
     </>
   );
