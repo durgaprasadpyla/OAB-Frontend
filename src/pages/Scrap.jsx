@@ -105,7 +105,9 @@ export default function Scrap() {
     }
     const next = scrapClone();
     next.buyers.push({
-      id: 'SB' + String(next.buyers.length + 1).padStart(3, '0'),
+      // Next id = highest existing numeric id + 1 (legacy scrapNextBuyerId 7600).
+      // length+1 collides after a buyer is deleted or when ids aren't sequential.
+      id: 'SB' + String(next.buyers.reduce((m, b) => Math.max(m, parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0), 0) + 1).padStart(3, '0'),
       name,
       contact: bf.contact.trim(),
       phone: bf.phone.trim(),
@@ -163,8 +165,11 @@ export default function Scrap() {
     const next = scrapClone();
     if (isNewItem(item) && !next.items.some((i) => String(i).toLowerCase() === item.toLowerCase())) next.items.push(item);
     next.txns.push({ date, buyer, item, qty: num(qty), rate: num(rate), amount, mode });
-    // A sale also logs a price point so trends populate.
-    next.prices.push({ date, buyer, item, rate: num(rate) });
+    // A sale also logs a price point so trends populate — but only if an identical
+    // date+buyer+item+rate point isn't already recorded (legacy scrapAddTxn 7684).
+    if (!next.prices.some((p) => p.date === date && p.buyer === buyer && p.item === item && num(p.rate) === num(rate))) {
+      next.prices.push({ date, buyer, item, rate: num(rate) });
+    }
     setBusy(true);
     try {
       await save('scrap', next);

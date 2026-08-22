@@ -3,7 +3,7 @@ import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
 import { inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
-import { custGroupOf } from '../lib/master.js';
+import { specGroup } from '../lib/master.js';
 import { fgSpecsWithActivity, fgAvail, fgAgeingInfo, fgAddProduction, fgTodayISO } from '../lib/fg.js';
 
 const nfmt = (v) => Math.round(Number(v) || 0).toLocaleString('en-IN');
@@ -41,7 +41,7 @@ export default function FgValuePanel() {
         const ag = fgAgeingInfo(ledger, sp);
         return {
           spec: sp,
-          customer: j.customer ? custGroupOf(j.customer, mods.customers) : '',
+          customer: j.customer || specGroup(j, mods.customers) || j.group || '',
           sku: j.jobName || '',
           av, price, value: av * price, agingDays: ag.days, ageing: ag.display,
         };

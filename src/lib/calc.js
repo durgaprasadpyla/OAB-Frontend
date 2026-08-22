@@ -25,14 +25,19 @@ export function dispatched(r) {
  */
 export function calcMetres(r, qty, jss) {
   const df = String((jss && jss.dispatchForm) || r.dispatchForm || '').toLowerCase().trim();
+  const jt = String((jss && jss.jobType) || r.jobType || '').toLowerCase().trim();
   const w = num((jss && jss.width) || r.width);
   const h = num((jss && jss.height) || r.height);
   const fw = num((jss && jss.filmWidth) || r.filmWidth);
   const gsm = num((jss && jss.gsm) || r.gsm);
   const q = num(qty);
   let base = 0;
-  if (df === 'pouch' || df === 'pouches') base = q * w / 1000;
+  // Shrink-sleeve jobs run/dispatch by sleeve height × piece count regardless of the
+  // Dispatch Form (they're often still tagged "Roll"), so this takes precedence. (legacy 2488)
+  if (jt === 'shrink sleeve') base = q * h / 1000;
+  else if (df === 'pouch' || df === 'pouches') base = q * w / 1000;
   else if (df === 'bulk bag' || df === 'bulk bags') base = q * h / 1000;
+  else if (df === 'sleeve' || df === 'sleeves') base = q * h / 1000;   // Qty × Sleeve Height ÷ 1000 (legacy 2496)
   else if (df === 'roll' || df === 'rolls' || df === 'kgs' || df === 'kg') base = (fw > 0 && gsm > 0) ? q / ((fw / 1000) * (gsm / 1000)) : 0;
   else if (df === 'labels' || df === 'label') base = 0;
   else base = q * w / 1000;

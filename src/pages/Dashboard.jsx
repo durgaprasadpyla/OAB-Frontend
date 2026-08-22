@@ -248,7 +248,7 @@ function Summary() {
     const b = balance(r);
     const pr = getPM(r.spec, mods.prices).price || 0;
     const cp = getCostPrice(r.spec, ctx) || 0;
-    const soMargin = (pr > 0 && cp > 0) ? (pr - cp) * b : null;
+    const soMargin = (pr > 0 && cp > 0) ? (pr - cp) * num(r.poQty) : null;   // × PO Qty, matching legacy (5120) + the SO-Margin KPI total
     const age = r.poDate ? Math.floor((Date.now() - new Date(r.poDate).getTime()) / 86400000) : null;
     return { b, pr, soMargin, age };
   };

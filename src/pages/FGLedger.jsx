@@ -32,7 +32,7 @@ export default function FGLedger() {
   const [msg, setMsg] = useState(null);      // { t:'g'|'y'|'r', text }
   const [busy, setBusy] = useState(false);
   const [sumQ, setSumQ] = useState('');
-  const [sumSort, setSumSort] = useState('value-desc');
+  const [sumSort, setSumSort] = useState('spec');   // legacy orders the FG summary by spec A→Z (7038); no sort control is exposed here
 
   const flash = (t, text) => { setMsg({ t, text }); if (t !== 'g') setTimeout(() => setMsg(null), 4500); };
 
