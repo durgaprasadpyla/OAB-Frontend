@@ -1,0 +1,99 @@
+name: Deploy frontend to S3 + CloudFront
+
+# Push to the production branch -> install + test + build -> upload to the
+# EXISTING production S3 bucket -> invalidate the EXISTING CloudFront dist ->
+# verify the live URL. AWS auth is GitHub OIDC (no stored keys). See CICD-SETUP.md.
+# The backend API URL is baked in at build time from .env.production (VITE_API_BASE).
+
+on:
+  push:
+    # 'main' verified as this repo's default/production branch on 2026-08-22
+    # (git ls-remote --symref origin HEAD). The job-level guard below re-checks
+    # the *actual* default branch at runtime, so we never blindly assume it.
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true     # a newer push supersedes an in-flight build
+
+permissions:
+  id-token: write              # required to request the OIDC token for AWS
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  BUCKET: oab-frontend-318866803551
+  DISTRIBUTION_ID: ET2VMLKWVE5QW
+  LIVE_URL: https://d3f68thcqn23fi.cloudfront.net
+
+jobs:
+  deploy:
+    # Deploy ONLY from the repo's real default (production) branch, resolved at
+    # runtime — not hardcoded. A push to any other branch is skipped, not failed.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Vitest unit tests — a failing test fails the job and blocks the deploy.
+      - name: Test
+        run: npm test
+
+      # `vite build` reads .env.production, baking VITE_API_BASE (the API Gateway
+      # URL) into dist/. This is the repo's existing production build process.
+      - name: Build
+        run: npm run build
+
+      - name: Confirm build output
+        run: |
+          test -f dist/index.html || { echo "::error::dist/index.html missing after build"; exit 1; }
+          echo "Built $(find dist -type f | wc -l) files"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::318866803551:role/oab-cicd-frontend
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload build to the existing S3 bucket
+        run: |
+          set -euo pipefail
+          aws s3 sync dist/ "s3://$BUCKET/" --delete
+          echo "Synced dist/ to s3://$BUCKET/"
+
+      - name: Invalidate CloudFront and wait for it to complete
+        run: |
+          set -euo pipefail
+          inv=$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
+            --query 'Invalidation.Id' --output text)
+          echo "Created invalidation $inv; waiting for it to finish..."
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" --id "$inv"
+          echo "Invalidation $inv completed."
+
+      - name: Test the live frontend URL
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /tmp/live.html -w '%{http_code}' "$LIVE_URL/")
+          echo "GET $LIVE_URL/ -> HTTP $code"
+          if [ "$code" != "200" ]; then echo "::error::Live URL returned HTTP $code"; exit 1; fi
+          # The SPA shell must reference its built JS bundle — proves the new build is served.
+          if ! grep -qE '/assets/index-.*\.js' /tmp/live.html; then
+            echo "::error::Live page is missing the built asset reference"; exit 1
+          fi
+          echo "Live frontend is up and serving the new build."
