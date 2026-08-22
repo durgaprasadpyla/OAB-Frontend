@@ -4,26 +4,49 @@ import { useAuth } from '../auth.jsx';
 import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO } from '../lib/bom.js';
+import { exportAOA } from '../lib/xlsx.js';
+import { elementToPDF } from '../lib/pdf.js';
 
 // Bill of Materials editor — superadmin only (module 13).
 // Defines, per spec, the raw material needed to make a BASE quantity. The Raw
 // Material Requirement view then scales that recipe by each open order's balance.
-// Ported from the legacy renderBomList / bomEditorHTML / bomSaveSpec.
+// Ported from the legacy renderBomList / bomEditorHTML / bomSaveSpec /
+// bomFillFromCode / bomExportExcel / bomExportPDF.
 
-const ITEM_COLS = [
-  { k: 'itemCode', label: 'Item Code', w: 130 },
-  { k: 'itemDescription', label: 'Description', w: 220 },
-  { k: 'materialType', label: 'Material Type', w: 130 },
-  { k: 'subGroup', label: 'Sub Group', w: 120 },
-  { k: 'microns', label: 'Microns', w: 80 },
-  { k: 'uom', label: 'UOM', w: 80 },
-];
 const blankItem = () => ({ itemCode: '', itemDescription: '', materialType: '', subGroup: '', microns: '', uom: '', qtyPerBase: '' });
+const DATALIST_ID = 'bom-item-code-list';
+
+const uniqSorted = (arr) => [...new Set(arr)].sort((a, b) => String(a).localeCompare(String(b)));
+// Show the stored value even when the current Item Master no longer lists it, so
+// an older BOM never loses its selection just because the catalog changed.
+const withCurrent = (opts, cur) => (cur && !opts.includes(cur) ? [cur, ...opts] : opts);
+const safeName = (s) => String(s == null ? '' : s).replace(/[\\/:*?"<>|]+/g, '-');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/**
+ * The BOM Item Master: one row per unique item code, sourced from the purchase
+ * module's Approved Supplier List (first non-linked row defines a code) plus the
+ * catalog-only itemsExtra entries. Each entry is { code, ref } where `ref`
+ * carries materialType / subGroup / specificMaterial / microns / uom.
+ * Mirrors the legacy imMasterList (index.html 12110).
+ */
+function buildItemMaster(purchase) {
+  const asl = Array.isArray(purchase && purchase.asl) ? purchase.asl : [];
+  const extra = Array.isArray(purchase && purchase.itemsExtra) ? purchase.itemsExtra : [];
+  const seen = new Set();
+  const list = [];
+  asl.forEach((r) => { const code = r.itemCode; if (!code || seen.has(code) || r.linked === true) return; seen.add(code); list.push({ code, ref: r }); });
+  asl.forEach((r) => { const code = r.itemCode; if (!code || seen.has(code)) return; seen.add(code); list.push({ code, ref: r }); });
+  extra.forEach((r) => { const code = r.itemCode; if (!code || seen.has(code)) return; seen.add(code); list.push({ code, ref: r }); });
+  list.sort((a, b) => String(a.code).localeCompare(String(b.code)));
+  return list;
+}
 
 export default function BomPanel() {
   const { mods, save } = useData();
   const { user } = useAuth();
   const bom = mods.bom || {};
+  const itemMaster = useMemo(() => buildItemMaster(mods.purchase), [mods.purchase]);
   const jss = useMemo(() => (mods.jss || []).filter((j) => String(j.spec || '').trim()), [mods.jss]);
 
   const [q, setQ] = useState('');
@@ -62,8 +85,42 @@ export default function BomPanel() {
 
   const setField = (f, v) => setDraft((d) => ({ ...d, [f]: v }));
   const setItem = (i, f, v) => setDraft((d) => ({ ...d, items: d.items.map((r, j) => (j === i ? { ...r, [f]: v } : r)) }));
+  const fillItem = (i, patch) => setDraft((d) => ({ ...d, items: d.items.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   const addItem = () => setDraft((d) => ({ ...d, items: [...d.items, blankItem()] }));
   const removeItem = (i) => setDraft((d) => ({ ...d, items: d.items.length > 1 ? d.items.filter((_, j) => j !== i) : [blankItem()] }));
+
+  // Choosing an Item Code fills materialType / subGroup / description / microns /
+  // uom from the Item Master; a free code just sets the code. (bomFillFromCode 6491)
+  function fillFromCode(i, code) {
+    const found = itemMaster.find((m) => m.code === code);
+    if (found) {
+      fillItem(i, {
+        itemCode: code,
+        materialType: found.ref.materialType || '', subGroup: found.ref.subGroup || '',
+        itemDescription: found.ref.specificMaterial || '', microns: found.ref.microns || '', uom: found.ref.uom || '',
+      });
+    } else {
+      setItem(i, 'itemCode', code);
+    }
+  }
+  // Choosing a description (within the row's material/sub-group filters) fills the
+  // rest of the row from the matching master item. (bomFillFromDescription 6483)
+  function fillFromDescription(i, row, desc) {
+    if (!desc) { setItem(i, 'itemDescription', ''); return; }
+    const found = itemMaster.find((m) =>
+      (!row.materialType || (m.ref.materialType || '') === row.materialType)
+      && (!row.subGroup || (m.ref.subGroup || '') === row.subGroup)
+      && (m.ref.specificMaterial || '') === desc);
+    if (found) {
+      fillItem(i, {
+        itemDescription: desc, itemCode: found.code,
+        materialType: found.ref.materialType || row.materialType || '', subGroup: found.ref.subGroup || row.subGroup || '',
+        microns: found.ref.microns || '', uom: found.ref.uom || '',
+      });
+    } else {
+      fillItem(i, { itemDescription: desc });
+    }
+  }
 
   async function saveSpec(spec, jssRow) {
     setBusy(true);
@@ -74,6 +131,54 @@ export default function BomPanel() {
     } catch (e) {
       flash('r', '⚠ ' + (e && e.message ? e.message : String(e)));
     } finally { setBusy(false); }
+  }
+
+  // Download a defined BOM as an .xlsx sheet (meta header + item rows). (bomExportExcel 6586)
+  function exportExcel(spec, jssRow) {
+    const rec = bom[spec];
+    if (!rec || !(rec.items || []).length) { flash('r', `No BOM defined for ${spec} yet.`); return; }
+    const baseLine = `${rec.baseQty ?? ''} ${rec.baseUOM || ''}`.trim() + (rec.meters ? ` / ${rec.meters} m` : '');
+    const meta = [
+      ['Spec', spec],
+      ['Customer', jssRow.customer || ''],
+      ['Job Name', jssRow.jobName || ''],
+      ['Dispatch Form', jssRow.dispatchForm || ''],
+      ['Base Qty', baseLine],
+      [],
+    ];
+    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
+    const body = rec.items.map((r) => [r.itemCode, r.materialType || '', r.subGroup || '', r.itemDescription || '', r.microns || '', r.uom || '', r.qtyPerBase]);
+    exportAOA([...meta, header, ...body], 'BOM_' + safeName(spec), 'BOM');
+  }
+
+  // Download a defined BOM as a one-page PDF, rasterised from an offscreen node
+  // via the shared lib/pdf pipeline. (bomExportPDF 6594)
+  async function exportPDF(spec, jssRow) {
+    const rec = bom[spec];
+    if (!rec || !(rec.items || []).length) { flash('r', `No BOM defined for ${spec} yet.`); return; }
+    const baseLine = `${esc(rec.baseQty)} ${esc(rec.baseUOM)}`.trim() + (rec.meters ? ` / ${esc(rec.meters)} m` : '');
+    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
+    const rowsHtml = rec.items.map((r) => '<tr style="border-bottom:1px solid #eee">'
+      + [r.itemCode, r.materialType, r.subGroup, r.itemDescription, r.microns, r.uom, r.qtyPerBase]
+        .map((c, k) => `<td style="padding:4px 6px;text-align:${k === 6 ? 'right' : 'left'}">${esc(c)}</td>`).join('')
+      + '</tr>').join('');
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;padding:16px;font-family:Arial,sans-serif;width:760px;color:#111';
+    wrap.innerHTML = `<div style="font-size:16px;font-weight:800;color:#0e6fb8;margin-bottom:6px">Bill of Materials — ${esc(spec)}</div>`
+      + `<div style="font-size:11px;color:#444;margin-bottom:2px">Customer: ${esc(jssRow.customer)}</div>`
+      + `<div style="font-size:11px;color:#444;margin-bottom:2px">Job Name: ${esc(jssRow.jobName)}</div>`
+      + `<div style="font-size:11px;color:#444;margin-bottom:10px">Dispatch Form: ${esc(jssRow.dispatchForm)} &nbsp; Base Qty: ${baseLine}</div>`
+      + '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#0e6fb8;color:#fff">'
+      + header.map((h) => `<th style="padding:5px 6px;text-align:left">${esc(h)}</th>`).join('')
+      + `</tr></thead><tbody>${rowsHtml}</tbody></table>`;
+    document.body.appendChild(wrap);
+    try {
+      await elementToPDF(wrap, 'BOM_' + safeName(spec));
+    } catch (e) {
+      flash('r', 'PDF error: ' + (e && e.message ? e.message : String(e)));
+    } finally {
+      document.body.removeChild(wrap);
+    }
   }
 
   const rec = openSpec ? bom[openSpec] : null;
@@ -95,7 +200,7 @@ export default function BomPanel() {
 
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
-          <thead><tr><th>Spec</th><th>Customer</th><th style={{ minWidth: 200 }}>Job Name</th><th>Dispatch</th><th style={{ textAlign: 'center' }}>BOM</th><th style={{ textAlign: 'center', width: 90 }}></th></tr></thead>
+          <thead><tr><th>Spec</th><th>Customer</th><th style={{ minWidth: 200 }}>Job Name</th><th>Dispatch</th><th style={{ textAlign: 'center' }}>BOM</th><th style={{ textAlign: 'center', width: 180 }}></th></tr></thead>
           <tbody>
             {specs.length === 0 ? (
               <tr><td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
@@ -103,6 +208,7 @@ export default function BomPanel() {
               <BomRow
                 key={spec} spec={spec} jssRow={j} defined={hasBOM(bom, spec)}
                 open={openSpec === spec} onToggle={() => openEditor(spec, j)}
+                onExportExcel={() => exportExcel(spec, j)} onExportPDF={() => exportPDF(spec, j)}
               >
                 {openSpec === spec && draft && (
                   <td colSpan={6} style={{ background: 'var(--bg)', padding: '12px 18px' }}>
@@ -117,21 +223,65 @@ export default function BomPanel() {
                       <div className="fg"><label>Height</label><input value={draft.height} onChange={(e) => setField('height', e.target.value)} /></div>
                     </div>
 
+                    <datalist id={DATALIST_ID}>
+                      {itemMaster.map((m) => <option key={m.code} value={m.code}>{m.code + ' — ' + (m.ref.specificMaterial || '')}</option>)}
+                    </datalist>
                     <div className="tw" style={{ maxHeight: 260 }}>
                       <table>
-                        <thead><tr>{ITEM_COLS.map((c) => <th key={c.k} style={{ minWidth: c.w }}>{c.label}</th>)}<th style={{ textAlign: 'right', width: 120 }}>Qty / base *</th><th style={{ width: 40 }}></th></tr></thead>
+                        <thead><tr>
+                          <th style={{ minWidth: 130 }}>Material Type</th>
+                          <th style={{ minWidth: 120 }}>Sub-Group</th>
+                          <th style={{ minWidth: 200 }}>Item Description</th>
+                          <th style={{ minWidth: 130 }}>Item Code</th>
+                          <th style={{ width: 80 }}>Microns</th>
+                          <th style={{ width: 80 }}>UOM</th>
+                          <th style={{ textAlign: 'right', width: 110 }}>Qty / base *</th>
+                          <th style={{ width: 40 }}></th>
+                        </tr></thead>
                         <tbody>
-                          {draft.items.map((r, i) => (
-                            <tr key={i}>
-                              {ITEM_COLS.map((c) => (
-                                <td key={c.k}><input value={r[c.k] ?? ''} aria-label={`${c.label} row ${i + 1}`} onChange={(e) => setItem(i, c.k, e.target.value)} style={{ width: '100%' }} /></td>
-                              ))}
-                              <td><input type="number" min="0" step="any" aria-label={`Qty per base row ${i + 1}`} value={r.qtyPerBase ?? ''} onChange={(e) => setItem(i, 'qtyPerBase', e.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
-                              <td style={{ textAlign: 'center' }}>
-                                <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => removeItem(i)} title="Remove item">✕</button>
-                              </td>
-                            </tr>
-                          ))}
+                          {draft.items.map((r, i) => {
+                            // Material Type → Sub-Group → Item Description each narrows the next.
+                            const matOpts = uniqSorted(itemMaster.map((m) => m.ref.materialType || '').filter(Boolean));
+                            const byMat = itemMaster.filter((m) => !r.materialType || (m.ref.materialType || '') === r.materialType);
+                            const subOpts = uniqSorted(byMat.map((m) => m.ref.subGroup || '').filter(Boolean));
+                            const bySub = byMat.filter((m) => !r.subGroup || (m.ref.subGroup || '') === r.subGroup);
+                            const descOpts = uniqSorted(bySub.map((m) => m.ref.specificMaterial || '').filter(Boolean));
+                            return (
+                              <tr key={i}>
+                                <td>
+                                  <select aria-label={`Material Type row ${i + 1}`} value={r.materialType || ''} style={{ width: '100%' }}
+                                    onChange={(e) => fillItem(i, { materialType: e.target.value, subGroup: '' })}>
+                                    <option value="">Any</option>
+                                    {withCurrent(matOpts, r.materialType).map((m) => <option key={m} value={m}>{m}</option>)}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select aria-label={`Sub Group row ${i + 1}`} value={r.subGroup || ''} style={{ width: '100%' }}
+                                    onChange={(e) => setItem(i, 'subGroup', e.target.value)}>
+                                    <option value="">Any</option>
+                                    {withCurrent(subOpts, r.subGroup).map((s) => <option key={s} value={s}>{s}</option>)}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select aria-label={`Description row ${i + 1}`} value={r.itemDescription || ''} style={{ width: '100%' }}
+                                    onChange={(e) => fillFromDescription(i, r, e.target.value)}>
+                                    <option value="">Select…</option>
+                                    {withCurrent(descOpts, r.itemDescription).map((d) => <option key={d} value={d}>{d}</option>)}
+                                  </select>
+                                </td>
+                                <td>
+                                  <input list={DATALIST_ID} aria-label={`Item Code row ${i + 1}`} value={r.itemCode ?? ''} placeholder="code"
+                                    onChange={(e) => fillFromCode(i, e.target.value)} style={{ width: '100%' }} />
+                                </td>
+                                <td><input aria-label={`Microns row ${i + 1}`} value={r.microns ?? ''} onChange={(e) => setItem(i, 'microns', e.target.value)} style={{ width: '100%' }} /></td>
+                                <td><input aria-label={`UOM row ${i + 1}`} value={r.uom ?? ''} onChange={(e) => setItem(i, 'uom', e.target.value)} style={{ width: '100%' }} /></td>
+                                <td><input type="number" min="0" step="any" aria-label={`Qty per base row ${i + 1}`} value={r.qtyPerBase ?? ''} onChange={(e) => setItem(i, 'qtyPerBase', e.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+                                <td style={{ textAlign: 'center' }}>
+                                  <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => removeItem(i)} title="Remove item">✕</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -177,7 +327,7 @@ export default function BomPanel() {
 }
 
 /** One spec row plus, when open, its editor as a full-width sibling row. */
-function BomRow({ spec, jssRow, defined, open, onToggle, children }) {
+function BomRow({ spec, jssRow, defined, open, onToggle, onExportExcel, onExportPDF, children }) {
   const items = defined ? 'defined' : '—';
   return (
     <>
@@ -189,8 +339,16 @@ function BomRow({ spec, jssRow, defined, open, onToggle, children }) {
         <td style={{ textAlign: 'center' }}>
           {defined ? <span className="tag tgr" style={{ fontSize: 10 }}>{items}</span> : <span style={{ fontSize: 10, color: 'var(--i3)', fontStyle: 'italic' }}>no BOM</span>}
         </td>
-        <td style={{ textAlign: 'center' }}>
-          <button className="btn btn-s" onClick={onToggle} aria-label={`${open ? 'Close' : 'Edit'} BOM for ${spec}`}>{open ? 'Close' : 'BOM'}</button>
+        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+          <button className="btn btn-s" style={{ height: 26, fontSize: 11, padding: '0 10px' }} onClick={onToggle} aria-label={`${open ? 'Close' : 'Edit'} BOM for ${spec}`}>{open ? 'Close' : 'BOM'}</button>
+          {defined && (
+            <>
+              {' '}
+              <button className="btn btn-s" style={{ height: 26, fontSize: 11, padding: '0 8px' }} title="Download Excel" aria-label={`Download Excel for ${spec}`} onClick={onExportExcel}>⬇ XLS</button>
+              {' '}
+              <button className="btn btn-s" style={{ height: 26, fontSize: 11, padding: '0 8px' }} title="Download PDF" aria-label={`Download PDF for ${spec}`} onClick={onExportPDF}>⬇ PDF</button>
+            </>
+          )}
         </td>
       </tr>
       {open && <tr>{children}</tr>}

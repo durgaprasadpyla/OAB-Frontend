@@ -65,6 +65,9 @@ export const ordersApi = {
   close: (so) => api('/api/oab-rows/close', { method: 'POST', body: { so } }),
   reopen: (so) => api('/api/oab-rows/reopen', { method: 'POST', body: { so } }),
   setStage: (so, stage) => api('/api/oab-rows/stage', { method: 'POST', body: { so, stage } }),
+  // Permanent server-side row delete. A whole-blob save can't delete a module-1 row
+  // (the 3-way merge re-adds it), so deletion goes through this granular endpoint.
+  deleteRow: (so) => api('/api/oab-rows/delete', { method: 'POST', body: { so } }),
 };
 
 // Granular purchase (module 6) endpoints — server assigns PO numbers, atomic GRN.

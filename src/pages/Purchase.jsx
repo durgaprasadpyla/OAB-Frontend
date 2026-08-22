@@ -1,9 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { purchaseApi } from '../api.js';
-import { parsePaymentDays, num } from '../lib/calc.js';
+import { parsePaymentDays, num, purchComputeStatus } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
+import { readImageCompressed } from '../lib/attach.js';
 import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 
 // ── Local helpers (kept in this file — shared libs are read-only for this port) ──
@@ -11,11 +12,24 @@ import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 /** Quantity display: Indian grouping, up to 2 decimals, no forced trailing zeros. */
 const qtyStr = (v) => num(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
-/** PO status → legacy .tag colour (Open→ty, Partial→tb, Closed→tg). */
-function statusTag(status) {
-  const s = status || 'Open';
-  const cls = s === 'Closed' ? 'tg' : s === 'Partial' ? 'tb' : 'ty';
-  return <span className={'tag ' + cls}>{s}</span>;
+const statusOf = (po) => po.status || purchComputeStatus(po.items || []);
+const isClosed = (po) => statusOf(po) === 'Closed' || !!po.closed || !!po.manualClosed || !!po.closedDate;
+
+/** Days late/early vs expected delivery. Closed counts to the close date; open to today. (purchDelayDays 6235) */
+function delayDays(po) {
+  if (!po || !po.expectedDelivery) return null;
+  const end = isClosed(po) ? (po.closedDate || today()) : today();
+  return Math.round((new Date(end + 'T00:00:00') - new Date(po.expectedDelivery + 'T00:00:00')) / 86400000);
+}
+
+/** Stage label + colour for a PO. (purchStage 12323) */
+function stageOf(po) {
+  const st = statusOf(po);
+  const dd = delayDays(po);
+  const overdue = st !== 'Closed' && dd != null && dd > 0;
+  if (st === 'Closed') return { label: '✓ Closed', color: 'var(--g)' };
+  if (st === 'Partial') return overdue ? { label: '◐ Partial (Overdue)', color: 'var(--red)' } : { label: '◐ Partial', color: 'var(--blu)' };
+  return overdue ? { label: '⚠ Overdue', color: 'var(--red)' } : { label: '⏳ Open', color: '#856404' };
 }
 
 const EMPTY_ROW = { item: '', unit: '', qty: '', rate: '' };
@@ -39,6 +53,7 @@ export default function Purchase() {
   // Generate-PO form state
   const [supplier, setSupplier] = useState('');
   const [items, setItems] = useState([{ ...EMPTY_ROW }]);
+  const [poDate, setPoDate] = useState(today());
   const [expected, setExpected] = useState('');
   const [gst, setGst] = useState('');
   const [notes, setNotes] = useState('');
@@ -50,7 +65,13 @@ export default function Purchase() {
   const [grnRef, setGrnRef] = useState('');
   const [grnDate, setGrnDate] = useState(today());
   const [grnQty, setGrnQty] = useState({}); // { itemIndex: value }
+  const [grnImage, setGrnImage] = useState('');   // compressed receipt photo (data URI)
+  const [grnImgBusy, setGrnImgBusy] = useState(false);
   const [grnMsg, setGrnMsg] = useState(null);
+  const [trackQ, setTrackQ] = useState('');       // GRN-entry search box
+
+  // Payments state
+  const [payStat, setPayStat] = useState('Unpaid'); // default to what still needs paying
 
   // ── Derived data straight off the module (re-derives after every save) ──
   const purchase = mods.purchase || {};
@@ -59,13 +80,12 @@ export default function Purchase() {
 
   // Follow-up nudge: open POs past their expected delivery, most overdue first.
   // Days late is measured against today; a closed PO can no longer be late.
-  // (pvRenderNudges 7000)
+  // (pvRenderNudges 13285)
   const overdue = useMemo(() => {
-    const todayMs = new Date(today() + 'T00:00:00').getTime();
     return pos
-      .filter((p) => !p.closed && !p.manualClosed && p.expectedDelivery)
-      .map((p) => ({ po: p, late: Math.floor((todayMs - new Date(p.expectedDelivery + 'T00:00:00').getTime()) / 86400000) }))
-      .filter((x) => x.late > 0)
+      .filter((p) => !isClosed(p) && p.expectedDelivery)
+      .map((p) => ({ po: p, late: delayDays(p) }))
+      .filter((x) => x.late != null && x.late > 0)
       .sort((a, b) => b.late - a.late);
   }, [pos]);
 
@@ -111,6 +131,11 @@ export default function Purchase() {
     d.setDate(d.getDate() + days);
     return d.toISOString().slice(0, 10);
   }
+  function dueInDays(po) { // negative = overdue (purchDueInDays 12523)
+    const d = new Date(dueDate(po) + 'T00:00:00');
+    const t = new Date(today() + 'T00:00:00');
+    return Math.round((d - t) / 86400000);
+  }
 
   // ── Section 1: Generate PO ──
   const setItem = (i, patch) => setItems((xs) => xs.map((it, j) => (j === i ? { ...it, ...patch } : it)));
@@ -142,11 +167,25 @@ export default function Purchase() {
     const valid = items.filter((it) => it.item.trim() && num(it.qty) > 0 && num(it.rate) >= 0);
     if (!valid.length) { setGenMsg({ t: 'r', m: 'Add at least one item with a quantity and rate.' }); return; }
 
+    // Safety net: catch items the Approved Supplier List says belong to OTHER
+    // suppliers, not the selected one. Free-typed items unknown to the list pass
+    // through without complaint. (legacy pvGeneratePO 13051)
+    const supItems = new Set(asl.filter((r) => r.company === supplier).map((r) => (r.specificMaterial || '').trim().toLowerCase()));
+    const knownItems = new Set(asl.map((r) => (r.specificMaterial || '').trim().toLowerCase()));
+    const mismatched = valid.filter((it) => { const k = it.item.trim().toLowerCase(); return knownItems.has(k) && !supItems.has(k); });
+    if (mismatched.length) {
+      const detail = mismatched.map((it) => {
+        const others = [...new Set(asl.filter((r) => (r.specificMaterial || '').trim().toLowerCase() === it.item.trim().toLowerCase()).map((r) => r.company))];
+        return '• ' + it.item + ' (supplied by: ' + others.join(', ') + ')';
+      }).join('\n');
+      if (!window.confirm('⚠ "' + supplier + '" is not listed as a supplier for:\n' + detail + '\n\nGenerate this PO to "' + supplier + '" anyway?')) return;
+    }
+
     // The server assigns the number, computes the total, and records price history.
     let made = '';
     const r = await runPurchase(async () => {
       const resp = await purchaseApi.createPO({
-        supplier, expectedDelivery: expected || '', gstPercent: num(gst), notes: (notes || '').trim(),
+        supplier, poDate: poDate || today(), expectedDelivery: expected || '', gstPercent: num(gst), notes: (notes || '').trim(),
         items: valid.map((it) => ({ item: it.item.trim(), unit: (it.unit || '').trim(), qty: num(it.qty), rate: num(it.rate) })),
       });
       made = resp && resp.poNum;
@@ -154,7 +193,7 @@ export default function Purchase() {
 
     if (r === true) {
       setGenMsg({ t: 'g', m: '✓ ' + made + ' generated and saved.' });
-      setItems([{ ...EMPTY_ROW }]); setExpected(''); setGst(''); setNotes(''); setSupplier('');
+      setItems([{ ...EMPTY_ROW }]); setPoDate(today()); setExpected(''); setGst(''); setNotes(''); setSupplier('');
     } else if (r) {
       setGenMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
     }
@@ -166,16 +205,25 @@ export default function Purchase() {
     setGrnRef(po.grnRef || '');
     setGrnDate(today());
     setGrnQty({});
+    setGrnImage('');
     setGrnMsg(null);
   }
-  const closeGRN = () => { setGrnFor(null); setGrnMsg(null); };
+  const closeGRN = () => { setGrnFor(null); setGrnImage(''); setGrnMsg(null); };
+
+  async function pickGrnPhoto(file) {
+    if (!file) return;
+    setGrnImgBusy(true);
+    try { setGrnImage(await readImageCompressed(file)); }
+    catch (e) { setGrnMsg({ t: 'r', m: e.message || 'Could not read that photo.' }); }
+    finally { setGrnImgBusy(false); }
+  }
 
   async function saveGRN(po) {
     setGrnMsg(null);
     if (!grnRef.trim()) { setGrnMsg({ t: 'r', m: 'Enter the GRN reference.' }); return; }
     const qty = {};                       // { itemIndex: receiveNow }; server caps at the balance
     (po.items || []).forEach((it, idx) => { const v = num(grnQty[idx]); if (v > 0) qty[idx] = v; });
-    const r = await runPurchase(() => purchaseApi.receiveGRN({ poNum: po.poNum, grnRef: grnRef.trim(), qty }));
+    const r = await runPurchase(() => purchaseApi.receiveGRN({ poNum: po.poNum, grnRef: grnRef.trim(), qty, receiptImage: grnImage || '' }));
     if (r === true) closeGRN();
     else if (r) setGrnMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
   }
@@ -202,15 +250,57 @@ export default function Purchase() {
   };
 
   function exportPayments() {
-    const header = ['PO Number', 'Supplier', 'Total Amount', 'Payment Terms', 'Due Date', 'Status', 'Payment Date'];
-    const body = pos.map((po) => [
-      po.poNum, po.supplier, num(po.totalAmount), paymentTermsText(po),
-      fmtDate(dueDate(po)), po.paymentStatus || 'Unpaid', po.paymentDate ? fmtDate(po.paymentDate) : '',
-    ]);
+    const rowsToExport = payRows;
+    const header = ['PO Number', 'Supplier', 'PO / Invoice Date', 'GRN Ref', 'Actual Receipt Date', 'Payment Terms', 'Payment Due Date', 'Days to Due (neg = overdue)', 'Amount', 'Payment Status', 'Payment Date'];
+    const body = rowsToExport.map((po) => {
+      const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
+      return [
+        po.poNum, po.supplier, po.poDate ? fmtDate(po.poDate) : '', po.grnRef || '', po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '',
+        paymentTermsText(po), fmtDate(dueDate(po)), paid ? '' : dueInDays(po), num(po.totalAmount),
+        po.paymentStatus || 'Unpaid', po.paymentDate ? fmtDate(po.paymentDate) : '',
+      ];
+    });
     exportAOA([header, ...body], 'purchase-payments-' + today() + '.xlsx', 'Payments');
   }
 
+  // ── Tracking derived sets ──
+  const openPos = useMemo(() => {
+    let r = pos.filter((p) => !isClosed(p)); // closed POs live in "Recently Closed"
+    if (trackQ) {
+      const s = trackQ.toLowerCase();
+      r = r.filter((p) => String(p.poNum || '').toLowerCase().includes(s)
+        || String(p.supplier || '').toLowerCase().includes(s)
+        || (p.items || []).some((i) => String(i.item || '').toLowerCase().includes(s)));
+    }
+    return r.sort((a, b) => (delayDays(b) ?? 0) - (delayDays(a) ?? 0)); // most overdue first
+  }, [pos, trackQ]);
+
+  const closedPos = useMemo(
+    () => pos.filter(isClosed).slice().sort((a, b) => String(b.closedDate || '').localeCompare(String(a.closedDate || ''))).slice(0, 30),
+    [pos],
+  );
+
+  const payRows = useMemo(() => {
+    let r = pos.slice();
+    if (payStat) r = r.filter((p) => (p.paymentStatus || 'Unpaid') === payStat);
+    return r.sort((a, b) => {
+      const pa = (a.paymentStatus || 'Unpaid') === 'Paid', pb = (b.paymentStatus || 'Unpaid') === 'Paid';
+      if (pa !== pb) return pa ? 1 : -1; // unpaid first
+      return pa ? String(b.paymentDate || '').localeCompare(String(a.paymentDate || '')) : (dueInDays(a) - dueInDays(b));
+    });
+  }, [pos, payStat, asl]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const TABS = [['gen', '① Generate PO'], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments']];
+  const TRACK_COLS = 11;
+
+  function dueInCell(po) {
+    const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
+    if (paid) return <span style={{ color: 'var(--i3)' }}>-</span>;
+    const di = dueInDays(po);
+    const color = di < 0 ? 'var(--red)' : (di <= 15 ? '#a3510a' : 'var(--g)');
+    const text = di < 0 ? Math.abs(di) + 'd overdue' : (di === 0 ? 'Due today' : di + 'd left');
+    return <span style={{ color, fontWeight: 700 }}>{text}</span>;
+  }
 
   return (
     <div id="app">
@@ -250,6 +340,10 @@ export default function Purchase() {
                 <option value="">— Select Supplier —</option>
                 {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
+            </div>
+            <div className="fg">
+              <label>PO Date</label>
+              <input type="date" value={poDate} onChange={(e) => setPoDate(e.target.value)} />
             </div>
             <div className="fg">
               <label>Expected Delivery</label>
@@ -314,128 +408,214 @@ export default function Purchase() {
 
       {/* ── 2) PO TRACKING + GRN ── */}
       {tab === 'track' && (
-        <div className="card">
-          <div className="ctitle">PO Tracking &amp; Goods Receipt (GRN)</div>
-          {!pos.length ? (
-            <div className="al al-y">No purchase orders yet — generate one from the first tab.</div>
-          ) : (
-            <div className="tw sy">
-              <table>
-                <thead>
-                  <tr>
-                    <th>PO #</th>
-                    <th>Supplier</th>
-                    <th>Date</th>
-                    <th style={{ textAlign: 'center' }}>Items</th>
-                    <th style={{ textAlign: 'right' }}>Total</th>
-                    <th style={{ textAlign: 'right' }}>Ordered</th>
-                    <th style={{ textAlign: 'right' }}>Received</th>
-                    <th>Expected</th>
-                    <th>Status</th>
-                    <th style={{ textAlign: 'center' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pos.map((po) => {
-                    const list = po.items || [];
-                    const ordered = list.reduce((s, i) => s + num(i.qty), 0);
-                    const received = list.reduce((s, i) => s + num(i.receivedQty), 0);
-                    const status = po.status || 'Open';
-                    const open = status !== 'Closed';
-                    const rColor = ordered > 0 && received >= ordered ? 'var(--g)' : received > 0 ? 'var(--blu)' : 'var(--i3)';
-                    return (
-                      <Fragment key={po.poNum}>
-                        <tr>
-                          <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{po.poNum}</td>
-                          <td>{po.supplier}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(po.poDate)}</td>
-                          <td style={{ textAlign: 'center' }}>{list.length}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupees(po.totalAmount)}</td>
-                          <td style={{ textAlign: 'right' }}>{qtyStr(ordered)}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, color: rColor }}>{qtyStr(received)}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-'}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>
-                            {statusTag(status)}
-                            {po.manualClosed && <span style={{ fontSize: 9, color: 'var(--red)', marginLeft: 4 }}>(manual)</span>}
+        <>
+          <div className="card">
+            <div className="ctitle" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>GRN Entry — Open &amp; Partially Received POs <span className="tag tgr">{openPos.length}</span></span>
+              <input placeholder="Search PO / supplier / item…" value={trackQ} onChange={(e) => setTrackQ(e.target.value)} style={{ maxWidth: 260 }} />
+            </div>
+            {!openPos.length ? (
+              <div className="al al-y">{trackQ ? 'No open POs match your search.' : 'No open or partially received purchase orders.'}</div>
+            ) : (
+              <div className="tw sy">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>PO #</th>
+                      <th>Supplier</th>
+                      <th>Item</th>
+                      <th style={{ textAlign: 'right' }}>Rate</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                      <th style={{ textAlign: 'right' }}>PO Qty</th>
+                      <th style={{ textAlign: 'right' }}>Qty Recd</th>
+                      <th>Expected</th>
+                      <th>Actual Receipt</th>
+                      <th style={{ textAlign: 'right' }}>Delay</th>
+                      <th style={{ textAlign: 'center' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openPos.map((po) => {
+                      const list = (po.items && po.items.length) ? po.items : [{ item: '(no items)', qty: 0, rate: 0, amount: 0, receivedQty: 0 }];
+                      const stage = stageOf(po);
+                      const dd = delayDays(po);
+                      return (
+                        <Fragment key={po.poNum}>
+                          {list.map((it, ii) => {
+                            const first = ii === 0;
+                            const rq = num(it.receivedQty), oq = num(it.qty);
+                            const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
+                            return (
+                              <tr key={ii} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                                <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
+                                  {first ? (<>{po.poNum}<div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div></>) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
+                                </td>
+                                <td style={{ fontSize: 11 }}>{first ? po.supplier : ''}</td>
+                                <td>{it.item}{it.unit ? <span style={{ color: 'var(--i3)', fontSize: 10 }}> ({it.unit})</span> : null}</td>
+                                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                <td style={{ textAlign: 'right' }}>{qtyStr(oq)}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, color: rColor }}>{qtyStr(rq)}</td>
+                                <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-') : ''}</td>
+                                <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '-') : ''}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>
+                                  {first ? (dd == null ? '-' : (dd > 0 ? '⚠ +' + dd : dd)) : ''}
+                                </td>
+                                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  {first && (
+                                    <>
+                                      <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }}
+                                        onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`} aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
+                                      <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}>📷 Receive</button>
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {grnFor === po.poNum && (
+                            <tr>
+                              <td colSpan={TRACK_COLS} style={{ background: 'var(--bg)', padding: 14 }}>
+                                <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Receive Material — {po.poNum} · {po.supplier}</div>
+                                <div className="tw" style={{ background: 'var(--wh)' }}>
+                                  <table>
+                                    <thead>
+                                      <tr>
+                                        <th>Item</th>
+                                        <th style={{ textAlign: 'right' }}>Ordered</th>
+                                        <th style={{ textAlign: 'right' }}>Received</th>
+                                        <th style={{ textAlign: 'right' }}>Balance</th>
+                                        <th style={{ textAlign: 'right', width: 150 }}>Receive Now</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(po.items || []).map((it, idx) => {
+                                        const bal = Math.max(0, num(it.qty) - num(it.receivedQty));
+                                        const full = bal <= 0;
+                                        return (
+                                          <tr key={idx}>
+                                            <td>{it.item}{it.unit ? ` (${it.unit})` : ''}</td>
+                                            <td style={{ textAlign: 'right' }}>{qtyStr(it.qty)}</td>
+                                            <td style={{ textAlign: 'right', color: 'var(--i3)' }}>{qtyStr(it.receivedQty)}</td>
+                                            <td style={{ textAlign: 'right', fontWeight: 700, color: full ? 'var(--g)' : 'var(--blu)' }}>{full ? '✓ Full' : qtyStr(bal)}</td>
+                                            <td style={{ textAlign: 'right' }}>
+                                              {full ? <span style={{ color: 'var(--i3)' }}>—</span> : (
+                                                <input type="number" min="0" max={bal} step="0.01" value={grnQty[idx] ?? ''} placeholder="0"
+                                                  onChange={(e) => setGrnQty((q) => ({ ...q, [idx]: e.target.value }))} style={{ width: 120, textAlign: 'right' }} />
+                                              )}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <div className="g3" style={{ marginTop: 10 }}>
+                                  <div className="fg"><label>GRN Reference</label><input value={grnRef} onChange={(e) => setGrnRef(e.target.value)} placeholder="GRN / DC number" /></div>
+                                  <div className="fg"><label>Receipt Date</label><input type="date" value={grnDate} readOnly title="Recorded as today's date" /></div>
+                                  <div className="fg">
+                                    <label>Receipt Photo (optional)</label>
+                                    <input type="file" accept="image/*" capture="environment" aria-label="Capture receipt photo"
+                                      onChange={(e) => { pickGrnPhoto(e.target.files && e.target.files[0]); e.target.value = ''; }} />
+                                  </div>
+                                </div>
+                                {(grnImgBusy || grnImage) && (
+                                  <div style={{ marginTop: 8 }}>
+                                    {grnImgBusy ? <span style={{ fontSize: 11, color: 'var(--i3)' }}>Processing photo…</span>
+                                      : <img src={grnImage} alt="Receipt preview" style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, border: '1px solid var(--bd)', display: 'block' }} />}
+                                  </div>
+                                )}
+                                {Array.isArray(po.receipts) && po.receipts.length > 0 && (
+                                  <div style={{ marginTop: 10 }}>
+                                    <div style={{ fontSize: 11, color: 'var(--i2)', fontWeight: 600, marginBottom: 6 }}>Previous receipts</div>
+                                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                      {po.receipts.map((r, ri) => {
+                                        const label = fmtDate(r.date) + (r.ref ? ' — ' + r.ref : '');
+                                        return r.image
+                                          ? <a key={ri} href={r.image} target="_blank" rel="noreferrer" title={label}><img src={r.image} alt={label} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bd)' }} /></a>
+                                          : <div key={ri} title={label} style={{ width: 60, height: 60, borderRadius: 6, border: '1px dashed var(--bd)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8.5, color: 'var(--i3)', textAlign: 'center', padding: 2 }}>{fmtDate(r.date)}</div>;
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                                {grnMsg && <div className={'al ' + (grnMsg.t === 'g' ? 'al-g' : 'al-r')}>{grnMsg.m}</div>}
+                                <div className="act">
+                                  <button className="btn btn-s" onClick={closeGRN} disabled={busy}>Cancel</button>
+                                  <button className="btn btn-b" onClick={() => forceClose(po)} disabled={busy}>Force Close</button>
+                                  <button className="btn btn-g" onClick={() => saveGRN(po)} disabled={busy || grnImgBusy}>{busy ? 'Saving…' : 'Save GRN'}</button>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="ctitle">Recently Closed POs <span className="tag tgr">{closedPos.length}</span></div>
+            {!closedPos.length ? (
+              <div className="al al-y">No closed POs yet.</div>
+            ) : (
+              <div className="tw sy">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>PO #</th>
+                      <th>Supplier</th>
+                      <th style={{ textAlign: 'right' }}>Total</th>
+                      <th>GRN Ref</th>
+                      <th>Closed On</th>
+                      <th style={{ textAlign: 'right' }}>Final Delay</th>
+                      <th style={{ textAlign: 'center' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {closedPos.map((po) => {
+                      const dd = delayDays(po);
+                      return (
+                        <tr key={po.poNum}>
+                          <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
+                            {po.poNum}{po.manualClosed && <span style={{ fontSize: 9, color: 'var(--red)', marginLeft: 4 }} title="Closed manually, not by full receipt match">(manual)</span>}
                           </td>
+                          <td>{po.supplier}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupees(po.totalAmount)}</td>
+                          <td>{po.grnRef || '-'}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{po.closedDate ? fmtDate(po.closedDate) : '-'}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{dd == null ? '-' : (dd > 0 ? '+' + dd : dd)}</td>
                           <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                            {open ? (
-                              <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}>Receive (GRN)</button>
-                            ) : (
-                              <button className="btn btn-s" style={{ height: 27, padding: '0 10px' }} onClick={() => reopen(po)} disabled={busy}>Reopen</button>
-                            )}
-                            <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginLeft: 4 }}
-                              onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`}
-                              aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
+                            <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>📄 PO</button>
+                            <button className="btn btn-s" style={{ height: 27, padding: '0 10px' }} onClick={() => reopen(po)} disabled={busy}>↺ Reopen</button>
                           </td>
                         </tr>
-
-                        {grnFor === po.poNum && (
-                          <tr>
-                            <td colSpan={10} style={{ background: 'var(--bg)', padding: 14 }}>
-                              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Receive Material — {po.poNum} · {po.supplier}</div>
-                              <div className="tw" style={{ background: 'var(--wh)' }}>
-                                <table>
-                                  <thead>
-                                    <tr>
-                                      <th>Item</th>
-                                      <th style={{ textAlign: 'right' }}>Ordered</th>
-                                      <th style={{ textAlign: 'right' }}>Received</th>
-                                      <th style={{ textAlign: 'right' }}>Balance</th>
-                                      <th style={{ textAlign: 'right', width: 150 }}>Receive Now</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {list.map((it, idx) => {
-                                      const bal = Math.max(0, num(it.qty) - num(it.receivedQty));
-                                      const full = bal <= 0;
-                                      return (
-                                        <tr key={idx}>
-                                          <td>{it.item}{it.unit ? ` (${it.unit})` : ''}</td>
-                                          <td style={{ textAlign: 'right' }}>{qtyStr(it.qty)}</td>
-                                          <td style={{ textAlign: 'right', color: 'var(--i3)' }}>{qtyStr(it.receivedQty)}</td>
-                                          <td style={{ textAlign: 'right', fontWeight: 700, color: full ? 'var(--g)' : 'var(--blu)' }}>{full ? '✓ Full' : qtyStr(bal)}</td>
-                                          <td style={{ textAlign: 'right' }}>
-                                            {full ? <span style={{ color: 'var(--i3)' }}>—</span> : (
-                                              <input type="number" min="0" max={bal} step="0.01" value={grnQty[idx] ?? ''} placeholder="0"
-                                                onChange={(e) => setGrnQty((q) => ({ ...q, [idx]: e.target.value }))} style={{ width: 120, textAlign: 'right' }} />
-                                            )}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                              <div className="g3" style={{ marginTop: 10 }}>
-                                <div className="fg"><label>GRN Reference</label><input value={grnRef} onChange={(e) => setGrnRef(e.target.value)} placeholder="GRN / DC number" /></div>
-                                <div className="fg"><label>Receipt Date</label><input type="date" value={grnDate} readOnly title="Recorded as today's date" /></div>
-                              </div>
-                              {grnMsg && <div className={'al ' + (grnMsg.t === 'g' ? 'al-g' : 'al-r')}>{grnMsg.m}</div>}
-                              <div className="act">
-                                <button className="btn btn-s" onClick={closeGRN} disabled={busy}>Cancel</button>
-                                <button className="btn btn-b" onClick={() => forceClose(po)} disabled={busy}>Force Close</button>
-                                <button className="btn btn-g" onClick={() => saveGRN(po)} disabled={busy}>{busy ? 'Saving…' : 'Save GRN'}</button>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* ── 3) PAYMENTS ── */}
       {tab === 'pay' && (
         <div className="card">
-          <div className="ctitle" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div className="ctitle" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span>Payments / Bills Payable</span>
-            <button className="btn btn-s" style={{ height: 28 }} onClick={exportPayments} disabled={!pos.length}>⬇ Export Excel</button>
+            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select value={payStat} onChange={(e) => setPayStat(e.target.value)} aria-label="Payment status filter">
+                <option value="">All</option>
+                <option value="Unpaid">Unpaid</option>
+                <option value="Paid">Paid</option>
+              </select>
+              <button className="btn btn-s" style={{ height: 28 }} onClick={exportPayments} disabled={!payRows.length}>⬇ Export Excel</button>
+            </span>
           </div>
           {!pos.length ? (
             <div className="al al-y">No purchase orders yet.</div>
@@ -449,13 +629,15 @@ export default function Purchase() {
                     <th style={{ textAlign: 'right' }}>Amount</th>
                     <th>Payment Terms</th>
                     <th>Due Date</th>
+                    <th style={{ textAlign: 'right' }}>Due In</th>
                     <th>Status</th>
                     <th style={{ textAlign: 'center' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pos.map((po) => {
+                  {payRows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No purchase orders match this filter.</td></tr> : payRows.map((po) => {
                     const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
+                    const di = dueInDays(po);
                     return (
                       <tr key={po.poNum}>
                         <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{po.poNum}</td>
@@ -463,10 +645,11 @@ export default function Purchase() {
                         <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupees(po.totalAmount)}</td>
                         <td>{paymentTermsText(po) || '-'}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(dueDate(po))}</td>
+                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{dueInCell(po)}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {paid
                             ? <span className="tag tg">Paid{po.paymentDate ? ` · ${fmtDate(po.paymentDate)}` : ''}</span>
-                            : <span className="tag ty">Unpaid</span>}
+                            : <span className={'tag ' + (di < 0 ? 'tr' : 'ty')}>{di < 0 ? '⚠ Overdue' : 'Unpaid'}</span>}
                         </td>
                         <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                           {paid

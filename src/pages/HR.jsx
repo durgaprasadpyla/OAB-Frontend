@@ -141,6 +141,7 @@ function Employees() {
   const [filters, setFilters] = useState({ q: '', status: '', departmentId: '' });
   const [applied, setApplied] = useState({ q: '', status: '', departmentId: '' });
   const [editing, setEditing] = useState(null);   // employee object or EMPTY_EMP for new
+  const [viewing, setViewing] = useState(null);    // employee id whose read-only profile is open
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -201,7 +202,7 @@ function Employees() {
           <table>
             <thead><tr>
               <th>Code</th><th style={{ minWidth: 160 }}>Name</th><th>Department</th><th>Designation</th>
-              <th>Joined</th><th>Mobile</th><th style={{ width: 140 }}>Status</th><th style={{ width: 70 }}></th>
+              <th>Joined</th><th>Mobile</th><th style={{ width: 140 }}>Status</th><th style={{ width: 120 }}></th>
             </tr></thead>
             <tbody>
               {emps.loading ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18 }}>Loading…</td></tr>
@@ -219,8 +220,9 @@ function Employees() {
                           {(meta.data.statuses || []).map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button className="btn btn-s" aria-label={`Edit ${e.fullName}`} onClick={() => setEditing({ ...EMPTY_EMP, ...e })}>Edit</button>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-s" aria-label={`View ${e.fullName}`} onClick={() => setViewing(e.id)}>View</button>
+                        <button className="btn btn-s" style={{ marginLeft: 4 }} aria-label={`Edit ${e.fullName}`} onClick={() => setEditing({ ...EMPTY_EMP, ...e })}>Edit</button>
                       </td>
                     </tr>
                   ))}
@@ -263,6 +265,8 @@ function Employees() {
           {editing.id ? <EmployeeDocuments employeeId={editing.id} onError={(m) => flash('r', m)} /> : null}
         </div>
       )}
+
+      {viewing != null && <EmployeeProfile employeeId={viewing} onClose={() => setViewing(null)} />}
     </>
   );
 }
@@ -292,13 +296,13 @@ function Select({ label, v, on, opts }) {
 /** Document registry for one employee (metadata only — no file bytes server-side). */
 function EmployeeDocuments({ employeeId, onError }) {
   const docs = useHr(() => hrApi.listDocuments(employeeId), [employeeId], []);
-  const [draft, setDraft] = useState({ title: '', docType: '', docNumber: '', issuedOn: '', expiresOn: '', notes: '' });
+  const [draft, setDraft] = useState({ title: '', docType: '', docNumber: '', refUrl: '', issuedOn: '', expiresOn: '', notes: '' });
   const [busy, setBusy] = useState(false);
 
   async function add() {
     if (!draft.title.trim()) { onError('Document title is required.'); return; }
     setBusy(true);
-    try { await hrApi.addDocument(employeeId, draft); setDraft({ title: '', docType: '', docNumber: '', issuedOn: '', expiresOn: '', notes: '' }); docs.reload(); }
+    try { await hrApi.addDocument(employeeId, draft); setDraft({ title: '', docType: '', docNumber: '', refUrl: '', issuedOn: '', expiresOn: '', notes: '' }); docs.reload(); }
     catch (e) { onError(err(e)); } finally { setBusy(false); }
   }
   async function remove(d) {
@@ -317,7 +321,8 @@ function EmployeeDocuments({ employeeId, onError }) {
             {(docs.data || []).length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No documents recorded</td></tr>
               : docs.data.map((d) => (
                 <tr key={d.id}>
-                  <td>{d.title}</td><td style={{ fontSize: 11 }}>{d.docType || '-'}</td><td style={{ fontSize: 11 }}>{d.docNumber || '-'}</td>
+                  <td>{d.refUrl ? <a href={d.refUrl} target="_blank" rel="noopener noreferrer">{d.title}</a> : d.title}</td>
+                  <td style={{ fontSize: 11 }}>{d.docType || '-'}</td><td style={{ fontSize: 11 }}>{d.docNumber || '-'}</td>
                   <td style={{ fontSize: 11 }}>{d.issuedOn ? fmtDate(d.issuedOn) : '-'}</td>
                   <td style={{ fontSize: 11 }}>{d.expiresOn ? fmtDate(d.expiresOn) : '-'}</td>
                   <td style={{ textAlign: 'center' }}>
@@ -332,9 +337,112 @@ function EmployeeDocuments({ employeeId, onError }) {
         <Field label="Title" v={draft.title} on={(v) => setDraft({ ...draft, title: v })} />
         <Field label="Type" v={draft.docType} on={(v) => setDraft({ ...draft, docType: v })} />
         <Field label="Number" v={draft.docNumber} on={(v) => setDraft({ ...draft, docNumber: v })} />
+        <Field label="Reference URL" v={draft.refUrl} on={(v) => setDraft({ ...draft, refUrl: v })} />
         <div className="fg"><label>&nbsp;</label><button className="btn btn-s" onClick={add} disabled={busy}>＋ Add document</button></div>
       </div>
     </>
+  );
+}
+
+/* ─────────────────────────── Employee profile (read-only) ─────────────────────────── */
+// Fields shown on the profile, resolved defensively: the detail endpoint may return
+// either the list-style *Name keys or the legacy resolved names.
+const PROFILE_FIELDS = [
+  ['Employee ID', (e) => e.empCode],
+  ['Name', (e) => e.fullName],
+  ['Status', (e) => e.status],
+  ['Gender', (e) => e.gender],
+  ['Date of Birth', (e) => fmtDate(e.dob)],
+  ['Mobile', (e) => e.mobile],
+  ['Email', (e) => e.email],
+  ['Department', (e) => e.departmentName || e.department],
+  ['Designation', (e) => e.designationName || e.designation],
+  ['Reporting Manager', (e) => e.reportingManagerName || e.reportingManager],
+  ['Joining Date', (e) => fmtDate(e.joiningDate)],
+  ['Employment Type', (e) => e.employmentType],
+  ['Work Location', (e) => e.workLocation],
+  ['Emergency Contact', (e) => e.emergencyContact],
+  ['Exit Date', (e) => fmtDate(e.exitDate)],
+];
+
+const leaveTag = (s) => 'tag ' + (s === 'Approved' ? 'tgr' : s === 'Rejected' ? 'tr' : 'ty');
+
+/** Read-only employee profile: core fields + leave balance + leave history.
+ *  Balance comes from the employee detail; history from the leave-requests list
+ *  narrowed to this employee (kept client-side too, in case the API ignores the
+ *  filter). Rendered as a dismissable modal, matching the app's other overlays. */
+function EmployeeProfile({ employeeId, onClose }) {
+  const emp = useHr(() => hrApi.getEmployee(employeeId), [employeeId], null);
+  const history = useHr(() => hrApi.listLeaveRequests({ employeeId }), [employeeId], []);
+  const e = emp.data || {};
+  const balance = e.leaveBalance || [];
+  const requests = (history.data || []).filter((r) => r.employeeId == null || String(r.employeeId) === String(employeeId));
+
+  return (
+    <div style={ovlStyle} onClick={onClose}>
+      <div style={sheetStyle} role="dialog" aria-modal="true" aria-label="Employee profile" onClick={(ev) => ev.stopPropagation()}>
+        <div className="fbar" style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>Employee Profile — {e.fullName || e.empCode || ''}</div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-s" onClick={onClose}>Close</button>
+        </div>
+
+        {emp.loading ? <div style={{ padding: 12 }}>Loading…</div> : emp.error ? <Problem error={emp.error} /> : (
+          <>
+            <div className="g4">
+              {PROFILE_FIELDS.map(([label, get]) => {
+                const v = get(e);
+                return (
+                  <div className="fg" key={label}>
+                    <label>{label}</label>
+                    <div style={{ fontSize: 13, minHeight: 18 }}>{v == null || v === '' ? '-' : v}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {e.address ? <div className="fg"><label>Address</label><div style={{ fontSize: 13 }}>{e.address}</div></div> : null}
+            {e.remarks ? <div className="fg"><label>Remarks</label><div style={{ fontSize: 13 }}>{e.remarks}</div></div> : null}
+
+            <div className="ctitle" style={{ marginTop: 14 }}>Leave Balance</div>
+            <div className="tw sy" style={{ maxHeight: 200 }}>
+              <table>
+                <thead><tr><th>Type</th><th style={{ textAlign: 'right' }}>Allotment</th><th style={{ textAlign: 'right' }}>Taken</th><th style={{ textAlign: 'right' }}>Balance</th></tr></thead>
+                <tbody>
+                  {balance.length === 0 ? <tr><td colSpan={4} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No leave types configured</td></tr>
+                    : balance.map((b, i) => (
+                      <tr key={b.leaveTypeId || b.leaveType || i}>
+                        <td>{b.leaveType || b.leaveTypeName || '-'}</td>
+                        <td style={{ textAlign: 'right' }}>{inr(b.allotment)}</td>
+                        <td style={{ textAlign: 'right' }}>{inr(b.taken)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{inr(b.balance)}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="ctitle" style={{ marginTop: 14 }}>Leave History</div>
+            <Problem error={history.error} />
+            <div className="tw sy" style={{ maxHeight: 240 }}>
+              <table>
+                <thead><tr><th>Type</th><th>Period</th><th style={{ textAlign: 'right' }}>Days</th><th>Status</th></tr></thead>
+                <tbody>
+                  {requests.length === 0 ? <tr><td colSpan={4} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No leave requests</td></tr>
+                    : requests.map((r) => (
+                      <tr key={r.id}>
+                        <td style={{ fontSize: 11 }}>{r.leaveTypeName || r.leaveType || '-'}</td>
+                        <td style={{ fontSize: 11 }}>{fmtDate(r.fromDate)} → {fmtDate(r.toDate)}</td>
+                        <td style={{ textAlign: 'right' }}>{inr(r.days)}</td>
+                        <td><span className={leaveTag(r.status)}>{r.status}</span></td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -342,23 +450,38 @@ function EmployeeDocuments({ employeeId, onError }) {
 function Org() {
   const [msg, setMsg] = useState(null);
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 3500); };
+  // Active departments feed the designation → department picker; reloaded when a
+  // department is added so a fresh one is immediately selectable.
+  const depts = useHr(() => hrApi.listDepartments({ active: 1 }), [], []);
+  const deptOpts = (depts.data || []).map((d) => ({ v: d.id, l: d.name }));
   return (
     <>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="g2" style={{ alignItems: 'start' }}>
         <SimpleList
           title="Departments" field="name" placeholder="e.g. Production"
+          extraFields={[
+            { key: 'code', label: 'Code', type: 'text', placeholder: 'Code' },
+            { key: 'description', label: 'Description', type: 'text', placeholder: 'Description' },
+          ]}
           load={() => hrApi.listDepartments({})} create={(b) => hrApi.createDepartment(b)}
-          update={(id, b) => hrApi.updateDepartment(id, b)} onMsg={flash}
+          update={(id, b) => hrApi.updateDepartment(id, b)} onMsg={flash} onChanged={depts.reload}
         />
         <SimpleList
           title="Designations" field="title" placeholder="e.g. Line Supervisor"
+          extraFields={[
+            { key: 'departmentId', label: 'Department', type: 'select', options: deptOpts, displayKey: 'departmentName', placeholder: '— Department —' },
+          ]}
           load={() => hrApi.listDesignations({})} create={(b) => hrApi.createDesignation(b)}
           update={(id, b) => hrApi.updateDesignation(id, b)} onMsg={flash}
         />
       </div>
       <SimpleList
-        title="Leave Types" field="name" placeholder="e.g. Casual Leave" extra="defaultDays" extraLabel="Default days"
+        title="Leave Types" field="name" placeholder="e.g. Casual Leave"
+        extraFields={[
+          { key: 'defaultDays', label: 'Default days', type: 'number', placeholder: 'Default days' },
+          { key: 'code', label: 'Code', type: 'text', placeholder: 'Code' },
+        ]}
         load={() => hrApi.listLeaveTypes({})} create={(b) => hrApi.createLeaveType(b)}
         update={(id, b) => hrApi.updateLeaveType(id, b)} onMsg={flash}
       />
@@ -366,28 +489,50 @@ function Org() {
   );
 }
 
-/** Name + active-toggle list, shared by departments / designations / leave types. */
-function SimpleList({ title, field, placeholder, extra, extraLabel, load, create, update, onMsg }) {
+/** Name + active-toggle list, shared by departments / designations / leave types.
+ *  `extraFields` (optional) adds columns + create-form inputs — e.g. a department
+ *  code/description, a designation's department picker, or a leave type's code.
+ *  Blank text/select extras are dropped from the create body, so a name-only add
+ *  still posts exactly `{ [field]: name }`. */
+function SimpleList({ title, field, placeholder, extraFields = [], load, create, update, onMsg, onChanged }) {
   const list = useHr(load, [], []);
   const [draft, setDraft] = useState('');
-  const [draftExtra, setDraftExtra] = useState('');
+  const [extras, setExtras] = useState({});
   const [busy, setBusy] = useState(false);
+  const nameLabel = field === 'title' ? 'Title' : 'Name';
+  const cols = 2 + extraFields.length;
+
+  const buildExtras = () => {
+    const out = {};
+    extraFields.forEach((f) => {
+      const v = extras[f.key];
+      if (f.type === 'number') out[f.key] = Number(v) || 0;                 // always sent (matches legacy default-days)
+      else if (v != null && String(v).trim() !== '') out[f.key] = String(v).trim();
+    });
+    return out;
+  };
+  const cellText = (row, f) => {
+    if (f.type === 'select') return row[f.displayKey || f.key.replace(/Id$/, 'Name')] || '-';
+    if (f.type === 'number') return inr(row[f.key]);
+    return row[f.key] || '-';
+  };
 
   async function add() {
     if (!draft.trim()) return;
     setBusy(true);
     try {
-      await create({ [field]: draft.trim(), ...(extra ? { [extra]: Number(draftExtra) || 0 } : {}) });
-      setDraft(''); setDraftExtra(''); list.reload(); onMsg('g', `✅ ${title.replace(/s$/, '')} added.`);
+      await create({ [field]: draft.trim(), ...buildExtras() });
+      setDraft(''); setExtras({}); list.reload(); if (onChanged) onChanged();
+      onMsg('g', `✅ ${title.replace(/s$/, '')} added.`);
     } catch (e) { onMsg('r', err(e)); } finally { setBusy(false); }
   }
   async function toggle(row) {
-    try { await update(row.id, { active: !row.active }); list.reload(); }
+    try { await update(row.id, { active: !row.active }); list.reload(); if (onChanged) onChanged(); }
     catch (e) { onMsg('r', err(e)); }
   }
   async function rename(row, value) {
     if (!value.trim() || value === row[field]) return;
-    try { await update(row.id, { [field]: value.trim() }); list.reload(); }
+    try { await update(row.id, { [field]: value.trim() }); list.reload(); if (onChanged) onChanged(); }
     catch (e) { onMsg('r', err(e)); }
   }
 
@@ -399,13 +544,17 @@ function SimpleList({ title, field, placeholder, extra, extraLabel, load, create
       <Problem error={list.error} />
       <div className="tw sy" style={{ maxHeight: 300 }}>
         <table>
-          <thead><tr><th>{extraLabel ? 'Name' : title.replace(/s$/, '')}</th>{extra ? <th style={{ width: 110, textAlign: 'right' }}>{extraLabel}</th> : null}<th style={{ width: 90, textAlign: 'center' }}>Active</th></tr></thead>
+          <thead><tr>
+            <th>{nameLabel}</th>
+            {extraFields.map((f) => <th key={f.key} style={f.type === 'number' ? { width: 110, textAlign: 'right' } : undefined}>{f.label}</th>)}
+            <th style={{ width: 90, textAlign: 'center' }}>Active</th>
+          </tr></thead>
           <tbody>
-            {(list.data || []).length === 0 ? <tr><td colSpan={extra ? 3 : 2} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>None yet</td></tr>
+            {(list.data || []).length === 0 ? <tr><td colSpan={cols} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>None yet</td></tr>
               : list.data.map((row) => (
                 <tr key={row.id}>
                   <td><input defaultValue={row[field] ?? ''} aria-label={`${title} ${row[field]}`} onBlur={(e) => rename(row, e.target.value)} style={{ width: '100%' }} /></td>
-                  {extra ? <td style={{ textAlign: 'right' }}>{inr(row[extra])}</td> : null}
+                  {extraFields.map((f) => <td key={f.key} style={{ fontSize: 11, ...(f.type === 'number' ? { textAlign: 'right' } : {}) }}>{cellText(row, f)}</td>)}
                   <td style={{ textAlign: 'center' }}>
                     <input type="checkbox" checked={!!row.active} aria-label={`${row[field]} active`} onChange={() => toggle(row)} />
                   </td>
@@ -416,7 +565,21 @@ function SimpleList({ title, field, placeholder, extra, extraLabel, load, create
       </div>
       <div className="fbar" style={{ marginTop: 8 }}>
         <input placeholder={placeholder} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={`New ${title}`} />
-        {extra ? <input type="number" min="0" placeholder={extraLabel} value={draftExtra} onChange={(e) => setDraftExtra(e.target.value)} aria-label={extraLabel} style={{ width: 110 }} /> : null}
+        {extraFields.map((f) => (
+          f.type === 'select'
+            ? (
+              <select key={f.key} value={extras[f.key] ?? ''} aria-label={f.label} style={{ minWidth: 150 }}
+                onChange={(e) => setExtras((x) => ({ ...x, [f.key]: e.target.value }))}>
+                <option value="">{f.placeholder || '—'}</option>
+                {(f.options || []).map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+              </select>
+            ) : (
+              <input key={f.key} type={f.type === 'number' ? 'number' : 'text'} min={f.type === 'number' ? '0' : undefined}
+                placeholder={f.placeholder || f.label} value={extras[f.key] ?? ''} aria-label={f.label}
+                style={f.type === 'number' ? { width: 110 } : undefined}
+                onChange={(e) => setExtras((x) => ({ ...x, [f.key]: e.target.value }))} />
+            )
+        ))}
         <button className="btn btn-s" onClick={add} disabled={busy || !draft.trim()}>＋ Add</button>
       </div>
     </div>
@@ -428,6 +591,7 @@ function Leave() {
   const [status, setStatus] = useState('Pending');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [comments, setComments] = useState({});   // approver comment per pending request id
   const [draft, setDraft] = useState({ employeeId: '', leaveTypeId: '', fromDate: today(), toDate: today(), reason: '' });
 
   const reqs = useHr(() => hrApi.listLeaveRequests(status ? { status } : {}), [status], []);
@@ -456,9 +620,11 @@ function Leave() {
     } catch (e) { flash('r', err(e)); } finally { setBusy(false); }
   }
   async function decide(row, approve) {
+    const comment = (comments[row.id] || '').trim();
     setBusy(true);
     try {
-      await (approve ? hrApi.approveLeave(row.id, '') : hrApi.rejectLeave(row.id, ''));
+      await (approve ? hrApi.approveLeave(row.id, comment) : hrApi.rejectLeave(row.id, comment));
+      setComments((c) => { const n = { ...c }; delete n[row.id]; return n; });
       flash('g', `✅ Request ${approve ? 'approved' : 'rejected'}.`);
       reqs.reload();
     } catch (e) { flash('r', err(e)); } finally { setBusy(false); }
@@ -498,7 +664,7 @@ function Leave() {
         <Problem error={reqs.error} />
         <div className="tw sy" style={{ maxHeight: 380 }}>
           <table>
-            <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th style={{ textAlign: 'right' }}>Days</th><th>Reason</th><th>Status</th><th style={{ width: 150 }}></th></tr></thead>
+            <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th style={{ textAlign: 'right' }}>Days</th><th>Reason</th><th>Status</th><th style={{ width: 190 }}>Decision</th></tr></thead>
             <tbody>
               {reqs.loading ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 16 }}>Loading…</td></tr>
                 : (reqs.data || []).length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No requests</td></tr>
@@ -511,13 +677,23 @@ function Leave() {
                       <td style={{ textAlign: 'right' }}>{inr(r.days)}</td>
                       <td style={{ fontSize: 11 }}>{r.reason || '-'}</td>
                       <td><span className={'tag ' + (r.status === 'Approved' ? 'tgr' : r.status === 'Rejected' ? 'tr' : 'ty')}>{r.status}</span></td>
-                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         {r.status === 'Pending' ? (
-                          <>
-                            <button className="btn btn-g" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy} aria-label={`Approve leave ${r.id}`} onClick={() => decide(r, true)}>Approve</button>
-                            <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', marginLeft: 4, color: 'var(--red)' }} disabled={busy} aria-label={`Reject leave ${r.id}`} onClick={() => decide(r, false)}>Reject</button>
-                          </>
-                        ) : null}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
+                            <input value={comments[r.id] || ''} placeholder="Comment (optional)" aria-label={`Comment for leave ${r.id}`}
+                              style={{ height: 24, fontSize: 11 }} onChange={(ev) => setComments((c) => ({ ...c, [r.id]: ev.target.value }))} />
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-g" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy} aria-label={`Approve leave ${r.id}`} onClick={() => decide(r, true)}>Approve</button>
+                              <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} disabled={busy} aria-label={`Reject leave ${r.id}`} onClick={() => decide(r, false)}>Reject</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 11 }}>
+                            <div style={{ fontWeight: 600 }}>{r.approver || r.approvedBy || r.decidedBy || '-'}</div>
+                            {(r.approverComment || r.comment || r.decisionComment)
+                              ? <div style={{ color: 'var(--i3)' }}>{r.approverComment || r.comment || r.decisionComment}</div> : null}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -531,10 +707,18 @@ function Leave() {
 
 /* ─────────────────────────── Audit ─────────────────────────── */
 function Audit() {
-  const { data, loading, error } = useHr(() => hrApi.audit({ limit: 200 }), [], []);
+  const [type, setType] = useState('');
+  const { data, loading, error } = useHr(() => hrApi.audit({ limit: 200, ...(type ? { entityType: type } : {}) }), [type], []);
   return (
     <div className="card">
-      <div className="ctitle">HR Audit — who changed what</div>
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>HR Audit — who changed what</div>
+        <span style={{ flex: 1 }} />
+        <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Filter audit by entity">
+          <option value="">All entities</option>
+          {['EMPLOYEE', 'LEAVE_REQUEST', 'DEPARTMENT', 'DESIGNATION', 'LEAVE_TYPE', 'DOCUMENT'].map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
       <Problem error={error} />
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
         <table>
@@ -559,3 +743,7 @@ function Audit() {
     </div>
   );
 }
+
+// Modal chrome for the employee profile — mirrors the app's other overlays.
+const ovlStyle = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 9600, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'auto', padding: '32px 12px' };
+const sheetStyle = { background: 'var(--wh)', borderRadius: 12, maxWidth: 720, width: '100%', padding: '20px 22px', boxShadow: '0 20px 60px rgba(0,0,0,.3)', margin: 'auto' };

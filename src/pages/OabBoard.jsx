@@ -3,13 +3,15 @@ import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
-import { balance, calcMetres, calcKg } from '../lib/calc.js';
-import { dash, fmtDate } from '../lib/format.js';
+import { balance, calcMetres, calcKg, num } from '../lib/calc.js';
+import { dash, fmtDate, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { downloadOabPdf } from '../lib/oabPdf.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import { getCustByLoc } from '../lib/master.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
+import InvoiceDoc from '../components/InvoiceDoc.jsx';
+import { saveInvoicePdf } from '../lib/invoicePdf.js';
 
 /**
  * What each stat card counts, shown behind its ⓘ. Every one of these is a figure
@@ -252,7 +254,7 @@ export default function OabBoard() {
       </div>
 
       {showClosed ? (
-        <ClosedTable rows={closedRows} onReopen={reopen} jssBySpec={jssBySpec} />
+        <ClosedTable rows={closedRows} onReopen={reopen} invReg={(mods.oab && mods.oab.INV_REG) || []} />
       ) : (
         <>
           <div className="stats">
@@ -358,31 +360,144 @@ function Stat({ label, value, cls, note, info }) {
   );
 }
 
-function ClosedTable({ rows, onReopen, jssBySpec }) {
-  if (!rows.length) return <div className="card"><div className="pg-sub" style={{ margin: 0 }}>No closed SOs on this sheet.</div></div>;
+/** {header, lines} for InvoiceDoc, rebuilt from a stored register entry (loadRegister). */
+function invoiceDocProps(entry) {
+  const header = {
+    ivNo: entry.no, ivDt: entry.date, po: entry.po, customer: entry.customer, placeOfSupply: entry.pos,
+    billingAddr: entry.billingAddr, shippingAddr: entry.shipAddr, contactPerson: entry.contact, contactNo: entry.contactNo,
+    ...(entry.header || {}),
+  };
+  const lines = (entry.items || []).map((it) => ({
+    spec: it.spec, jobName: it.jobName || it.spec, qty: it.qty, rate: it.rate,
+    dispatchForm: it.dispatchForm, lineTotal: num(it.qty) * num(it.rate),
+  }));
+  return { header, lines };
+}
+
+/**
+ * Closed SOs — the full board the monolith renders (renderClosedSOs, legacy 4864).
+ * Per closed row it shows the dispatched value (₹, summed from the linked invoice
+ * lines), the PO#, the numeric short quantity, and a PDF button per shipment that
+ * regenerates that invoice's stored PDF (regenInvPDF). A search box, a "Short-closed
+ * only" filter and a live count sit above, and rows are sorted by close date desc.
+ */
+function ClosedTable({ rows, onReopen, invReg }) {
+  const [q, setQ] = useState('');
+  const [scOnly, setScOnly] = useState(false);
+  const [pdfInv, setPdfInv] = useState(null);   // register entry whose PDF is being captured
+  const invDocRef = useRef(null);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const list = rows.filter((r) => {
+      if (scOnly && !r.shortClosed) return false;
+      if (!s) return true;
+      return [r.so, r.customer, r.jobName, r.spec, r.poNum].some((v) => String(v || '').toLowerCase().includes(s));
+    });
+    // Most recently closed first.
+    return list.slice().sort((a, b) => String(b.closedDate || '').localeCompare(String(a.closedDate || '')));
+  }, [rows, q, scOnly]);
+
+  // Render the reconstructed invoice off-screen, capture it to PDF, then unmount it.
+  useEffect(() => {
+    if (!pdfInv || !invDocRef.current) return;
+    saveInvoicePdf(invDocRef.current, pdfInv.no || 'invoice', pdfInv.customer)
+      .catch((e) => alert('PDF error: ' + (e && e.message ? e.message : e)))
+      .finally(() => setPdfInv(null));
+  }, [pdfInv]);
+
+  const downloadInvoice = (entry) => setPdfInv({ ...invoiceDocProps(entry), no: entry.no, customer: entry.customer });
+
   return (
-    <div className="tw sy">
-      <table>
-        <thead>
-          <tr><th>SO#</th><th>Spec</th><th>Customer</th><th>Job Name</th><th style={{ textAlign: 'right' }}>PO Qty</th>
-            <th style={{ textAlign: 'right' }}>Dispatched</th><th>Closed On</th><th>Type</th><th></th></tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.so}>
-              <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
-              <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec || '-'}</span></td>
-              <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
-              <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
-              <td style={{ textAlign: 'right' }}>{dash(r.poQty)}</td>
-              <td style={{ textAlign: 'right' }}>{dash((Number(r.invDisp) || 0) + (Number(r.manDisp) || 0))}</td>
-              <td style={{ fontSize: 11 }}>{fmtDate(r.closedDate)}</td>
-              <td>{r.shortClosed ? <span className="tag ty" style={{ fontSize: 9 }}>Short-close</span> : <span className="tag tg" style={{ fontSize: 9 }}>Complete</span>}</td>
-              <td><button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px' }} onClick={() => onReopen(r.so)}>Reopen</button></td>
+    <div className="card">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>Closed SOs</div>
+        <input
+          type="text" value={q} placeholder="Search SO / customer / job / PO..."
+          aria-label="Search closed SOs" onChange={(e) => setQ(e.target.value)} style={{ width: 260 }}
+        />
+        <label style={{ fontSize: 11, color: 'var(--i2)', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <input type="checkbox" checked={scOnly} aria-label="Short-closed only" onChange={(e) => setScOnly(e.target.checked)} />
+          Short-closed only
+        </label>
+        <span style={{ fontSize: 11, color: 'var(--i3)', marginLeft: 'auto' }}>{filtered.length} closed SO{filtered.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div className="tw sy">
+        <table>
+          <thead>
+            <tr>
+              <th>SO#</th><th>Spec</th><th>Customer</th><th>Job Name</th><th>PO#</th>
+              <th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th>
+              <th style={{ textAlign: 'right' }}>Amount ₹</th><th style={{ textAlign: 'right' }} title="Pieces short at close">Short</th>
+              <th>Closed On</th><th style={{ minWidth: 160 }}>Invoices</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr><td colSpan={11} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>{rows.length ? 'No closed SOs match this filter' : 'No closed SOs on this sheet.'}</td></tr>
+            ) : filtered.map((r) => {
+              const disp = num(r.invDisp) + num(r.manDisp);
+              const short = Math.max(0, num(r.poQty) - disp);
+              // Invoices linked to this SO: same PO and a line item for this spec (legacy 4892).
+              const soInvs = (invReg || []).filter((inv) => inv && inv.po === r.poNum
+                && Array.isArray(inv.items) && inv.items.some((it) => it && it.spec === r.spec));
+              const soAmount = soInvs.reduce((s, inv) => {
+                const itm = (inv.items || []).find((it) => it && it.spec === r.spec);
+                return s + (itm ? num(itm.qty) * num(itm.rate) : 0);
+              }, 0);
+              return (
+                <tr key={r.so}>
+                  <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
+                  <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec || '-'}</span></td>
+                  <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
+                  <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
+                  <td style={{ fontSize: 11 }}>{r.poNum || '-'}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.poQty)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(disp)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{soAmount > 0 ? '₹' + inr(Math.round(soAmount)) : <span style={{ color: 'var(--i3)' }}>-</span>}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {short > 0
+                      ? <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 4, background: '#FDECEA', color: '#C0392B', fontSize: 10, fontWeight: 700 }}>{inr(short)}</span>
+                      : <span style={{ color: 'var(--g)', fontWeight: 600 }}>-</span>}
+                  </td>
+                  <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                    {fmtDate(r.closedDate) || '-'}
+                    <br />
+                    <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginTop: 3 }} onClick={() => onReopen(r.so)} title="Move this SO back to OAB">Reopen</button>
+                  </td>
+                  <td>
+                    {soInvs.length === 0
+                      ? <span style={{ color: 'var(--i3)', fontSize: 10 }}>No invoices linked</span>
+                      : soInvs.map((inv) => {
+                        const itm = (inv.items || []).find((it) => it && it.spec === r.spec);
+                        const qShip = itm ? num(itm.qty) : 0;
+                        const amtShip = itm ? num(itm.qty) * num(itm.rate) : 0;
+                        return (
+                          <button
+                            key={inv.no}
+                            type="button"
+                            aria-label={`Download invoice ${inv.no}`}
+                            onClick={() => downloadInvoice(inv)}
+                            title={`Download invoice ${inv.no} — ${inr(qShip)} pcs of ${r.spec || ''} (₹${inr(Math.round(amtShip))}) shipped on ${fmtDate(inv.date) || '?'}`}
+                            style={{ height: 22, padding: '0 9px', margin: '2px 3px 2px 0', background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--gm)', borderRadius: 11, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                          >⬇ {inv.no || '?'} <span style={{ fontWeight: 500, opacity: 0.8 }}>{inr(qShip)} · ₹{inr(Math.round(amtShip))}</span></button>
+                        );
+                      })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Off-screen invoice, mounted only while a PDF is being captured. */}
+      {pdfInv && (
+        <div style={{ position: 'fixed', left: -10000, top: 0, pointerEvents: 'none' }} aria-hidden="true">
+          <InvoiceDoc ref={invDocRef} header={pdfInv.header} lines={pdfInv.lines} />
+        </div>
+      )}
     </div>
   );
 }

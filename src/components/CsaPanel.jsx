@@ -33,13 +33,42 @@ function QcCsa() {
   const patch = patcher(save);
 
   const [draft, setDraft] = useState(null);   // { skuId, form } — skuId '' = direct
+  const [viewing, setViewing] = useState(null);   // a report shown read-only
+  const [q, setQ] = useState('');               // history search
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const pending = useMemo(() => csaPendingForQc(sales), [sales]);
-  const reports = useMemo(() => (sales.qc_reports || []).slice()
-    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))), [sales.qc_reports]);
+  const reports = useMemo(() => {
+    const list = (sales.qc_reports || []).slice()
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const s = q.trim().toLowerCase();
+    if (!s) return list;
+    return list.filter((r) => {
+      const ci = csaCompanyItem(sales, r);
+      return [ci.company, ci.item, csaStructure(r)].some((v) => String(v || '').toLowerCase().includes(s));
+    });
+  }, [sales, q]);
   const leadName = (id) => ((sales.leads || []).find((l) => l.id === id) || {}).client_name || '—';
+
+  // Re-approve: QC edited the report after the plant answered — flag it for
+  // re-review so it re-enters the plant's pending queue. (legacy qcResubmit)
+  async function reapprove(r) {
+    const why = window.prompt('What did you change in the CSA report? It will go to the plant for re-review.', '');
+    if (why === null) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await patch({
+        qc_reports: (sales.qc_reports || []).map((x) => (x.id === r.id
+          ? { ...x, needs_pm_review: true, status: 'Pending Plant', qc_reapprove_note: String(why || ''), qc_reapproved_at: new Date().toISOString() }
+          : x)),
+      });
+      setMsg({ t: 'g', text: '✅ Sent to the plant for re-review.' });
+    } catch (e) {
+      setMsg({ t: 'r', text: e.message || String(e) });
+    } finally { setBusy(false); }
+  }
 
   async function submit() {
     setBusy(true);
@@ -64,6 +93,10 @@ function QcCsa() {
         onCancel={() => { setDraft(null); setMsg(null); }} onSubmit={submit}
       />
     );
+  }
+
+  if (viewing) {
+    return <CsaReportView report={viewing} sales={sales} onClose={() => setViewing(null)} />;
   }
 
   return (
@@ -105,22 +138,32 @@ function QcCsa() {
       </div>
 
       <div className="card">
-        <div className="ctitle">CSA history <span className="tag tgr">{reports.length}</span></div>
+        <div className="fbar">
+          <div className="ctitle" style={{ margin: 0 }}>CSA history <span className="tag tgr">{reports.length}</span></div>
+          <span style={{ flex: 1 }} />
+          <input placeholder="Search customer / item / structure…" value={q} aria-label="Search CSA history" onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />
+        </div>
         <div className="tw sy" style={{ maxHeight: 340 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 150 }}>Customer</th><th>Item</th><th>Structure</th><th>Raised</th><th>Status</th><th>Plant comments</th></tr></thead>
+            <thead><tr><th style={{ minWidth: 150 }}>Customer</th><th>Item</th><th>Structure</th><th>Source</th><th>Raised</th><th>Status</th><th>Plant comments</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
-              {reports.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No reports yet</td></tr>
+              {reports.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{q ? 'No matching reports' : 'No reports yet'}</td></tr>
                 : reports.map((r) => {
                   const ci = csaCompanyItem(sales, r);
+                  const direct = r.source === 'direct';
                   return (
                     <tr key={r.id}>
                       <td style={{ fontWeight: 600 }}>{ci.company}</td>
                       <td style={{ fontSize: 11 }}>{ci.item}</td>
                       <td style={{ fontSize: 11 }}>{csaStructure(r)}</td>
+                      <td><span className={'tag ' + (direct ? 'ty' : 'tb')} style={{ fontSize: 9 }}>{direct ? 'Direct / Walk-in' : 'Sales OS'}</span></td>
                       <td style={{ fontSize: 11 }}>{r.created_at ? fmtDate(String(r.created_at).slice(0, 10)) : '—'}</td>
                       <td><span className={'tag ' + (r.status === 'Pending Plant' ? 'ty' : r.status === 'Quoted' ? 'tg' : 'tb')}>{r.status}</span></td>
                       <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.plant_comments || <span style={{ color: 'var(--i3)' }}>awaiting plant</span>}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`View CSA for ${ci.item}`} onClick={() => setViewing(r)}>View</button>{' '}
+                        <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px', color: '#8a6d00', borderColor: '#f2dfa0' }} aria-label={`Re-approve CSA for ${ci.item}`} onClick={() => reapprove(r)} disabled={busy}>✎ Re-approve</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -129,6 +172,49 @@ function QcCsa() {
         </div>
       </div>
     </>
+  );
+}
+
+/* ─────────────────────────── Read-only report view ─────────────────────────── */
+// Port of legacy qcCsaView: the CSA report shown read-only, with the plant's
+// answer (or an "awaiting plant" note) below it.
+function CsaReportView({ report: r, sales, onClose }) {
+  const ci = csaCompanyItem(sales, r);
+  const rows = [
+    ['Substrate 1', r.substrate1], ['Substrate 2', r.substrate2], ['Substrate 3', r.substrate3],
+    ['Ink GSM', r.ink_gsm], ['Adhesive GSM', r.adhesive_gsm], ['Coating', r.coating],
+    ['Film Width', r.film_width ? r.film_width + 'mm' : ''], ['Pouch Height', r.pouch_height ? r.pouch_height + 'mm' : ''],
+    ['Pouch Width', r.pouch_width ? r.pouch_width + 'mm' : ''], ['Seal Width', r.seal_width ? r.seal_width + 'mm' : ''],
+    ['GSM', r.gsm], ['Pouch Weight', r.pouch_weight ? r.pouch_weight + 'g' : ''], ['Pouches/kg', r.pouches_per_kg],
+    ['Glue / tape', r.glue_tape], ['Printed', r.printed],
+    ['Print Repeat', r.print_repeat ? r.print_repeat + 'mm' : ''], ['Sleeve Repeat', r.sleeve_repeat ? r.sleeve_repeat + 'mm' : ''],
+  ].filter((f) => f[1] && String(f[1]) !== '0' && String(f[1]) !== '0mm');
+  if (r.source === 'direct' && r.responsible_person) rows.unshift(['Responsible Person', r.responsible_person]);
+
+  return (
+    <div className="card">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>🧪 CSA Report — {ci.item}</div>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={onClose}>✕ Close</button>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        {ci.company}{r.dispatch_type ? ' · ' + r.dispatch_type : ''}
+        {' · '}<span className="tag tgr" style={{ fontSize: 9 }}>{r.source === 'direct' ? 'Direct / Walk-in' : 'Sales OS'}</span>
+      </div>
+      <div className="g2">
+        {rows.map((f, i) => (
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed var(--bd)', padding: '4px 0' }}>
+            <span style={{ color: 'var(--i3)', fontSize: 12 }}>{f[0]}</span>
+            <span style={{ fontWeight: 700, fontSize: 12 }}>{String(f[1])}</span>
+          </div>
+        ))}
+      </div>
+      {r.plant_comment_req && <div className="al al-y" style={{ marginTop: 12 }}>QC asked: {r.plant_comment_req}</div>}
+      {r.plant_comments
+        ? <div className="al al-b" style={{ marginTop: 8 }}>🏭 Plant: {r.plant_comments}</div>
+        : <div className="pg-sub" style={{ marginTop: 8, color: '#E67E22' }}>⏳ Awaiting plant review</div>}
+    </div>
   );
 }
 

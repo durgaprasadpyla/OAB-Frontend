@@ -46,6 +46,7 @@ export default function DailyUpdate() {
     const ops = [];
     const over = [];
     const fgDraws = [];   // FG increases to record against the ledger pool
+    const fgBlocked = [];  // SOs whose FG draw would overdraw a tracked spec's pool
     arr.forEach((r) => {
       if (r.closed) return;
       const e = edits[r.so];
@@ -57,14 +58,30 @@ export default function DailyUpdate() {
         if (num(e.man) > avail) { over.push(`SO ${r.so}: ${num(e.man)} > balance ${avail}`); return; }
         op.addQty = num(e.man); op.invNo = (e.inv || '').trim(); has = true;
       }
+      // Allocate FG is ADDITIVE: the entered qty is drawn from the spec's pool and
+      // ADDED to the SO's existing FG (legacy 2722), never a replacement. A tracked
+      // spec (production recorded) is hard-blocked when the draw would overdraw the
+      // pool (legacy fgBlocked 2720); an untracked spec keeps the port's free Set-FG
+      // path so specs with no ledger history can still be set by hand.
       if (e.fg !== undefined && e.fg !== '') {
-        op.fg = num(e.fg); has = true;
-        const delta = num(e.fg) - num(r.fg);   // increase in this SO's assigned FG
-        if (delta > 0 && r.spec) fgDraws.push({ so: r.so, spec: r.spec, delta });
+        const entered = num(e.fg);
+        if (entered < 0) {
+          fgBlocked.push(`SO ${r.so}: FG allocation cannot be negative`);
+        } else if (entered > 0) {
+          const tracked = fgProduced(mods.fgLedger, r.spec) > 0;
+          const avail = fgAvail(mods.fgLedger, r.spec);
+          if (tracked && entered > avail) {
+            fgBlocked.push(`SO ${r.so} (spec ${r.spec || '?'}): tried ${entered.toLocaleString('en-IN')}, only ${Math.max(0, avail).toLocaleString('en-IN')} available`);
+          } else {
+            op.fg = num(r.fg) + entered; has = true;   // additive: existing + entered
+            if (tracked && r.spec) fgDraws.push({ so: r.so, spec: r.spec, delta: entered });
+          }
+        }
       }
       if (has) ops.push(op);
     });
     if (over.length) { flash('Manual dispatch exceeds balance — ' + over.join('; '), 'r'); return; }
+    if (fgBlocked.length) { flash('⛔ FG not allocated for ' + fgBlocked.length + ' SO' + (fgBlocked.length > 1 ? 's' : '') + ' — add production on the FG Entry page first: ' + fgBlocked.join('; '), 'r'); return; }
     if (!ops.length) { flash('No changes to save', 'y'); return; }
     setBusy(true);
     try {

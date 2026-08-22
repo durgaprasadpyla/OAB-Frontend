@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { dash } from '../lib/format.js';
+import { getPM } from '../lib/pricing.js';
 
 // Dispatch by Sale Order — every OPEN sale order with ordered qty, dispatched
 // (invoiced + manual), balance and ageing since the PO date.
@@ -49,21 +50,49 @@ export function dispatchRows(oab, now = new Date()) {
     });
 }
 
-/** Filter + the original's sort: over-dispatched first, then oldest, then SO. */
-export function sortDispatchRows(rows, { q = '', overOnly = false } = {}) {
+/**
+ * Filter + sort. The `sort` mode selects the ordering:
+ *   'over'   (default) — over-dispatched first, then oldest, then SO (renderSpecDisp);
+ *   'newest' / 'oldest' — by PO date, missing dates last;
+ *   'value'  — by outstanding value (balance × rate) descending.
+ * Over-dispatched rows are always flagged red in the table regardless of the mode.
+ */
+export function sortDispatchRows(rows, { q = '', overOnly = false, sort = 'over' } = {}) {
   const t = q.trim().toLowerCase();
   const list = rows.filter((r) => {
     if (overOnly && !(r.bal < 0)) return false;
     if (!t) return true;
     return [r.so, r.spec, r.jobName, r.customer, r.poNum].join(' ').toLowerCase().includes(t);
   });
+  const bySo = (a, b) => String(a.so).localeCompare(String(b.so), undefined, { numeric: true });
+  if (sort === 'newest' || sort === 'oldest') {
+    const dir = sort === 'newest' ? -1 : 1;   // newest first = descending PO date
+    return list.sort((a, b) => {
+      const ad = a.poDate || '';
+      const bd = b.poDate || '';
+      if (ad !== bd) {
+        if (!ad) return 1;        // rows without a PO date sort last
+        if (!bd) return -1;
+        return ad < bd ? -dir : dir;
+      }
+      return bySo(a, b);
+    });
+  }
+  if (sort === 'value') {
+    return list.sort((a, b) => {
+      const av = num(a.value);
+      const bv = num(b.value);
+      if (bv !== av) return bv - av;   // highest outstanding value first
+      return bySo(a, b);
+    });
+  }
   return list.sort((a, b) => {
     const over = (b.bal < 0 ? 1 : 0) - (a.bal < 0 ? 1 : 0);
     if (over) return over;
     const aa = a.age == null ? -1 : a.age;
     const ba = b.age == null ? -1 : b.age;
     if (ba !== aa) return ba - aa;
-    return String(a.so).localeCompare(String(b.so), undefined, { numeric: true });
+    return bySo(a, b);
   });
 }
 
@@ -71,9 +100,16 @@ export default function DispatchBySO() {
   const { mods } = useData();
   const [q, setQ] = useState('');
   const [overOnly, setOverOnly] = useState(false);
+  const [sort, setSort] = useState('over');
 
-  const all = useMemo(() => dispatchRows(mods.oab && mods.oab.OAB), [mods.oab]);
-  const rows = useMemo(() => sortDispatchRows(all, { q, overOnly }), [all, q, overOnly]);
+  // Attach the Price Master rate and the outstanding value (balance × rate) so the
+  // "By value" sort has something to order on; both default to 0 when a spec has no
+  // price, which is harmless for the other sort modes.
+  const all = useMemo(() => dispatchRows(mods.oab && mods.oab.OAB).map((r) => {
+    const rate = num(getPM(r.spec, mods.prices).price);
+    return { ...r, rate, value: r.bal * rate };
+  }), [mods.oab, mods.prices]);
+  const rows = useMemo(() => sortDispatchRows(all, { q, overOnly, sort }), [all, q, overOnly, sort]);
   const overCount = rows.filter((r) => r.bal < 0).length;
 
   return (
@@ -92,6 +128,12 @@ export default function DispatchBySO() {
             type="text" value={q} placeholder="Search SO / spec / job / customer / PO…"
             aria-label="Search sale orders" onChange={(e) => setQ(e.target.value)} style={{ width: 260 }}
           />
+          <select value={sort} aria-label="Sort sale orders" onChange={(e) => setSort(e.target.value)} style={{ height: 30 }}>
+            <option value="over">Over-dispatched first</option>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="value">By value (balance × rate)</option>
+          </select>
           <label style={{ fontSize: 11, color: 'var(--i2)', display: 'flex', alignItems: 'center', gap: 5 }}>
             <input type="checkbox" checked={overOnly} aria-label="Over-dispatched only" onChange={(e) => setOverOnly(e.target.checked)} />
             Over-dispatched only
@@ -127,7 +169,9 @@ export default function DispatchBySO() {
                     <td style={{ textAlign: 'right' }}>{dash(r.inv)}</td>
                     <td style={{ textAlign: 'right' }}>{dash(r.man)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{dash(r.disp)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 700, color: over ? '#C0392B' : undefined }}>{dash(r.bal)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700, color: over ? '#C0392B' : undefined }}>
+                      {over ? <>+{dash(-r.bal)} over</> : dash(r.bal)}
+                    </td>
                     <td style={{ textAlign: 'right', color: ageColor(r.age), fontWeight: 700 }}>{r.age == null ? '-' : r.age}</td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                       {over

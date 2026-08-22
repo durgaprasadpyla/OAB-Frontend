@@ -29,7 +29,13 @@ export function poTotals(po, asl) {
   const gstPct = num(po?.gstPercent);
   const subTotal = items.reduce((s, i) => s + num(i.amount), 0);
   const gstAmt = subTotal * gstPct / 100;
-  return { items, gstPct, subTotal, gstAmt, grandTotal: subTotal + gstAmt, supplier: (asl || []).find((r) => r.company === po?.supplier) || {} };
+  // Supplier-level fields (address/phone/email/gstn/contact) are carried on the
+  // supplier's ASL rows. A brand-new supplier can have an item-less placeholder
+  // row first, so prefer the first row that actually holds contact details and
+  // fall back to the first matching row (legacy pvBuildPODocHTML uses .find).
+  const matches = (asl || []).filter((r) => r.company === po?.supplier);
+  const supplier = matches.find((r) => r.address || r.gstn || r.phone || r.email || r.contact || r.contact2 || r.phone2 || r.pincode) || matches[0] || {};
+  return { items, gstPct, subTotal, gstAmt, grandTotal: subTotal + gstAmt, supplier };
 }
 
 const cell = { padding: '4px 5px', borderBottom: '0.5px solid #dde3f0' };

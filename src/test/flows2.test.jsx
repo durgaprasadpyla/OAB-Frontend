@@ -47,6 +47,7 @@ describe('QC — add spec flow', () => {
 
     await user.type(fieldByLabel('Customer *'), 'NewCust');
     await user.type(fieldByLabel('Job Name *'), 'New Job');
+    await user.type(fieldByLabel('Material *'), 'BOPP/PE');   // Material is now required (restored legacy validation)
     await user.click(screen.getByRole('button', { name: /Add Spec/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 2)).toBe(true));

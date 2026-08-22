@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
-import { exportAOA } from '../lib/xlsx.js';
+import { exportAOA, readSheet } from '../lib/xlsx.js';
 import { buildScrapChart, scrapChartTitle, bestByItem, CHART_BOX } from '../lib/scrapChart.js';
 import { readAttachments, viewAttachment } from '../lib/attach.js';
+import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 
 // Native port of the legacy Purchase Admin ("P Dashboard") — a tabbed admin page
 // over module 6 (purchase) and module 8 (scrap). Ported from index.html:
@@ -141,13 +142,24 @@ export default function PDashboard() {
 }
 
 /* ─────────────────────────── 1 · PO Tracking (read-only) ─────────────────────────── */
+// Human stage label for a PO — status is Open / Partial / Closed, with an overdue flag. (purchStage 12323)
+function stageLabel(po) {
+  const st = statusOf(po);
+  const overdue = st !== 'Closed' && !!po.expectedDelivery && delayDays(po) > 0;
+  if (st === 'Closed') return '✓ Closed';
+  if (st === 'Partial') return overdue ? '◐ Partial (Overdue)' : '◐ Partially Received';
+  return overdue ? '⚠ Overdue' : '⏳ Open';
+}
+
 function POTracking() {
   const { mods } = useData();
   const purchase = mods.purchase || {};
+  const asl = arr(purchase.asl);
   const pos = posOf(purchase);
   const [sup, setSup] = useState('');
   const [stat, setStat] = useState('');
   const [q, setQ] = useState('');
+  const [docPo, setDocPo] = useState(null);   // PO previewed as a printable document
 
   const suppliers = useMemo(() => [...new Set(pos.map((p) => p.supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [pos]);
 
@@ -209,74 +221,140 @@ function POTracking() {
           <span style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
         </div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>One row per item line — each item shows its own ordered vs received quantity.</div>
         <div className="tw sy">
           <table>
             <thead><tr>
-              <th>PO #</th><th>Supplier</th><th>Date</th><th>Status</th>
-              <th style={rt}>Amount</th><th style={rt}>Ordered</th><th style={rt}>Received</th>
-              <th>Expected</th><th style={rt}>Delay</th>
+              <th>PO #</th><th>Date</th><th>Supplier</th><th>Item</th>
+              <th style={rt}>Rate</th><th style={rt}>Amount</th><th style={rt}>PO Qty</th><th style={rt}>Qty Recd</th>
+              <th>Expected</th><th>Actual Receipt</th><th>GRN Ref</th><th>Stage</th><th style={rt}>Delay</th><th style={{ textAlign: 'center' }}>PDF</th>
             </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={9} style={emptyTd}>No purchase orders found</td></tr> : rows.map((po, i) => {
-                const { ordered, received } = recvTotals(po);
+              {rows.length === 0 ? <tr><td colSpan={14} style={emptyTd}>No purchase orders found</td></tr> : rows.map((po, pi) => {
                 const st = statusOf(po);
                 const overdue = !isClosed(po) && !!po.expectedDelivery && delayDays(po) > 0;
                 const dd = po.expectedDelivery ? delayDays(po) : null;
-                const recvDone = ordered > 0 && received >= ordered;
-                return (
-                  <tr key={po.poNum || i}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{po.poNum || '-'}</td>
-                    <td style={{ fontSize: 11 }}>{supName(po.supplier)}</td>
-                    <td>{po.poDate ? fmtDate(po.poDate) : '-'}</td>
-                    <td><span className={'tag ' + tagClass(st, overdue)}>{overdue ? '⚠ ' + st : st}</span></td>
-                    <td style={rt}>{rupees(po.totalAmount, 0)}</td>
-                    <td style={rt}>{dash(ordered)}</td>
-                    <td style={{ ...rt, fontWeight: 700, color: recvDone ? 'var(--g)' : (received > 0 ? 'var(--blu)' : 'var(--i3)') }}>{dash(received)}</td>
-                    <td>{po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-'}</td>
-                    <td style={{ ...rt, fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{dd == null ? '-' : (dd > 0 ? '+' + dd : dd)}</td>
-                  </tr>
-                );
+                const list = (po.items && po.items.length) ? po.items : [{ item: '(no items)', qty: 0, rate: 0, amount: 0, receivedQty: 0 }];
+                return list.map((it, ii) => {
+                  const first = ii === 0;
+                  const oq = num(it.qty), rq = num(it.receivedQty);
+                  const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
+                  const muted = { color: 'var(--i3)' };
+                  return (
+                    <tr key={(po.poNum || pi) + '-' + ii} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                      <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{first ? (po.poNum || '-') : <span style={muted}>↳</span>}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.poDate ? fmtDate(po.poDate) : '-') : ''}</td>
+                      <td style={{ fontSize: 11 }}>{first ? supName(po.supplier) : ''}</td>
+                      <td>{it.item}{it.unit ? <span style={{ ...muted, fontSize: 10 }}> ({it.unit})</span> : null}</td>
+                      <td style={{ ...rt, whiteSpace: 'nowrap' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td style={{ ...rt, fontWeight: 700, whiteSpace: 'nowrap' }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td style={rt}>{dash(oq)}</td>
+                      <td style={{ ...rt, fontWeight: 700, color: rColor }}>{dash(rq)}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-') : ''}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '-') : ''}</td>
+                      <td style={{ fontSize: 11 }}>{first ? (po.grnRef || '-') : ''}</td>
+                      <td>{first ? <span className={'tag ' + tagClass(st, overdue)}>{stageLabel(po)}</span> : ''}</td>
+                      <td style={{ ...rt, fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{first ? (dd == null ? '-' : (dd > 0 ? '+' + dd : dd)) : ''}</td>
+                      <td style={{ textAlign: 'center' }}>{first ? <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>🖨</button> : ''}</td>
+                    </tr>
+                  );
+                });
               })}
             </tbody>
           </table>
         </div>
       </div>
+      {docPo && <PurchaseOrderModal po={docPo} asl={asl} onClose={() => setDocPo(null)} />}
     </>
   );
 }
 
 /* ─────────────────────────── 2 · Approved Suppliers (ASL, editable) ─────────────────────────── */
-const ASL_COLS = [
-  { k: 'company', label: 'Company', w: 160 },
-  { k: 'materialType', label: 'Material Type', w: 120 },
-  { k: 'subGroup', label: 'Sub Group', w: 110 },
-  { k: 'specificMaterial', label: 'Specific Material', w: 150 },
-  { k: 'itemCode', label: 'Item Code', w: 100 },
-  { k: 'uom', label: 'UOM', w: 70 },
-  { k: 'basicPrice', label: 'Basic Price', w: 100, numeric: true },
-  { k: 'paymentTerms', label: 'Payment Terms', w: 130 },
-  { k: 'leadTime', label: 'Lead Time', w: 100 },
-  { k: 'moq', label: 'MOQ', w: 90 },
+// Supplier-level (company) fields — shown once per supplier group and written to
+// EVERY row of that group so the PO document can read them off any row. (ASL_SUP_FIELDS 11695)
+const ASL_SUP_FIELDS = ['contact', 'phone', 'contact2', 'phone2', 'email', 'address', 'pincode', 'gstn', 'speciality', 'transportCharges', 'paymentTerms'];
+// Details editor (per group) — company plus the supplier-level fields above.
+const ASL_DETAIL_FIELDS = [
+  { k: 'company', label: 'Company Name' }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
+  { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' }, { k: 'email', label: 'Email' },
+  { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' }, { k: 'gstn', label: 'GSTN' },
+  { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
 ];
+// Add-new-supplier form fields. (renderASLEdit new form 11838)
+const ASL_NEW_FIELDS = [
+  { k: 'company', label: 'Company Name *', span: 2 }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
+  { k: 'email', label: 'Primary Email' }, { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' },
+  { k: 'gstn', label: 'GSTN' }, { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' },
+  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)' },
+];
+// Item-level fields — one row per material within a supplier group.
+const ASL_ITEM_COLS = [
+  { k: 'itemCode', label: 'Item Code', w: 90 }, { k: 'materialType', label: 'Material Type', w: 110 }, { k: 'subGroup', label: 'Sub-Group', w: 100 },
+  { k: 'microns', label: 'Microns', w: 70 }, { k: 'specificMaterial', label: 'Item Description', w: 180 }, { k: 'uom', label: 'UOM', w: 60 },
+  { k: 'basicPrice', label: 'Basic Price', w: 90, numeric: true }, { k: 'moq', label: 'MOQ', w: 80 }, { k: 'leadTime', label: 'Lead Time', w: 90 },
+];
+const GKEY = (r) => r.company || '(unnamed supplier)';
+const blankSupplier = () => ({ company: '', contact: '', phone: '', contact2: '', phone2: '', email: '', address: '', pincode: '', gstn: '', speciality: '', transportCharges: '', paymentTerms: '', materialType: '', subGroup: '', microns: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', moq: '', leadTime: '', status: 'Active' });
+const supLabel = { fontSize: 9.5, color: 'var(--i3)', fontWeight: 700, display: 'block' };
 
 function ASLEditor() {
   const { mods, save } = useData();
   const purchase = mods.purchase || {};
   const [rows, setRows] = useState(() => clone(arr(purchase.asl)));
   const [q, setQ] = useState('');
+  const [statFil, setStatFil] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [collapsed, setCollapsed] = useState({});     // { company: true } when hidden
+  const [detailsOpen, setDetailsOpen] = useState({}); // { company: true } when the details editor is shown
+  const [newOpen, setNewOpen] = useState(false);
+  const [newSup, setNewSup] = useState(blankSupplier);
+  const [newCerts, setNewCerts] = useState([]);
 
-  const setCell = (i, f, v) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [f]: v } : r)));
-  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3500); };
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
+  const migrate = (obj, from, to) => { if (from === to || !(from in obj)) return obj; const n = { ...obj }; n[to] = n[from]; delete n[from]; return n; };
 
-  const filtered = rows.map((r, i) => ({ r, i })).filter(({ r }) => !q ||
-    ['company', 'specificMaterial', 'itemCode', 'materialType', 'subGroup'].some((f) => String(r[f] || '').toLowerCase().includes(q.toLowerCase())));
-
-  function addRow() {
-    setRows((rs) => [...rs, { company: '', materialType: '', subGroup: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', paymentTerms: '', leadTime: '', moq: '', status: 'Active' }]);
+  // Item-level edit (one row).
+  const setItemCell = (idx, f, v) => setRows((rs) => rs.map((r, j) => (j === idx ? { ...r, [f]: v } : r)));
+  // Supplier-level edit — applied to every row currently in the group.
+  function setSupField(company, f, v) {
+    setRows((rs) => rs.map((r) => (GKEY(r) === company ? { ...r, [f]: v } : r)));
+    if (f === 'company') {
+      const nk = v || '(unnamed supplier)';
+      setCollapsed((c) => migrate(c, company, nk));
+      setDetailsOpen((c) => migrate(c, company, nk));
+    }
   }
-  function removeRow(i) { setRows((rs) => rs.filter((_, j) => j !== i)); }
+  const toggleCollapse = (company) => setCollapsed((c) => ({ ...c, [company]: !c[company] }));
+  const toggleDetails = (company) => { setDetailsOpen((c) => ({ ...c, [company]: !c[company] })); setCollapsed((c) => ({ ...c, [company]: false })); };
+
+  const groups = useMemo(() => {
+    const seen = []; const map = {};
+    rows.forEach((r, i) => { const c = GKEY(r); if (!map[c]) { map[c] = []; seen.push(c); } map[c].push(i); });
+    return seen.map((c) => ({ company: c, idxs: map[c] }));
+  }, [rows]);
+
+  const rowMatches = (r) => {
+    if (statFil && (r.status || 'Active') !== statFil) return false;
+    if (!q) return true;
+    const s = q.toLowerCase();
+    return ['company', 'specificMaterial', 'itemCode', 'materialType', 'subGroup', 'contact', 'phone'].some((f) => String(r[f] || '').toLowerCase().includes(s));
+  };
+  const visGroups = groups.map((g) => ({ ...g, visIdxs: g.idxs.filter((i) => rowMatches(rows[i])) })).filter((g) => g.visIdxs.length > 0);
+
+  function addItemToGroup(company) {
+    setRows((rs) => {
+      const first = rs.find((r) => GKEY(r) === company) || {};
+      const row = blankSupplier();
+      row.company = first.company || '';
+      ASL_SUP_FIELDS.forEach((f) => { row[f] = first[f] || ''; });
+      return [...rs, row];
+    });
+  }
+  function removeRow(idx) {
+    if (!window.confirm('Delete this item from the Approved Supplier List?')) return;
+    setRows((rs) => rs.filter((_, j) => j !== idx));
+  }
 
   async function saveAll() {
     setBusy(true);
@@ -286,38 +364,56 @@ function ASLEditor() {
       flash('g', '✓ Approved Supplier List saved.');
     } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
   }
+
+  // Legacy exportASLExcel (12303): S.No + full field set + certifications count.
   function exportXlsx() {
-    const header = [...ASL_COLS.map((c) => c.label), 'Status'];
-    const keys = [...ASL_COLS.map((c) => c.k), 'status'];
-    exportAOA([header, ...rows.map((r) => keys.map((k) => r[k] ?? ''))], 'Approved_Suppliers_' + today());
+    if (!rows.length) { flash('r', 'No supplier data to export.'); return; }
+    const header = ['S.No', 'Item Code', 'Status', 'Company Name', 'Primary Contact', 'Primary Phone', 'Secondary Contact', 'Secondary Phone', 'Material Type', 'Sub-Group', 'Microns', 'Item Description', 'UOM', 'Basic Price', 'MOQ', 'Lead Time', 'Transport Charges', 'Payment Terms', 'Email ID', 'Address', 'Pincode', 'GSTN', 'Speciality', 'Certifications Received'];
+    const body = rows.map((r, i) => {
+      const n = certsFor(GKEY(r)).length;
+      return [i + 1, r.itemCode || '', r.status || 'Active', r.company || '', r.contact || '', r.phone || '', r.contact2 || '', r.phone2 || '',
+        r.materialType || '', r.subGroup || '', r.microns || '', r.specificMaterial || '', r.uom || '', r.basicPrice ?? '', r.moq || '', r.leadTime || '',
+        r.transportCharges || '', r.paymentTerms || '', r.email || '', r.address || '', r.pincode || '', r.gstn || '', r.speciality || '', n ? 'Yes (' + n + ')' : 'No'];
+    });
+    exportAOA([header, ...body], 'Bloomflex_Approved_Supplier_List_' + today());
   }
 
-  // ── Supplier certifications ────────────────────────────────────────────────
-  // Certificates hang off the FIRST ASL row for a company (aslCertRow), so a
-  // supplier listed against several materials still has one document set.
-  const companies = useMemo(() => {
-    const seen = [];
-    const map = {};
-    rows.forEach((r, i) => {
-      const c = r.company || '(unnamed supplier)';
-      if (!map[c]) { map[c] = i; seen.push(c); }      // index of the cert-bearing row
-    });
-    return seen.map((c) => ({ company: c, idx: map[c], certs: arr(rows[map[c]].certs) }));
-  }, [rows]);
+  // ── Add New Supplier ──
+  function saveNewSupplier() {
+    const name = String(newSup.company || '').trim();
+    if (!name) { flash('r', 'Company name is required.'); return; }
+    if (groups.some((g) => g.company.toLowerCase() === name.toLowerCase())) { flash('r', `"${name}" already exists — add items to it instead.`); return; }
+    const row = blankSupplier();
+    row.company = name;
+    ASL_SUP_FIELDS.forEach((f) => { row[f] = String(newSup[f] || '').trim(); });
+    if (newCerts.length) row.certs = newCerts.slice();
+    setRows((rs) => [row, ...rs]); // new supplier group appears at the top
+    setNewOpen(false); setNewSup(blankSupplier()); setNewCerts([]);
+    setCollapsed((c) => ({ ...c, [name]: false }));
+    flash('g', `✓ ${name} added — add its items below, then Save ASL.`);
+  }
+  async function pickNewCerts(fileList) {
+    const { docs, errors } = await readAttachments(fileList);
+    if (errors.length) flash('r', errors.join(' '));
+    if (docs.length) setNewCerts((cs) => [...cs, ...docs]);
+  }
 
-  async function addCerts(idx, fileList) {
+  // ── Certifications (stored on the group's first row) ──
+  const certsFor = (company) => { const r = rows.find((x) => GKEY(x) === company); return r && Array.isArray(r.certs) ? r.certs : []; };
+  async function addCerts(company, fileList) {
     const { docs, errors } = await readAttachments(fileList);
     if (errors.length) flash('r', errors.join(' '));
     if (!docs.length) return;
+    const idx = rows.findIndex((r) => GKEY(r) === company);
+    if (idx < 0) return;
     const next = rows.map((r, j) => (j === idx ? { ...r, certs: [...arr(r.certs), ...docs] } : r));
     setRows(next);
-    try {
-      await save('purchase', { ...purchase, asl: next });
-      flash('g', `✓ ${docs.length} document(s) attached.`);
-    } catch (e) { flash('r', 'Save failed: ' + e.message); }
+    try { await save('purchase', { ...purchase, asl: next }); flash('g', `✓ ${docs.length} document(s) attached.`); }
+    catch (e) { flash('r', 'Save failed: ' + e.message); }
   }
-
-  async function deleteCert(idx, ci) {
+  async function deleteCert(company, ci) {
+    const idx = rows.findIndex((r) => GKEY(r) === company);
+    if (idx < 0) return;
     const cur = arr(rows[idx].certs);
     if (!window.confirm(`Remove "${cur[ci] ? cur[ci].name : 'this document'}"?`)) return;
     const next = rows.map((r, j) => (j === idx ? { ...r, certs: arr(r.certs).filter((_, k) => k !== ci) } : r));
@@ -326,99 +422,149 @@ function ASLEditor() {
     catch (e) { flash('r', 'Save failed: ' + e.message); }
   }
 
+  const itemInp = (idx, c, r) => (
+    <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
+      onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+  );
+
   return (
     <div className="card">
       <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>🏭 Approved Supplier List <span className="tag tgr">{rows.length}</span></div>
-        <input placeholder="Search company / material / code…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="ctitle" style={{ margin: 0 }}>🏭 Approved Supplier List <span className="tag tgr">{groups.length}</span></div>
+        <input placeholder="Search company / material / contact…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select value={statFil} onChange={(e) => setStatFil(e.target.value)} aria-label="Status filter">
+          <option value="">All Statuses</option>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+        </select>
         <span style={{ flex: 1 }} />
-        <button className="btn btn-s" onClick={addRow}>＋ Add Row</button>
+        <button className="btn btn-s" onClick={() => setNewOpen((o) => !o)}>{newOpen ? '✕ Cancel' : '＋ Add Supplier'}</button>
         <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save ASL'}</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
-      <div className="tw sy">
-        <table>
-          <thead><tr>
-            {ASL_COLS.map((c) => <th key={c.k} style={{ minWidth: c.w }}>{c.label}</th>)}
-            <th style={{ minWidth: 90 }}>Status</th>
-            <th></th>
-          </tr></thead>
-          <tbody>
-            {filtered.length === 0 ? <tr><td colSpan={ASL_COLS.length + 2} style={emptyTd}>No suppliers — use “＋ Add Row”.</td></tr> : filtered.map(({ r, i }) => (
-              <tr key={i}>
-                {ASL_COLS.map((c) => (
-                  <td key={c.k}>
-                    <input
-                      type={c.numeric ? 'number' : 'text'}
-                      step={c.numeric ? '0.01' : undefined}
-                      value={r[c.k] ?? ''}
-                      onChange={(e) => setCell(i, c.k, e.target.value)}
-                      style={{ minWidth: c.w, ...(c.numeric ? rt : null) }}
-                    />
-                  </td>
-                ))}
-                <td>
-                  <select value={r.status || 'Active'} onChange={(e) => setCell(i, 'status', e.target.value)}
-                    style={{ color: (r.status || 'Active') === 'Active' ? 'var(--g)' : 'var(--red)', fontWeight: 700 }}>
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                  </select>
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => removeRow(i)} title="Remove row">✕</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="pg-sub" style={{ margin: '8px 0 0' }}>Item-code identity (description/type/UOM) is also editable in the Item Master tab. “Save ASL” persists the whole list.</div>
 
-      <div className="ctitle" style={{ marginTop: 18 }}>Supplier Certifications</div>
-      <div className="pg-sub" style={{ marginTop: 0 }}>
-        Food-grade, ISO and other compliance documents per supplier (images or PDF up to 1.5MB).
-        Images are downscaled before storing, to keep the purchase blob within its size budget.
-      </div>
-      <div className="tw sy" style={{ maxHeight: 320 }}>
-        <table>
-          <thead><tr><th style={{ minWidth: 200 }}>Supplier</th><th>Documents</th><th style={{ width: 150 }}></th></tr></thead>
-          <tbody>
-            {companies.length === 0 ? (
-              <tr><td colSpan={3} style={emptyTd}>No suppliers yet</td></tr>
-            ) : companies.map(({ company, idx, certs }) => (
-              <tr key={company}>
-                <td style={{ fontWeight: 600 }}>{company}</td>
-                <td>
-                  {certs.length === 0
-                    ? <span style={{ fontSize: 10.5, color: 'var(--i3)' }}>No certifications uploaded yet</span>
-                    : certs.map((c, ci) => (
-                      <span key={ci} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 12, padding: '2px 8px', margin: '2px 4px 2px 0', fontSize: 10.5 }}>
-                        {c.type === 'pdf' ? 'PDF' : 'IMG'}
-                        <button
-                          onClick={() => viewAttachment(c)}
-                          title={`View ${c.name}`}
-                          style={{ background: 'none', border: 'none', color: 'var(--blu)', cursor: 'pointer', padding: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        >{c.name}</button>
-                        <button onClick={() => deleteCert(idx, ci)} title={`Remove ${c.name}`} style={{ background: 'transparent', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 11, padding: 0 }}>&#10005;</button>
-                      </span>
-                    ))}
-                </td>
-                <td>
+      {newOpen && (
+        <div style={{ background: 'var(--bg)', border: '1.5px solid var(--bd)', borderRadius: 8, padding: '12px 14px', marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--g)', marginBottom: 10 }}>＋ Add New Supplier</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
+            {ASL_NEW_FIELDS.map((f) => (
+              <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
+                <label style={supLabel}>{f.label}</label>
+                <input value={newSup[f.k] ?? ''} onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={{ width: '100%' }} />
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label style={supLabel}>📎 Certifications / Documents (images or PDFs)</label>
+            <input type="file" accept="image/*,application/pdf" multiple onChange={(e) => { pickNewCerts(e.target.files); e.target.value = ''; }} style={{ fontSize: 11, marginTop: 3 }} />
+            {newCerts.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {newCerts.map((c, i) => (
+                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--wh)', border: '1px solid var(--bd)', borderRadius: 12, padding: '2px 8px', margin: '2px 4px 2px 0', fontSize: 10.5 }}>
+                    {c.type === 'pdf' ? 'PDF' : 'IMG'} {c.name}
+                    <button onClick={() => setNewCerts((cs) => cs.filter((_, j) => j !== i))} style={{ background: 'transparent', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 11, padding: 0 }}>✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+            <button className="btn btn-g" onClick={saveNewSupplier}>💾 Save Supplier</button>
+          </div>
+        </div>
+      )}
+
+      {visGroups.length === 0 ? (
+        <div style={emptyTd}>{rows.length ? 'No suppliers match.' : 'No suppliers yet — use “＋ Add Supplier”.'}</div>
+      ) : visGroups.map((g) => {
+        const first = rows[g.idxs[0]];
+        const open = q ? true : !collapsed[g.company];
+        const showDetails = !!detailsOpen[g.company] && open;
+        const certs = certsFor(g.company);
+        const activeN = g.idxs.filter((i) => (rows[i].status || 'Active') === 'Active').length;
+        const summary = [first.contact, first.phone, first.paymentTerms, first.transportCharges ? 'Transport: ' + first.transportCharges : ''].filter(Boolean).join(' · ');
+        return (
+          <div key={g.company} style={{ background: 'var(--wh)', border: '1px solid var(--bd)', borderLeft: '3px solid var(--blu)', borderRadius: 6, marginBottom: 6, overflow: 'hidden' }}>
+            <div onClick={() => toggleCollapse(g.company)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px', background: 'var(--bg)' }}>
+              <span style={{ fontSize: 10, color: 'var(--i3)' }}>{open ? '▼' : '▶'}</span>
+              <span style={{ fontWeight: 700, fontSize: 12.5 }}>{g.company}</span>
+              <span style={{ fontSize: 10.5, color: 'var(--i3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+              <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} title="Edit supplier details" onClick={(e) => { e.stopPropagation(); toggleDetails(g.company); }}>✎ Details</button>
+              {certs.length > 0 && <span className="tag tg" title="Certifications on file">📎 {certs.length}</span>}
+              <span className="tag tgr">{g.idxs.length} item{g.idxs.length !== 1 ? 's' : ''}{activeN < g.idxs.length ? ' · ' + activeN + ' active' : ''}</span>
+            </div>
+
+            {showDetails && (
+              <div style={{ padding: '9px 12px', background: 'var(--wh)', borderTop: '1px solid var(--bd)', borderBottom: '1px solid var(--bd)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+                  {ASL_DETAIL_FIELDS.map((f) => (
+                    <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
+                      <label style={supLabel}>{f.label}</label>
+                      <input value={first[f.k] ?? ''} onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={{ width: '100%' }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--bd)' }}>
+                  <label style={supLabel}>📎 Certifications / Documents</label>
+                  <div style={{ margin: '4px 0 6px' }}>
+                    {certs.length === 0 ? <span style={{ fontSize: 10.5, color: 'var(--i3)' }}>No certifications uploaded yet</span>
+                      : certs.map((c, ci) => (
+                        <span key={ci} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--bg)', border: '1px solid var(--bd)', borderRadius: 12, padding: '2px 8px', margin: '2px 4px 2px 0', fontSize: 10.5 }}>
+                          {c.type === 'pdf' ? 'PDF' : 'IMG'}
+                          <button onClick={() => viewAttachment(c)} title={`View ${c.name}`} style={{ background: 'none', border: 'none', color: 'var(--blu)', cursor: 'pointer', padding: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</button>
+                          <button onClick={() => deleteCert(g.company, ci)} title={`Remove ${c.name}`} style={{ background: 'transparent', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 11, padding: 0 }}>&#10005;</button>
+                        </span>
+                      ))}
+                  </div>
                   <label className="btn btn-s" style={{ cursor: 'pointer' }}>
                     + Add document
-                    <input
-                      type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
-                      aria-label={`Add certification for ${company}`}
-                      onChange={(e) => { addCerts(idx, e.target.files); e.target.value = ''; }}
-                    />
+                    <input type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }} aria-label={`Add certification for ${g.company}`}
+                      onChange={(e) => { addCerts(g.company, e.target.files); e.target.value = ''; }} />
                   </label>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </div>
+              </div>
+            )}
+
+            {open && (
+              <div className="tw" style={{ overflowX: 'auto' }}>
+                <table style={{ minWidth: 900 }}>
+                  <thead><tr>
+                    {ASL_ITEM_COLS.map((c) => <th key={c.k} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }}>{c.label}</th>)}
+                    <th style={{ minWidth: 80 }}>Status</th>
+                    <th></th>
+                  </tr></thead>
+                  <tbody>
+                    {g.visIdxs.map((idx) => {
+                      const r = rows[idx];
+                      return (
+                        <tr key={idx} style={(r.status || 'Active') === 'Inactive' ? { opacity: 0.55 } : undefined}>
+                          {ASL_ITEM_COLS.map((c) => <td key={c.k}>{itemInp(idx, c, r)}</td>)}
+                          <td>
+                            <select value={r.status || 'Active'} onChange={(e) => setItemCell(idx, 'status', e.target.value)}
+                              style={{ color: (r.status || 'Active') === 'Active' ? 'var(--g)' : 'var(--red)', fontWeight: 700 }}>
+                              <option value="Active">Active</option>
+                              <option value="Inactive">Inactive</option>
+                            </select>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => removeRow(idx)} title="Delete item">✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr><td colSpan={ASL_ITEM_COLS.length + 2} style={{ padding: 6 }}>
+                      <button className="btn btn-s" onClick={() => addItemToGroup(g.company)}>＋ Add Item</button>
+                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Item identity is also editable in the Item Master tab.</span>
+                    </td></tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="pg-sub" style={{ margin: '8px 0 0' }}>Supplier details (contact, phone, email, address, GSTN, transport, payment terms) print on the PO document. “Save ASL” persists the whole list.</div>
     </div>
   );
 }
@@ -432,16 +578,28 @@ const IM_FIELDS = [
   { k: 'uom', label: 'UOM' },
 ];
 
+// Header-key matcher for Excel import: case/space/punctuation-insensitive. (imImportExcel pick 12261)
+function pickCol(o, names) {
+  for (const k in o) {
+    const kk = k.toLowerCase().replace(/[^a-z]/g, '');
+    if (names.includes(kk)) return String(o[k]).trim();
+  }
+  return '';
+}
+const IM_IDENT = ['specificMaterial', 'materialType', 'subGroup', 'microns', 'uom'];
+
 function ItemMaster() {
   const { mods, save } = useData();
   const purchase = mods.purchase || {};
   const asl = arr(purchase.asl);
   const [extra, setExtra] = useState(() => clone(arr(purchase.itemsExtra)));
   const [q, setQ] = useState('');
+  const [matF, setMatF] = useState('');
+  const [subF, setSubF] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
-  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3500); };
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
 
   // Distinct items owned by the ASL (identity managed there → read-only reference here). (imMasterList 6795)
   const aslItems = useMemo(() => {
@@ -450,6 +608,16 @@ function ItemMaster() {
     return out;
   }, [asl]);
   const suppliersFor = (code) => [...new Set(asl.filter((r) => r.itemCode === code).map((r) => r.company).filter(Boolean))]; // (imSuppliersFor 6816)
+
+  // Filter dropdown options: every material type / sub-group across the whole catalog. (imPopulateFilters)
+  const matTypes = useMemo(
+    () => [...new Set([...aslItems.map((m) => m.ref.materialType), ...extra.map((r) => r.materialType)].map((v) => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [aslItems, extra],
+  );
+  const subGroups = useMemo(
+    () => [...new Set([...aslItems.map((m) => m.ref.subGroup), ...extra.map((r) => r.subGroup)].map((v) => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [aslItems, extra],
+  );
 
   const setCell = (i, f, v) => setExtra((rs) => rs.map((r, j) => (j === i ? { ...r, [f]: v } : r)));
   function addItem() { setExtra((rs) => [...rs, { itemCode: nextItemCode(asl, rs), specificMaterial: '', materialType: '', subGroup: '', microns: '', uom: '' }]); }
@@ -461,9 +629,60 @@ function ItemMaster() {
     catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
   }
 
+  // Export the Item Master exactly as it stands today (one row per item code). (imExportExcel 12236)
+  function exportXlsx() {
+    const list = [...aslItems.map((m) => ({ code: m.code, ...m.ref })), ...extra];
+    if (!list.length) { flash('r', 'Item Master is empty — nothing to export.'); return; }
+    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Supplied By'];
+    const seen = new Set();
+    const body = [];
+    list.forEach((r) => {
+      const code = r.itemCode || r.code;
+      if (!code || seen.has(code)) return; seen.add(code);
+      body.push([code, r.materialType || '', r.subGroup || '', r.specificMaterial || '', r.microns || '', r.uom || '', suppliersFor(code).join(', ')]);
+    });
+    exportAOA([header, ...body], 'Bloomflex_Item_Master_' + today());
+  }
+
+  // Import an Item Master workbook. Matches on Item Code; asks before overwriting. (imImportExcel 12250)
+  async function importXlsx(file) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const rowsIn = await readSheet(file);
+      const parsed = rowsIn.map((o) => ({
+        code: pickCol(o, ['itemcode', 'code']),
+        specificMaterial: pickCol(o, ['itemdescription', 'description', 'specificmaterial']),
+        materialType: pickCol(o, ['materialtype', 'material']),
+        subGroup: pickCol(o, ['subgroup', 'group']),
+        microns: pickCol(o, ['microns', 'micron']),
+        uom: pickCol(o, ['uom', 'unit']),
+      })).filter((r) => r.code);
+      if (!parsed.length) { flash('r', 'No rows with an Item Code were found in the file.'); return; }
+
+      const existing = new Set([...aslItems.map((m) => m.code), ...extra.map((r) => r.itemCode)]);
+      const nUpd = parsed.filter((r) => existing.has(r.code)).length;
+      const nNew = parsed.length - nUpd;
+      const ok = window.confirm('Import ' + parsed.length + ' row(s) from Excel?\n\n• ' + nUpd + ' existing item code(s) will be OVERWRITTEN (description, material type, sub-group, microns, UOM).\n• ' + nNew + ' new item code(s) will be added.\n\nProceed and overwrite?');
+      if (!ok) return;
+
+      const byCode = {}; parsed.forEach((r) => { byCode[r.code] = r; });
+      // ASL rows carrying an imported code get their identity overwritten too.
+      const newAsl = asl.map((a) => (byCode[a.itemCode] ? { ...a, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[a.itemCode][f]; return o; }, {}) } : a));
+      // Catalog-only rows: overwrite matches; append brand-new codes.
+      const newExtra = extra.map((r) => (byCode[r.itemCode] ? { ...r, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[r.itemCode][f]; return o; }, {}) } : r));
+      parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, microns: r.microns, uom: r.uom }); });
+
+      await save('purchase', { ...purchase, asl: newAsl, itemsExtra: newExtra });
+      setExtra(newExtra);
+      flash('g', `✓ Imported — ${nUpd} updated, ${nNew} added.`);
+    } catch (e) { flash('r', 'Could not read the Excel file: ' + e.message); } finally { setBusy(false); }
+  }
+
   const match = (vals) => !q || vals.some((v) => String(v || '').toLowerCase().includes(q.toLowerCase()));
-  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.microns]));
-  const aslRows = aslItems.filter((m) => match([m.code, m.ref.specificMaterial, m.ref.materialType, m.ref.subGroup, m.ref.microns]));
+  const typeMatch = (r) => (!matF || String(r.materialType || '').trim() === matF) && (!subF || String(r.subGroup || '').trim() === subF);
+  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => typeMatch(r) && match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.microns]));
+  const aslRows = aslItems.filter((m) => typeMatch(m.ref) && match([m.code, m.ref.specificMaterial, m.ref.materialType, m.ref.subGroup, m.ref.microns]));
 
   return (
     <>
@@ -471,7 +690,21 @@ function ItemMaster() {
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>🗂 Item Master <span className="tag tgr">{extra.length}</span></div>
           <input placeholder="Search item…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select value={matF} onChange={(e) => setMatF(e.target.value)} aria-label="Filter by material type">
+            <option value="">All Material Types</option>
+            {matTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={subF} onChange={(e) => setSubF(e.target.value)} aria-label="Filter by sub-group">
+            <option value="">All Sub-Groups</option>
+            {subGroups.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
           <span style={{ flex: 1 }} />
+          <button className="btn btn-s" onClick={exportXlsx} disabled={busy}>⬇ Export</button>
+          <label className="btn btn-s" style={{ cursor: busy ? 'default' : 'pointer' }}>
+            ⬆ Import
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={busy}
+              onChange={(e) => { importXlsx(e.target.files && e.target.files[0]); e.target.value = ''; }} />
+          </label>
           <button className="btn btn-s" onClick={addItem}>＋ New Item Code</button>
           <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save'}</button>
         </div>
@@ -522,36 +755,86 @@ function ItemMaster() {
 }
 
 /* ─────────────────────────── 4 · Price Trends ─────────────────────────── */
+const PRICE_RANGES = [['30', 'Last 30 days'], ['90', 'Last 3 months'], ['180', 'Last 6 months'], ['365', 'Last 1 year'], ['', 'All time']];
+
 function PriceTrends() {
   const { mods } = useData();
   const purchase = mods.purchase || {};
   const priceHistory = arr(purchase.priceHistory);
+  const pos = posOf(purchase);
+  const asl = arr(purchase.asl);
   const [q, setQ] = useState('');
+  const [supFil, setSupFil] = useState('');
+  const [rangeDays, setRangeDays] = useState('');   // '' = all time
+  const [chartItem, setChartItem] = useState('');   // item filter (chart + billing + detail)
+
+  const cutoff = rangeDays ? addDaysISO(today(), -Number(rangeDays)) : '';
+
+  // Supplier dropdown: every supplier ever traded with (ASL ∪ price history ∪ POs). (purchAslCompanies)
+  const suppliers = useMemo(
+    () => [...new Set([...asl.map((r) => r.company), ...priceHistory.map((r) => r.supplier), ...pos.map((p) => p.supplier)].filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [asl, priceHistory, pos],
+  );
+
+  // Working set: price points scoped by supplier + timeframe. Everything below reads this.
+  const base = useMemo(() => {
+    let r = priceHistory.slice();
+    if (supFil) r = r.filter((x) => x.supplier === supFil);
+    if (cutoff) r = r.filter((x) => String(x.date || '') >= cutoff);
+    return r;
+  }, [priceHistory, supFil, cutoff]);
+
+  // Item dropdown options: items priced in the working set, plus the supplier's approved items. (purchPopulatePHItemFilter 12375)
+  const itemOptions = useMemo(() => {
+    const names = new Set(base.map((r) => String(r.item || '').trim()).filter(Boolean));
+    asl.forEach((r) => { if (!supFil || r.company === supFil) { const n = String(r.specificMaterial || '').trim(); if (n && n !== '-') names.add(n); } });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [base, asl, supFil]);
 
   const groups = useMemo(() => {
     const map = {};
-    priceHistory.forEach((r) => { const item = String(r.item || '').trim() || '(unspecified)'; (map[item] = map[item] || []).push(r); });
+    base.forEach((r) => { const item = String(r.item || '').trim() || '(unspecified)'; (map[item] = map[item] || []).push(r); });
     return Object.keys(map).sort((a, b) => a.localeCompare(b)).map((item) => {
       const recs = map[item].slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
       const rates = recs.map((r) => num(r.rate));
       return { item, recs, latest: recs[0], latestRate: num(recs[0].rate), min: Math.min(...rates), max: Math.max(...rates), count: recs.length };
     });
-  }, [priceHistory]);
+  }, [base]);
 
-  const matches = (g) => !q || g.item.toLowerCase().includes(q.toLowerCase()) || g.recs.some((r) => String(r.supplier || '').toLowerCase().includes(q.toLowerCase()));
+  const chartItemLc = chartItem.trim().toLowerCase();
+  const matches = (g) => (!chartItem || g.item.trim().toLowerCase() === chartItemLc)
+    && (!q || g.item.toLowerCase().includes(q.toLowerCase()) || g.recs.some((r) => String(r.supplier || '').toLowerCase().includes(q.toLowerCase())));
   const summaryGroups = groups.filter(matches);
 
-  // Trend chart over the same history: one line per supplier for a chosen item,
-  // or one line per item across all suppliers. (purchRenderPriceChart 7040)
-  const [chartItem, setChartItem] = useState('');
+  // Trend chart over the working set: one line per supplier for a chosen item,
+  // or one line per supplier across all items. (purchRenderPriceChart 7040)
   const chart = useMemo(
-    () => buildScrapChart(priceHistory, { itemFil: chartItem, seriesKey: 'supplier' }),
-    [priceHistory, chartItem],
+    () => buildScrapChart(base, { itemFil: chartItem, seriesKey: 'supplier' }),
+    [base, chartItem],
   );
 
-  // Flat detail, newest first, with Δ vs the previous rate for the same supplier+item. (purchRenderPriceHistory 6993)
+  // Per-supplier billing summary: what we billed with this supplier in the period,
+  // honouring the item filter. (purchRenderPHBilling 12805)
+  const billing = useMemo(() => {
+    if (!supFil) return null;
+    let sp = pos.filter((p) => p.supplier === supFil);
+    if (cutoff) sp = sp.filter((p) => String(p.poDate || '') >= cutoff);
+    const rows = [];
+    sp.forEach((po) => {
+      const its = (po.items || []).filter((it) => !chartItemLc || String(it.item || '').trim().toLowerCase() === chartItemLc);
+      if (!its.length) return;
+      rows.push({ po, items: its, amt: its.reduce((s, i) => s + num(i.amount), 0) });
+    });
+    const total = rows.reduce((s, r) => s + r.amt, 0);
+    const paid = rows.filter((r) => (r.po.paymentStatus || 'Unpaid') === 'Paid').reduce((s, r) => s + r.amt, 0);
+    rows.sort((a, b) => String(b.po.poDate || '').localeCompare(String(a.po.poDate || '')));
+    return { rows, total, paid, unpaid: total - paid };
+  }, [pos, supFil, cutoff, chartItemLc]);
+
+  // Flat detail, newest first, with Δ vs the previous rate for the same supplier+item. (purchRenderPriceHistory 12387)
   const detail = useMemo(() => {
-    let rows = priceHistory.slice();
+    let rows = base.slice();
+    if (chartItem) rows = rows.filter((r) => String(r.item || '').trim().toLowerCase() === chartItemLc);
     if (q) {
       const s = q.toLowerCase();
       rows = rows.filter((r) => String(r.item || '').toLowerCase().includes(s) || String(r.supplier || '').toLowerCase().includes(s) || String(r.poNum || '').toLowerCase().includes(s));
@@ -566,21 +849,28 @@ function PriceTrends() {
       return { ...r, delta };
     });
     return withDelta.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  }, [priceHistory, q]);
+  }, [base, q, chartItem, chartItemLc]);
 
   return (
     <>
       <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>Price Trends by Item <span className="tag tgr">{summaryGroups.length}</span></div>
-        </div>
-        <div className="fbar">
-          <select value={chartItem} onChange={(e) => setChartItem(e.target.value)} aria-label="Chart item">
-            <option value="">All items (one line each)</option>
-            {groups.map((g) => <option key={g.item} value={g.item}>{g.item}</option>)}
+          <select value={supFil} onChange={(e) => setSupFil(e.target.value)} aria-label="Filter by supplier">
+            <option value="">All Suppliers</option>
+            {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+          <select value={chartItem} onChange={(e) => setChartItem(e.target.value)} aria-label="Filter by item">
+            <option value="">All Items</option>
+            {itemOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <select value={rangeDays} onChange={(e) => setRangeDays(e.target.value)} aria-label="Timeframe">
+            {PRICE_RANGES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+        </div>
+        <div className="fbar" style={{ marginTop: 0 }}>
           <span style={{ fontSize: 11, color: 'var(--i2)' }}>
-            {chartItem ? 'One line per supplier for this item.' : 'One line per item across all suppliers.'}
+            {chartItem ? 'One line per supplier for this item.' : 'One line per supplier across all items.'}
           </span>
         </div>
         {!chart ? (
@@ -640,6 +930,45 @@ function PriceTrends() {
         )}
       </div>
 
+      {billing && (
+        <div className="card">
+          <div className="ctitle" style={{ margin: 0 }}>
+            Billing — {supFil}{chartItem ? ' · ' + chartItem : ''} <span className="tag tgr">{billing.rows.length}</span>
+          </div>
+          <div className="stats" style={{ marginTop: 10 }}>
+            <Stat label={'Total Billed (' + billing.rows.length + ' PO' + (billing.rows.length === 1 ? '' : 's') + ')'} value={rupees(billing.total, 0)} color="var(--blu)" />
+            <Stat label="Paid" value={rupees(billing.paid, 0)} color="var(--g)" />
+            <Stat label="Unpaid" value={rupees(billing.unpaid, 0)} color="#856404" />
+          </div>
+          {billing.rows.length === 0 ? (
+            <div style={emptyTd}>No POs for this supplier{chartItem ? ' / item filter' : ''} in this period.</div>
+          ) : (
+            <div className="tw sy" style={{ maxHeight: 260, marginTop: 10 }}>
+              <table>
+                <thead><tr><th>PO #</th><th>Date</th><th>Item(s)</th><th style={rt}>Billed ₹</th><th style={{ textAlign: 'center' }}>Stage</th><th style={{ textAlign: 'center' }}>Payment</th></tr></thead>
+                <tbody>
+                  {billing.rows.map((r) => {
+                    const paid = (r.po.paymentStatus || 'Unpaid') === 'Paid';
+                    const st = statusOf(r.po);
+                    const overdue = !isClosed(r.po) && !!r.po.expectedDelivery && delayDays(r.po) > 0;
+                    return (
+                      <tr key={r.po.poNum}>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{r.po.poNum}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{r.po.poDate ? fmtDate(r.po.poDate) : '-'}</td>
+                        <td style={{ fontSize: 11 }}>{r.items.map((i) => i.item + ' (' + num(i.qty).toLocaleString('en-IN', { maximumFractionDigits: 2 }) + (i.unit ? ' ' + i.unit : '') + ')').join(', ')}</td>
+                        <td style={{ ...rt, fontWeight: 700 }}>{inr(r.amt, 2)}</td>
+                        <td style={{ textAlign: 'center' }}><span className={'tag ' + tagClass(st, overdue)}>{stageLabel(r.po)}</span></td>
+                        <td style={{ textAlign: 'center' }}><span className={'tag ' + (paid ? 'tg' : 'ty')}>{paid ? '✓ Paid' : '⏳ Unpaid'}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card">
         <div className="ctitle">📈 Price Fluctuation Records <span className="tag tgr">{detail.length}</span></div>
         <div className="tw sy" style={{ maxHeight: 360 }}>
@@ -679,39 +1008,48 @@ function Payments() {
   const asl = arr(purchase.asl);
   const [sup, setSup] = useState('');
   const [stat, setStat] = useState('');
+  const [term, setTerm] = useState('');
 
   const suppliers = useMemo(() => [...new Set(pos.map((p) => p.supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [pos]);
+  const terms = useMemo(() => [...new Set(asl.map((r) => r.paymentTerms).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [asl]);
 
+  // Cash-flow stats — always off the FULL unfiltered set, not the filtered view. (purchRenderPayments 12602)
   const totals = useMemo(() => {
-    const t = { paid: 0, paidCount: 0, unpaid: 0, unpaidCount: 0, overdue: 0 };
-    pos.forEach((p) => {
-      const amt = num(p.totalAmount);
-      if ((p.paymentStatus || 'Unpaid') === 'Paid') { t.paid += amt; t.paidCount++; }
-      else { t.unpaid += amt; t.unpaidCount++; if (dueInDays(p, asl) < 0) t.overdue++; }
-    });
-    return t;
+    const unpaid = pos.filter((p) => (p.paymentStatus || 'Unpaid') === 'Unpaid');
+    const overdue = unpaid.filter((p) => dueInDays(p, asl) < 0).length;
+    const totalPayable = unpaid.reduce((s, p) => s + num(p.totalAmount), 0);
+    const outstandingToday = unpaid.filter((p) => dueInDays(p, asl) <= 0).reduce((s, p) => s + num(p.totalAmount), 0);
+    const outstanding15 = unpaid.filter((p) => dueInDays(p, asl) <= 15).reduce((s, p) => s + num(p.totalAmount), 0);
+    const thisMonth = today().slice(0, 7);
+    const paidThisMonth = pos.filter((p) => (p.paymentStatus || '') === 'Paid' && String(p.paymentDate || '').slice(0, 7) === thisMonth).reduce((s, p) => s + num(p.totalAmount), 0);
+    return { unpaidCount: unpaid.length, overdue, totalPayable, outstandingToday, outstanding15, paidThisMonth };
   }, [pos, asl]);
 
   const rows = useMemo(() => {
     let r = pos.slice();
     if (sup) r = r.filter((p) => p.supplier === sup);
+    if (term) r = r.filter((p) => paymentTermsText(p, asl) === term);
     if (stat) r = r.filter((p) => (p.paymentStatus || 'Unpaid') === stat);
     return r.sort((a, b) => dueInDays(a, asl) - dueInDays(b, asl));
-  }, [pos, asl, sup, stat]);
+  }, [pos, asl, sup, term, stat]);
 
   function exportXlsx() {
-    const header = ['PO Number', 'Supplier', 'Amount', 'Payment Terms', 'Due Date', 'Days to Due', 'Payment Status', 'Payment Date'];
-    const body = rows.map((po) => [po.poNum || '', supName(po.supplier), num(po.totalAmount), paymentTermsText(po, asl), dueDate(po, asl), dueInDays(po, asl), po.paymentStatus || 'Unpaid', po.paymentDate || '']);
-    exportAOA([header, ...body], 'Payments_' + today());
+    const header = ['PO Number', 'Supplier', 'PO / Invoice Date', 'GRN Ref', 'Actual Receipt Date', 'Payment Terms', 'Payment Due Date', 'Days to Due (neg = overdue)', 'Amount (Rs)', 'Payment Status', 'Actual Payment Date'];
+    const body = rows.map((po) => {
+      const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
+      return [po.poNum || '', supName(po.supplier), po.poDate || '', po.grnRef || '', po.actualReceiptDate || '', paymentTermsText(po, asl), dueDate(po, asl), paid ? '' : dueInDays(po, asl), num(po.totalAmount), po.paymentStatus || 'Unpaid', po.paymentDate || ''];
+    });
+    exportAOA([header, ...body], 'Bloomflex_Supplier_Payments_' + today());
   }
 
   return (
     <>
       <div className="stats">
-        <Stat label="✓ Paid" value={rupees(totals.paid, 0)} color="var(--g)" />
-        <Stat label={'⏳ Unpaid (' + totals.unpaidCount + ')'} value={rupees(totals.unpaid, 0)} color="#856404" />
         <Stat label="⚠ Bills Overdue" value={totals.overdue} color="var(--red)" />
-        <Stat label="Paid Bills" value={totals.paidCount} />
+        <Stat label={'💰 Total Payable (' + totals.unpaidCount + ' bills)'} value={rupees(totals.totalPayable, 0)} color="var(--blu)" />
+        <Stat label="📅 Outstanding Today" value={rupees(totals.outstandingToday, 0)} color="#a3510a" />
+        <Stat label="📆 Outstanding in 15 Days" value={rupees(totals.outstanding15, 0)} color="#856404" />
+        <Stat label="✓ Total Paid (This Month)" value={rupees(totals.paidThisMonth, 0)} color="var(--g)" />
       </div>
       <div className="card">
         <div className="fbar">
@@ -719,6 +1057,10 @@ function Payments() {
           <select value={sup} onChange={(e) => setSup(e.target.value)}>
             <option value="">All Suppliers</option>
             {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={term} onChange={(e) => setTerm(e.target.value)} aria-label="Filter by payment terms">
+            <option value="">All Payment Terms</option>
+            {terms.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <select value={stat} onChange={(e) => setStat(e.target.value)}>
             <option value="">All</option>

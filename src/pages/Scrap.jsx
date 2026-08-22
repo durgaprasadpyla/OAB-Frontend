@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { dash, today, rupees } from '../lib/format.js';
+import { dash, today, rupees, fmtDate } from '../lib/format.js';
 
 // Native port of the legacy scrap login (index.html: showScrapView / scrapAddBuyer /
 // scrapSetPrice / scrapAddTxn). Add-only: buyers, daily prices and scrap sales, all
@@ -56,6 +56,27 @@ export default function Scrap() {
     [txns],
   );
 
+  // Today's Buying Prices board — every rate posted today, by buyer. (legacy scrapRenderTodayPrices 7692)
+  const todaysPrices = useMemo(() => {
+    const d = today();
+    return prices.filter((p) => p.date === d).sort((a, b) => buyerName(a.buyer).localeCompare(buyerName(b.buyer)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prices, buyers]);
+
+  // Buyer directory sorted by name, with each buyer's latest rate per item. (legacy scrapRenderBuyerDirectory 7707)
+  const buyerDir = useMemo(
+    () => buyers.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+    [buyers],
+  );
+  const latestRatesFor = (buyerId) => {
+    const latest = {};
+    prices.filter((p) => p.buyer === buyerId).forEach((p) => {
+      const cur = latest[p.item];
+      if (!cur || String(p.date || '') >= String(cur.date || '')) latest[p.item] = { rate: p.rate, date: p.date };
+    });
+    return Object.keys(latest).sort((a, b) => a.localeCompare(b)).map((item) => ({ item, rate: latest[item].rate, date: latest[item].date }));
+  };
+
   const saleAmount = num(sf.qty) * num(sf.rate);
 
   const flash = (where, text, t = 'g') => {
@@ -78,6 +99,10 @@ export default function Scrap() {
   async function addBuyer() {
     const name = bf.name.trim();
     if (!name) { flash('buyer', 'Enter the scrap buyer name.', 'r'); return; }
+    // Block duplicate buyer names (case-insensitive), matching legacy 7628.
+    if (buyers.some((b) => String(b.name || '').trim().toLowerCase() === name.toLowerCase())) {
+      flash('buyer', '"' + name + '" already exists.', 'r'); return;
+    }
     const next = scrapClone();
     next.buyers.push({
       id: 'SB' + String(next.buyers.length + 1).padStart(3, '0'),
@@ -99,14 +124,21 @@ export default function Scrap() {
 
   async function setPrice() {
     const buyer = pf.buyer;
-    const item = pf.item.trim();
+    const itemRaw = pf.item.trim();
     const rate = parseFloat(pf.rate);
     if (!buyer) { flash('price', 'Select a buyer.', 'r'); return; }
-    if (!item) { flash('price', 'Select or enter a scrap item.', 'r'); return; }
+    if (!itemRaw) { flash('price', 'Select or enter a scrap item.', 'r'); return; }
     if (isNaN(rate) || rate < 0) { flash('price', 'Enter a valid rate.', 'r'); return; }
     const next = scrapClone();
-    if (isNewItem(item) && !next.items.some((i) => String(i).toLowerCase() === item.toLowerCase())) next.items.push(item);
-    next.prices.push({ date: today(), buyer, item, rate: num(rate) });
+    if (!next.items.some((i) => String(i).toLowerCase() === itemRaw.toLowerCase())) next.items.push(itemRaw);
+    // Canonicalise to the stored item's casing so the UPSERT matches reliably.
+    const item = next.items.find((i) => String(i).toLowerCase() === itemRaw.toLowerCase()) || itemRaw;
+    // UPSERT the rate for the same date + buyer + item instead of pushing a
+    // duplicate row (legacy 7653-7655).
+    const d = today();
+    const existing = next.prices.find((p) => p.date === d && p.buyer === buyer && p.item === item);
+    if (existing) existing.rate = num(rate);
+    else next.prices.push({ date: d, buyer, item, rate: num(rate) });
     setBusy(true);
     try {
       await save('scrap', next);
@@ -266,29 +298,75 @@ export default function Scrap() {
         </div>
       </div>
 
+      {/* ── Today's Buying Prices ── */}
+      <div className="card">
+        <div className="ctitle">Today's Buying Prices <span className="tag tgr">{todaysPrices.length}</span></div>
+        {todaysPrices.length === 0 ? (
+          <div style={{ color: 'var(--i3)', fontSize: 12, padding: 6 }}>No prices entered today yet.</div>
+        ) : (
+          <div className="tw sy">
+            <table>
+              <thead>
+                <tr><th>Buyer</th><th>Item</th><th style={{ textAlign: 'right' }}>Rate ₹</th></tr>
+              </thead>
+              <tbody>
+                {todaysPrices.map((p, i) => (
+                  <tr key={i}>
+                    <td>{buyerName(p.buyer)}</td>
+                    <td>{p.item}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(p.rate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* ── Buyer Directory ── */}
       <div className="card">
         <div className="ctitle">Buyer Directory <span className="tag tgr">{buyers.length}</span></div>
-        <div className="tw sy">
-          <table>
-            <thead>
-              <tr><th>ID</th><th>Name</th><th>Contact</th><th>Phone</th><th>GSTN</th></tr>
-            </thead>
-            <tbody>
-              {buyers.length === 0 ? (
-                <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No scrap buyers yet. Add one above.</td></tr>
-              ) : buyers.map((b) => (
-                <tr key={b.id}>
-                  <td><span className="tag tgr">{b.id}</span></td>
-                  <td style={{ fontWeight: 600 }}>{b.name}</td>
-                  <td>{b.contact || '-'}</td>
-                  <td>{b.phone || '-'}</td>
-                  <td>{b.gstn || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {buyerDir.length === 0 ? (
+          <div style={{ color: 'var(--i3)', fontSize: 12, padding: 6 }}>No scrap buyers yet. Add one above.</div>
+        ) : buyerDir.map((b) => {
+          const rates = latestRatesFor(b.id);
+          const detail = (label, val) => (val
+            ? <span style={{ marginRight: 14 }}><span style={{ color: 'var(--i3)' }}>{label}:</span> {val}</span>
+            : null);
+          return (
+            <div key={b.id} style={{ border: '1px solid var(--bd)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+              <div style={{ background: 'var(--bg)', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{b.name} <span className="tag tgr" style={{ fontWeight: 600 }}>{b.id}</span></div>
+                <div style={{ fontSize: 12, color: 'var(--i2)' }}>
+                  {detail('Contact', b.contact)}{detail('Phone', b.phone)}{detail('GSTN', b.gstn)}
+                </div>
+              </div>
+              {b.address ? <div style={{ padding: '6px 14px 0', fontSize: 12, color: 'var(--i2)' }}><span style={{ color: 'var(--i3)' }}>Address:</span> {b.address}</div> : null}
+              {b.notes ? <div style={{ padding: '4px 14px 0', fontSize: 12, color: 'var(--i2)' }}><span style={{ color: 'var(--i3)' }}>Notes:</span> {b.notes}</div> : null}
+              <div style={{ padding: '10px 14px 14px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--i2)', marginBottom: 4 }}>Buying Rates</div>
+                <div className="tw">
+                  <table>
+                    <thead>
+                      <tr><th>Item</th><th style={{ textAlign: 'right' }}>Rate ₹</th><th style={{ textAlign: 'right' }}>As of</th></tr>
+                    </thead>
+                    <tbody>
+                      {rates.length === 0 ? (
+                        <tr><td colSpan={3} style={{ color: 'var(--i3)', fontSize: 11, padding: '6px 8px' }}>No rates posted yet</td></tr>
+                      ) : rates.map((r, i) => (
+                        <tr key={i}>
+                          <td>{r.item}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(r.rate)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--i3)', fontSize: 10 }}>{fmtDate(r.date)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* ── Recent Prices ── */}

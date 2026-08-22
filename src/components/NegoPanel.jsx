@@ -3,10 +3,14 @@ import { useData } from '../data.jsx';
 import { negoGroups, negoThread, negoPost, negoMarkSeen, negoUnread } from '../lib/nego.js';
 
 // Price negotiation — one thread per SKU, shared by the rep and the Quotation Desk.
-//   <NegoPanel side="quote" />   the desk's inbox
-//   <NegoPanel side="rep" />     the rep's view, scoped to their own SKUs
+//   <NegoPanel side="quote" onRevise={fn} />   the desk's inbox (Revise → new version)
+//   <NegoPanel side="rep" />                    the rep's view, scoped to their own SKUs
+//
+// onRevise (quote side only) hands the latest quotation covering the open thread's SKU
+// back to the desk so it can open the New-Quotation builder at the next version.
+// (qtNego "Revise → new version" 15500)
 
-export default function NegoPanel({ side = 'quote', skuIds = null }) {
+export default function NegoPanel({ side = 'quote', skuIds = null, onRevise = null }) {
   const { mods, save } = useData();
   const sales = mods.sales || {};
   const [openSku, setOpenSku] = useState(null);
@@ -46,6 +50,14 @@ export default function NegoPanel({ side = 'quote', skuIds = null }) {
 
   const thread = openSku ? negoThread(sales, openSku) : [];
 
+  // The newest quotation covering the open SKU — the one a revision bumps a version from.
+  const latestQuote = useMemo(() => {
+    if (!openSku || !onRevise) return null;
+    return (sales.quotations || [])
+      .filter((q) => (q.items || []).some((i) => i.sku_id === openSku))
+      .sort((a, b) => (b.version || 1) - (a.version || 1))[0] || null;
+  }, [sales.quotations, openSku, onRevise]);
+
   return (
     <div className="g2" style={{ alignItems: 'start' }}>
       <div className="card">
@@ -82,7 +94,13 @@ export default function NegoPanel({ side = 'quote', skuIds = null }) {
           <div className="pg-sub">Pick a thread to read it.</div>
         ) : (
           <>
-            <div className="ctitle">{skuName(openSku)}</div>
+            <div className="fbar">
+              <div className="ctitle" style={{ margin: 0 }}>{skuName(openSku)}</div>
+              <span style={{ flex: 1 }} />
+              {onRevise && (latestQuote
+                ? <button className="btn btn-s" style={{ color: '#5e35b1' }} aria-label="Revise to a new version" onClick={() => onRevise(latestQuote)}>↻ Revise → new version (v{(latestQuote.version || 1) + 1})</button>
+                : <span style={{ fontSize: 11, color: 'var(--i3)' }}>No prior quotation for this SKU.</span>)}
+            </div>
             {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
             <div style={{ maxHeight: 320, overflowY: 'auto', padding: 4 }} aria-label="Negotiation thread">
               {thread.map((m) => (

@@ -13,14 +13,19 @@ import {
 export default function CertificatePanel() {
   const { mods, save } = useData();
   const [q, setQ] = useState('');
+  const [pendingOnly, setPendingOnly] = useState(true);   // legacy qc-cert-pending, default checked
   const [editing, setEditing] = useState(null);   // { line, type, data }
   const [msg, setMsg] = useState(null);
 
   const lines = useMemo(() => certLines(mods.oab), [mods.oab]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return t ? lines.filter((l) => [l.invNo, l.customer, l.spec].some((v) => String(v || '').toLowerCase().includes(t))) : lines;
-  }, [lines, q]);
+    let list = lines;
+    // A line is "done" only when BOTH its COA and Food Grade are issued.
+    if (pendingOnly) list = list.filter((l) => !(l.status.coa && l.status.fg));
+    if (t) list = list.filter((l) => [l.invNo, l.customer, l.spec].some((v) => String(v || '').toLowerCase().includes(t)));
+    return list;
+  }, [lines, q, pendingOnly]);
 
   function open(line, type) {
     setMsg(null);
@@ -47,6 +52,11 @@ export default function CertificatePanel() {
     <div className="card">
       <div className="fbar">
         <div className="ctitle" style={{ margin: 0 }}>📄 Certificates (COA / Food Grade) <span className="tag tgr">{rows.length}</span></div>
+        <span style={{ flex: 1 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={pendingOnly} aria-label="Pending only" onChange={(e) => setPendingOnly(e.target.checked)} />
+          Pending only
+        </label>
         <input placeholder="Search invoice / customer / spec…" value={q} aria-label="Search certificate lines" onChange={(e) => setQ(e.target.value)} />
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
@@ -63,7 +73,7 @@ export default function CertificatePanel() {
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No invoiced lines yet.</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>{pendingOnly ? 'No pending certificates 🎉' : 'No invoiced lines yet.'}</td></tr>
             ) : rows.map((l) => (
               <tr key={l.invNo + '|' + l.spec}>
                 <td style={{ fontWeight: 700 }}>{l.invNo}</td>

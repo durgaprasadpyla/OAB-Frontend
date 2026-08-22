@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { inr } from '../lib/format.js';
 import { calcMetres } from '../lib/calc.js';
@@ -139,19 +139,19 @@ export default function RawMaterialPanel() {
 
       <div className="g2" style={{ alignItems: 'start' }}>
         <RequirementTable
-          title="Selected sale orders" rows={aggPicked} count={picked.size}
+          title="Selected sale orders" rows={aggPicked} count={picked.size} soRows={pickedRows}
           empty="Tick sale orders above to see the material required for that selection."
           onExport={() => exportRequirement(aggPicked, 'Raw_Material_Selected')}
         />
         <RequirementTable
-          title="Current filter" rows={aggFiltered} count={filtered.length}
+          title="Current filter" rows={aggFiltered} count={filtered.length} soRows={filtered}
           empty="No matching material — check the filters, or make sure the matching specs have a BOM."
           onExport={() => exportRequirement(aggFiltered, 'Raw_Material_Filtered')}
         />
       </div>
 
       <RequirementTable
-        title="All open sale orders" rows={aggAll} count={allOpen.length}
+        title="All open sale orders" rows={aggAll} count={allOpen.length} soRows={allOpen}
         empty="No raw material requirement yet — define BOMs in the BOM tab and make sure open sale orders reference those specs."
         onExport={() => exportRequirement(aggAll, 'Raw_Material_All')}
       />
@@ -204,8 +204,46 @@ function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
   );
 }
 
-function RequirementTable({ title, rows, count, empty, onExport }) {
+// Summary stats for a list of open SOs: order count, total balance qty, total
+// balance metres. (legacy bomStatsHTML 6762)
+function soStats(rows) {
+  return (rows || []).reduce(
+    (acc, r) => ({ soCount: acc.soCount + 1, totalBal: acc.totalBal + (r.bal || 0), totalMtrs: acc.totalMtrs + (r.mtrs || 0) }),
+    { soCount: 0, totalBal: 0, totalMtrs: 0 },
+  );
+}
+
+// Group an aggregated material list by Material Type, summing each group's total
+// per UOM and accumulating a grand total per UOM. (legacy bomRenderMaterialTable 6774)
+function groupAggByType(rows) {
+  const groups = {};
+  (rows || []).forEach((m) => {
+    const mt = m.materialType || '(Unspecified)';
+    if (!groups[mt]) groups[mt] = { items: [], subtotals: {} };
+    groups[mt].items.push(m);
+    const uk = m.uom || '';
+    groups[mt].subtotals[uk] = (groups[mt].subtotals[uk] || 0) + m.total;
+  });
+  const grand = {};
+  const ordered = Object.keys(groups).sort((a, b) => a.localeCompare(b)).map((mt) => {
+    const g = groups[mt];
+    g.items.sort((a, b) => b.total - a.total);
+    Object.keys(g.subtotals).forEach((uk) => { grand[uk] = (grand[uk] || 0) + g.subtotals[uk]; });
+    return { mt, items: g.items, subtotals: g.subtotals };
+  });
+  return { ordered, grand };
+}
+
+// "12.00 Kg + 3.50 Roll" — a per-UOM total, joined so mixed units never collapse.
+function uomTotalText(obj) {
+  const parts = Object.keys(obj).sort().map((uk) => inr(obj[uk], 2) + (uk ? ' ' + uk : ''));
+  return parts.length ? parts.join(' + ') : '0';
+}
+
+function RequirementTable({ title, rows, count, empty, onExport, soRows = [] }) {
   const [openItem, setOpenItem] = useState(null);
+  const { ordered, grand } = useMemo(() => groupAggByType(rows), [rows]);
+  const stats = useMemo(() => soStats(soRows), [soRows]);
   return (
     <div className="card">
       <div className="fbar">
@@ -213,15 +251,40 @@ function RequirementTable({ title, rows, count, empty, onExport }) {
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={onExport} disabled={!rows.length}>⬇ Export</button>
       </div>
+      {soRows.length > 0 && (
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div className="stat"><div className="sl">Sale Orders</div><div className="sv">{stats.soCount}</div></div>
+          <div className="stat"><div className="sl">Total Balance Qty</div><div className="sv">{inr(stats.totalBal)}</div></div>
+          <div className="stat"><div className="sl">Total Balance Mtrs</div><div className="sv red">{inr(stats.totalMtrs)}&nbsp;m</div></div>
+        </div>
+      )}
       <div className="tw sy" style={{ maxHeight: 320 }}>
         <table>
           <thead><tr><th>Item Code</th><th style={{ minWidth: 180 }}>Description</th><th>Type</th><th style={{ textAlign: 'right' }}>Total Required</th><th style={{ width: 60 }}></th></tr></thead>
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{empty}</td></tr>
-            ) : rows.map((m) => (
-              <FragmentRow key={m.itemCode} m={m} open={openItem === m.itemCode} onToggle={() => setOpenItem((v) => (v === m.itemCode ? null : m.itemCode))} />
-            ))}
+            ) : (
+              <>
+                {ordered.map((g) => (
+                  <Fragment key={g.mt}>
+                    {g.items.map((m) => (
+                      <FragmentRow key={m.itemCode} m={m} open={openItem === m.itemCode} onToggle={() => setOpenItem((v) => (v === m.itemCode ? null : m.itemCode))} />
+                    ))}
+                    <tr style={{ background: 'var(--bg)' }}>
+                      <td colSpan={3} style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>Subtotal — {g.mt}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--g)', whiteSpace: 'nowrap' }}>{uomTotalText(g.subtotals)}</td>
+                      <td />
+                    </tr>
+                  </Fragment>
+                ))}
+                <tr style={{ background: 'var(--g)', color: '#fff' }}>
+                  <td colSpan={3} style={{ textAlign: 'right', fontWeight: 800 }}>GRAND TOTAL</td>
+                  <td style={{ textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap' }}>{uomTotalText(grand)}</td>
+                  <td />
+                </tr>
+              </>
+            )}
           </tbody>
         </table>
       </div>

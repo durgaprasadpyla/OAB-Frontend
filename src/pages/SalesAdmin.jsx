@@ -45,6 +45,22 @@ const TABS = [
 
 const pill = (style) => ({ ...style, padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, display: 'inline-block' });
 
+// Multi-sheet .xlsx download, so the full-book export lands as one workbook with a
+// sheet each — matching sdashExportExcel (index.html 10192). exportAOA (lib/xlsx.js)
+// only writes a single sheet, so this drives SheetJS directly, sanitising each cell
+// against formula injection exactly as that library does.
+function exportWorkbook(sheets, filename) {
+  const X = window.XLSX;
+  if (!X) throw new Error('SheetJS (xlsx) is not loaded');
+  const sani = (v) => (typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? "'" + v : v);
+  const wb = X.utils.book_new();
+  sheets.forEach(({ name, rows }) => {
+    const ws = X.utils.aoa_to_sheet((rows || []).map((r) => (Array.isArray(r) ? r.map(sani) : r)));
+    X.utils.book_append_sheet(wb, ws, name);
+  });
+  X.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');
+}
+
 export default function SalesAdmin() {
   const [tab, setTab] = useState('overview');
   const { mods, save } = useData();
@@ -65,8 +81,8 @@ export default function SalesAdmin() {
       {tab === 'costs' && <SalesCsaTab sales={sales} save={save} />}
       {tab === 'pos' && <SalesPosTab sales={sales} />}
       {tab === 'targets' && <SalesTargetsTab sales={sales} patch={patch} />}
-      {tab === 'leads' && <AllCustomers sales={sales} />}
-      {tab === 'contacts' && <SalesContactsTab sales={sales} />}
+      {tab === 'leads' && <AllCustomers sales={sales} patch={patch} />}
+      {tab === 'contacts' && <SalesContactsTab sales={sales} save={save} />}
       {tab === 'alloc' && <Allocation sales={sales} patch={patch} />}
       {tab === 'reps' && <Reps sales={sales} patch={patch} />}
       {tab === 'export' && <ExportData sales={sales} />}
@@ -153,53 +169,109 @@ function Overview({ sales }) {
 }
 
 /* ─────────────────────────── All customers ─────────────────────────── */
-function AllCustomers({ sales }) {
+// Category / rep filters, an inline status dropdown the admin can edit (the same
+// field the rep edits on their own dashboard — sdashSetLeadStatus 9492) and an
+// Excel extract of whatever the filters currently show.
+function AllCustomers({ sales, patch }) {
   const [q, setQ] = useState('');
   const [stage, setStage] = useState('');
+  const [cat, setCat] = useState('');
+  const [rep, setRep] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
   const leads = sales.leads || [];
+  const cats = useMemo(() => allCategories(leads), [leads]);
+  const reps = activeReps(sales.sales_users);
+
+  const ownerOf = (l, c) => (l.category_assignments || {})[c] || l.assigned_to || '';
 
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
     return leads.filter((l) => {
       if (stage && l.stage !== stage) return false;
+      const lc = leadCategories(l);
+      if (cat && !lc.includes(cat)) return false;
+      if (rep === UNASSIGNED) { if (!lc.some((c) => !ownerOf(l, c))) return false; }
+      else if (rep) { if (!lc.some((c) => String(ownerOf(l, c)) === String(rep))) return false; }
       if (!t) return true;
       return [l.client_name, l.group, l.city].some((v) => String(v || '').toLowerCase().includes(t));
     });
-  }, [leads, q, stage]);
+  }, [leads, q, stage, cat, rep]);
+
+  async function setStatus(lead, status) {
+    if (!status || status === lead.stage) return;
+    setBusy(true);
+    try {
+      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, stage: status, stage_updated_at: new Date().toISOString(), stage_updated_by: 'super_admin' } : l)) });
+      setMsg({ t: 'g', text: `✅ ${lead.client_name} → ${status}.` });
+    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+
+  function exportRows() {
+    const header = ['Customer', 'Group', 'Categories', 'Status', 'Payment', 'Owners', 'Head Office', 'Delivery', 'GSTIN', 'Next follow-up'];
+    const body = rows.map((l) => {
+      const lc = leadCategories(l);
+      const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))].filter((n) => n && n !== '—');
+      return [l.client_name, l.group || '', lc.join(', '), l.stage || '', l.payment_type || '',
+        owners.join(', ') || 'Unassigned', l.head_office || l.city || '', l.delivery_location || '',
+        l.gstin || '', nextFollowUp(l, sales.interactions) || ''];
+    });
+    exportAOA([header, ...body], 'Active_Customers_' + todayIso());
+  }
 
   return (
     <div className="card">
-      <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>All Customers <span className="tag tgr">{rows.length}</span></div>
+      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+        <div className="ctitle" style={{ margin: 0 }}>All Active Customers <span className="tag tgr">{rows.length}</span></div>
         <input placeholder="Search customer / group / city…" value={q} aria-label="Search all customers" onChange={(e) => setQ(e.target.value)} />
+        <select value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Filter all by category">
+          <option value="">All categories</option>
+          {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={rep} onChange={(e) => setRep(e.target.value)} aria-label="Filter all by rep">
+          <option value="">All reps</option>
+          <option value={UNASSIGNED}>— Unassigned —</option>
+          {reps.map((r) => <option key={r.id} value={r.id}>{r.display_name}</option>)}
+        </select>
         <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Filter all by stage">
           <option value="">All stages</option>
           {ddList(sales, 'statuses').map((st) => <option key={st} value={st}>{st}</option>)}
         </select>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={exportRows} disabled={!rows.length}>⬇ Export</button>
       </div>
-      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
         <table>
           <thead><tr>
             <th style={{ minWidth: 170 }}>Customer</th><th>Group</th><th>Categories</th><th>Owners</th>
-            <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th style={{ width: 120 }}>Stage</th><th style={{ width: 120 }}>Next ping</th>
+            <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th style={{ width: 140 }}>Status</th><th style={{ width: 120 }}>Next ping</th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No customers match</td></tr>
               : rows.map((l) => {
-                const cats = leadCategories(l);
-                const owners = [...new Set(cats.map((c) => repName(sales.sales_users, (l.category_assignments || {})[c] || l.assigned_to)))]
+                const lc = leadCategories(l);
+                const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))]
                   .filter((n) => n && n !== '—');
                 const st = followUpState(nextFollowUp(l, sales.interactions));
                 return (
                   <tr key={l.id}>
                     <td style={{ fontWeight: 600 }}>{l.client_name}</td>
                     <td style={{ fontSize: 11 }}>{l.group || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{cats.join(', ') || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{lc.join(', ') || '—'}</td>
                     <td style={{ fontSize: 11 }}>{owners.length ? owners.join(', ') : <span style={{ color: '#c9a100' }}>Unassigned</span>}</td>
                     <td style={{ textAlign: 'center' }}>
                       {l.payment_type ? <span style={{ ...pill(PAY_STYLE[l.payment_type] || {}), borderRadius: '50%', padding: '2px 7px', fontSize: 10 }}>{l.payment_type}</span> : '—'}
                     </td>
-                    <td><span style={pill(STAGE_STYLE[l.stage] || {})}>{l.stage || '—'}</span></td>
+                    <td>
+                      <select value={l.stage || ''} disabled={busy} aria-label={`Status for ${l.client_name}`}
+                        style={{ ...pill(STAGE_STYLE[l.stage] || {}), border: '1px solid rgba(0,0,0,.12)', height: 28, maxWidth: 130 }}
+                        onChange={(e) => setStatus(l, e.target.value)}>
+                        {!l.stage && <option value="">— Set —</option>}
+                        {ddList(sales, 'statuses').map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
                     <td><span style={pill(FOLLOW_UP_STYLE[st.kind])}>{st.kind === 'later' ? fmtDate(st.label) : st.label}</span></td>
                   </tr>
                 );
@@ -289,20 +361,25 @@ function Allocation({ sales, patch }) {
                 onChange={(e) => setTicked(e.target.checked ? new Set(rows.map((r) => r.key)) : new Set())}
               />
             </th>
-            <th style={{ minWidth: 170 }}>Customer</th><th>Category</th><th style={{ textAlign: 'center' }}>Contacts</th>
-            <th style={{ width: 110 }}>Stage</th><th style={{ width: 180 }}>Assigned to</th>
+            <th style={{ minWidth: 170 }}>Customer</th><th>Category</th><th style={{ width: 120 }}>City</th>
+            <th style={{ width: 110 }}>Stage</th><th style={{ width: 150 }}>Source</th>
+            <th style={{ width: 180 }}>Assigned to</th><th style={{ textAlign: 'center' }}>Contacts</th>
           </tr></thead>
           <tbody>
-            {rows.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No line items match</td></tr>
-              : rows.map((it) => (
+            {rows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No line items match</td></tr>
+              : rows.map((it) => {
+                // Source = the rep who entered it, else a database/uploaded record. (sdashLeadDBFilter 9549)
+                const source = (it.lead.created_by && it.lead.created_by !== 'sa-1') ? repName(sales.sales_users, it.lead.created_by) : 'Database / Uploaded';
+                return (
                 <tr key={it.key}>
                   <td style={{ textAlign: 'center' }}>
                     <input type="checkbox" checked={ticked.has(it.key)} aria-label={`Tick ${it.client_name} ${it.category}`} onChange={() => toggle(it.key)} />
                   </td>
                   <td style={{ fontWeight: 600 }}>{it.client_name}</td>
                   <td><span className="tag tb" style={{ fontSize: 10 }}>{it.category}</span></td>
-                  <td style={{ textAlign: 'center', fontSize: 11 }}>{it.contacts}</td>
+                  <td style={{ fontSize: 11 }}>{it.lead.city || '—'}</td>
                   <td><span style={pill(STAGE_STYLE[it.stage] || {})}>{it.stage || '—'}</span></td>
+                  <td style={{ fontSize: 11 }}>{source}</td>
                   <td>
                     <select
                       value={it.repId || ''} disabled={busy}
@@ -318,8 +395,10 @@ function Allocation({ sales, patch }) {
                       )}
                     </select>
                   </td>
+                  <td style={{ textAlign: 'center', fontSize: 11 }}>{it.contacts}</td>
                 </tr>
-              ))}
+                );
+              })}
           </tbody>
         </table>
       </div>
@@ -328,11 +407,24 @@ function Allocation({ sales, patch }) {
 }
 
 /* ─────────────────────────── Rep accounts ─────────────────────────── */
+// Rep logins with a search box, an in-place password reveal/reset and delete —
+// the sales reps are stored in the blob (sales_users), not the app_user table, so
+// this is where their credentials are managed. (sdashUsersFilter 9984 / sdashResetPw
+// 10137 / sdashDeleteRep 10021)
 function Reps({ sales, patch }) {
   const [form, setForm] = useState({ name: '', username: '', password: '', phone: '', status: 'Active' });
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+  const [shown, setShown] = useState(() => new Set());
   const users = sales.sales_users || [];
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return t ? users.filter((r) => [r.display_name, r.username].join(' ').toLowerCase().includes(t)) : users;
+  }, [users, q]);
+
+  const toggleShow = (id) => setShown((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   async function add() {
     setBusy(true);
@@ -346,33 +438,57 @@ function Reps({ sales, patch }) {
   }
 
   async function setStatus(rep, status) {
-    try { await patch({ sales_users: updateRep(users, rep.id, { status }) }); }
+    try { await patch({ sales_users: updateRep(users, rep.id, { status, disabled: status !== 'Active' }) }); }
+    catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+  }
+
+  async function resetPw(rep) {
+    const np = window.prompt(`Set a new password for ${rep.display_name || rep.username}:`, rep.password || '');
+    if (np == null) return;
+    try { await patch({ sales_users: updateRep(users, rep.id, { password: np }) }); setMsg({ t: 'g', text: `✅ Password reset for ${rep.display_name || rep.username}.` }); }
+    catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+  }
+
+  async function deleteRep(rep) {
+    if (!window.confirm(`Delete sales rep "${rep.display_name || rep.username}"? Their login will stop working. Leads they were assigned stay in the system (shown as unassigned).`)) return;
+    try { await patch({ sales_users: users.filter((r) => r.id !== rep.id) }); setMsg({ t: 'g', text: '✅ Rep deleted.' }); }
     catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
   }
 
   return (
     <>
       <div className="card">
-        <div className="ctitle">Sales Reps <span className="tag tgr">{users.length}</span></div>
+        <div className="fbar">
+          <div className="ctitle" style={{ margin: 0 }}>Sales Reps <span className="tag tgr">{filtered.length}</span></div>
+          <input placeholder="Search name / username…" value={q} aria-label="Search reps" onChange={(e) => setQ(e.target.value)} />
+        </div>
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         <div className="tw sy" style={{ maxHeight: 320 }}>
           <table>
-            <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th style={{ width: 140 }}>Status</th><th style={{ textAlign: 'right' }}>Line items</th></tr></thead>
+            <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th style={{ minWidth: 160 }}>Password</th><th style={{ width: 140 }}>Status</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
-              {users.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No reps yet</td></tr>
-                : users.map((r) => {
+              {filtered.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No reps match</td></tr>
+                : filtered.map((r) => {
                   const lines = (sales.leads || []).reduce((n, l) => n + repCategoriesOf(l, r.id).length, 0);
                   return (
                     <tr key={r.id}>
                       <td style={{ fontWeight: 600 }}>{r.display_name}</td>
                       <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.username}</td>
                       <td style={{ fontSize: 11 }}>{r.phone || '—'}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 11, color: shown.has(r.id) ? 'var(--ink)' : 'var(--i3)' }}>{shown.has(r.id) ? (r.password || '(none set)') : '••••••'}</span>
+                        <button className="btn btn-s" style={{ marginLeft: 6, height: 22, fontSize: 10 }} aria-label={`${shown.has(r.id) ? 'Hide' : 'Show'} password for ${r.display_name}`} onClick={() => toggleShow(r.id)}>{shown.has(r.id) ? 'hide' : 'show'}</button>
+                        <button className="btn btn-s" style={{ marginLeft: 4, height: 22, fontSize: 10 }} aria-label={`Reset password for ${r.display_name}`} onClick={() => resetPw(r)}>reset</button>
+                      </td>
                       <td>
                         <select value={r.status || 'Active'} aria-label={`Status for ${r.display_name}`} onChange={(e) => setStatus(r, e.target.value)}>
                           {REP_ACCOUNT_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </td>
                       <td style={{ textAlign: 'right' }}>{inr(lines)}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete ${r.display_name}`} onClick={() => deleteRep(r)}>Delete</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -405,6 +521,47 @@ function Reps({ sales, patch }) {
 
 /* ─────────────────────────── Export ─────────────────────────── */
 function ExportData({ sales }) {
+  // Full-book export: one workbook, a sheet each for Leads, Contacts, POs, Targets and
+  // the Activity Log — a complete snapshot of the dashboard. (sdashExportExcel 10192)
+  function exportAll() {
+    const leads = sales.leads || [];
+    const byLeadName = Object.fromEntries(leads.map((l) => [l.id, l.client_name]));
+    const skuName = (id) => ((sales.skus || []).find((s) => s.id === id) || {}).sku_name || '';
+
+    const leadsSheet = [['Company', 'Category', 'City', 'Stage', 'Pay Type', 'Terms', 'Rep', 'Assigned To'],
+      ...leads.map((l) => [l.client_name, leadCategories(l).join(', '), l.city || '', l.stage || '',
+        l.payment_type || '', l.payment_terms || '', repName(sales.sales_users, l.created_by),
+        l.assigned_to ? repName(sales.sales_users, l.assigned_to) : ''])];
+
+    const contactsSheet = [['Company', 'Category', 'Name', 'Designation', 'Phone', 'Email', 'Primary', 'Remarks'],
+      ...(sales.contacts || []).map((c) => {
+        const lead = leads.find((l) => l.id === c.lead_id);
+        return [(lead && lead.client_name) || c.customer || '', c.category || (lead ? leadCategories(lead).join(', ') : ''),
+          c.name || '', c.designation || '', c.phone || '', c.email || '', c.is_primary ? 'Yes' : 'No', c.remarks || ''];
+      })];
+
+    const posSheet = [['Date', 'PO Number', 'Customer', 'SKU', 'Qty', 'Price', 'Total', 'Rep'],
+      ...(sales.pos || []).map((p) => [p.date || '', p.po_number || '', byLeadName[p.lead_id] || '',
+        skuName(p.sku_id), Number(p.qty) || 0, Number(p.price) || 0, (Number(p.qty) || 0) * (Number(p.price) || 0),
+        repName(sales.sales_users, p.created_by)])];
+
+    const targetsSheet = [['Rep', 'Month', 'Category', 'Dispatch Type', 'Amount'],
+      ...(sales.targets || []).map((t) => [repName(sales.sales_users, t.rep_id), t.month || '', t.category || '',
+        t.dispatch_type || '', Number(t.amount) || 0])];
+
+    const activitySheet = [['Date', 'Rep', 'Company', 'Type', 'Outcome', 'Expense', 'Follow-up'],
+      ...(sales.interactions || []).map((i) => [i.date || '', repName(sales.sales_users, i.created_by),
+        byLeadName[i.lead_id] || '', i.type || '', i.outcome || i.reason || '', i.expense || '', i.follow_up_date || ''])];
+
+    exportWorkbook([
+      { name: 'Leads', rows: leadsSheet },
+      { name: 'Contacts', rows: contactsSheet },
+      { name: 'POs', rows: posSheet },
+      { name: 'Targets', rows: targetsSheet },
+      { name: 'Activity Log', rows: activitySheet },
+    ], 'Bloomflex_Sales_Export_' + todayIso());
+  }
+
   function exportLeads() {
     const rows = leadLineItems(sales.leads, { contacts: sales.contacts }).map((it) => [
       it.client_name, it.lead.group || '', it.category,
@@ -437,12 +594,21 @@ function ExportData({ sales }) {
 
   return (
     <div className="card">
-      <div className="ctitle">Export</div>
-      <div className="pg-sub" style={{ marginTop: 0 }}>Spreadsheet extracts of the sales book, as it stands right now.</div>
+      <div className="ctitle">⬇ Export Data</div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        One Excel workbook with a sheet each for Leads, Contacts, POs, Targets and the Activity Log —
+        a full snapshot of everything on this dashboard.
+      </div>
+      <button className="btn btn-g" onClick={exportAll}>📥 Download Excel Export</button>
+      <div className="ctitle" style={{ marginTop: 16 }}>Single-sheet extracts</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <button className="btn btn-s" onClick={exportLeads} disabled={!counts.lines}>⬇ Allocation ({counts.lines} lines)</button>
         <button className="btn btn-s" onClick={exportContacts} disabled={!counts.contacts}>⬇ Contacts ({counts.contacts})</button>
         <button className="btn btn-s" onClick={exportInteractions} disabled={!counts.interactions}>⬇ Interactions ({counts.interactions})</button>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 12, fontSize: 11 }}>
+        Import isn&rsquo;t available here — bulk-editing sales data belongs in SalesOS, where the validation
+        that protects the live pipeline runs. These exports are read-only, for reporting.
       </div>
     </div>
   );

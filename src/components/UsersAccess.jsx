@@ -4,8 +4,29 @@ import { usersApi } from '../api.js';
 // Users & Access (superadmin) — manage the real app_user accounts via the
 // backend admin endpoints. Add users, change roles, enable/disable, reset
 // passwords. Passwords are write-only; the server never returns hashes.
+//
+// NOTE: production also wanted a per-user PHONE column and a per-user module
+// ACL here, but both need a DB/backend change (new app_user columns + admin
+// endpoints). They are deliberately NOT added on the client — the app_user
+// table has no such fields today. Wire them up backend-first, then surface here.
 
-const ROLES = ['user', 'padmin', 'superadmin', 'plant', 'qc', 'pm', 'scrap', 'purchase'];
+// Descriptive role labels, mirroring the monolith's ROLE_OPTIONS (index.html 6194),
+// extended with the roles the React port added: superadmin, sadmin, quote, hr.
+const ROLE_OPTIONS = [
+  { v: 'user', l: 'Operations — OAB / Daily Update / Invoice' },
+  { v: 'padmin', l: 'Purchase Admin' },
+  { v: 'superadmin', l: 'Super Admin' },
+  { v: 'plant', l: 'Plant / Production floor' },
+  { v: 'pm', l: 'Production Manager' },
+  { v: 'qc', l: 'QC — Add Spec' },
+  { v: 'purchase', l: 'Purchase' },
+  { v: 'scrap', l: 'Scrap' },
+  { v: 'sadmin', l: 'Sales Admin' },
+  { v: 'quote', l: 'Quotation Desk' },
+  { v: 'hr', l: 'HR' },
+];
+const ROLES = ROLE_OPTIONS.map((r) => r.v);
+const roleLabel = (v) => (ROLE_OPTIONS.find((r) => r.v === v) || {}).l || (v || '-');
 
 export default function UsersAccess() {
   const [users, setUsers] = useState([]);
@@ -66,7 +87,7 @@ export default function UsersAccess() {
         <div className="g4">
           <div className="fg"><label>Username</label><input value={nu.username} onChange={(e) => setNu((x) => ({ ...x, username: e.target.value }))} autoComplete="off" /></div>
           <div className="fg"><label>Password</label><input type="password" value={nu.password} onChange={(e) => setNu((x) => ({ ...x, password: e.target.value }))} autoComplete="new-password" /></div>
-          <div className="fg"><label>Role</label><select value={nu.role} onChange={(e) => setNu((x) => ({ ...x, role: e.target.value }))}>{ROLES.map((r) => <option key={r} value={r}>{r}</option>)}</select></div>
+          <div className="fg"><label>Role</label><select value={nu.role} onChange={(e) => setNu((x) => ({ ...x, role: e.target.value }))}>{ROLE_OPTIONS.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}</select></div>
           <div className="fg"><label>&nbsp;</label><button className="btn btn-g" onClick={addUser} disabled={busy}>+ Add User</button></div>
         </div>
       </div>
@@ -86,7 +107,9 @@ export default function UsersAccess() {
                     <td style={{ fontWeight: 600 }}>{u.username}</td>
                     <td>
                       <select value={u.role} disabled={busy} onChange={(e) => changeRole(u, e.target.value)} style={{ height: 28, fontSize: 12, width: '100%' }}>
-                        {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                        {ROLE_OPTIONS.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}
+                        {/* Keep an unrecognised legacy role visible so the row still reads correctly. */}
+                        {u.role && !ROLES.includes(u.role) && <option value={u.role}>{roleLabel(u.role)}</option>}
                       </select>
                     </td>
                     <td>{u.disabled ? <span className="tag tr" style={{ fontSize: 9 }}>Disabled</span> : <span className="tag tg" style={{ fontSize: 9 }}>Active</span>}</td>

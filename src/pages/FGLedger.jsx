@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { today, fmtDate, inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
+import { specGroup } from '../lib/master.js';
 import {
   fgProduced, fgAllocated, fgAvail, fgAddProduction,
   fgSpecsWithActivity, fgEntry, fgAgeingInfo,
@@ -154,8 +155,10 @@ export default function FGLedger() {
         const av = fgAvail(ledger, sp);
         const price = Number(getPM(sp, prices).price) || 0;
         const ag = fgAgeingInfo(ledger, sp);
+        // "Customer Or Group": when a spec has no direct customer but belongs to a
+        // buying group, show the group name (legacy custOrGroup) so it never reads "-".
         return {
-          spec: sp, customer: j.customer || '', sku: j.jobName || '',
+          spec: sp, customer: j.customer || specGroup(j, mods.customers) || j.group || '', sku: j.jobName || '',
           prod: fgProduced(ledger, sp), alloc: fgAllocated(ledger, sp), av,
           price, value: av * price, agingDays: ag.days, ageing: ag.display,
         };
@@ -168,7 +171,7 @@ export default function FGLedger() {
     else if (sumSort === 'aging-asc') rows.sort((a, b) => a.agingDays - b.agingDays);
     else rows.sort(bySpec);
     return rows;
-  }, [ledger, sumQ, sumSort, jss, prices]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ledger, sumQ, sumSort, jss, prices, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   function jumpTo(sp) {
@@ -321,7 +324,7 @@ export default function FGLedger() {
         <div className="tw sy">
           <table>
             <thead><tr>
-              <th>Spec</th><th style={{ minWidth: 160 }}>Customer</th><th style={{ minWidth: 160 }}>SKU / Job Name</th>
+              <th>Spec</th><th style={{ minWidth: 160 }}>Customer Or Group</th><th style={{ minWidth: 160 }}>SKU / Job Name</th>
               <th style={{ textAlign: 'right' }}>Produced</th><th style={{ textAlign: 'right' }}>Allocated</th>
               <th style={{ textAlign: 'right' }}>Available</th>
             </tr></thead>

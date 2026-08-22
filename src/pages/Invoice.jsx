@@ -11,8 +11,10 @@ import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import PackingListModal from '../components/PackingListModal.jsx';
 import PortalEntry from '../components/PortalEntry.jsx';
 import ProformaModal from '../components/ProformaModal.jsx';
-import { printElement } from '../lib/pdf.js';
+import { CertificateDoc } from '../components/CertificatePanel.jsx';
+import { printElement, elementToPDF } from '../lib/pdf.js';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
+import { getCert } from '../lib/cert.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -362,19 +364,31 @@ function certState(inv, type) {
   return { mark: all ? '✓' : '●', any: true, all };
 }
 
-function CertBadge({ inv, type, label }) {
+function CertBadge({ inv, type, label, onDownload }) {
   const st = certState(inv, type);
+  const base = {
+    display: 'inline-block', height: 20, lineHeight: '18px', padding: '0 7px', margin: '0 2px',
+    borderRadius: 10, fontSize: 9, fontWeight: 700,
+  };
+  // Pending: a static red badge, nothing to download yet.
+  if (!st.any) {
+    return (
+      <span
+        title={`${label} not issued yet`}
+        style={{ ...base, background: 'transparent', color: 'var(--red)', border: '1px solid transparent' }}
+      >{label} {st.mark}</span>
+    );
+  }
+  // Issued: a clickable button that regenerates and downloads the stored certificate
+  // PDF (legacy invCertCell / genCertStored). ● = some lines, ✓ = all lines.
   return (
-    <span
-      title={st.any ? `${label} issued${st.all ? '' : ' for some lines'}` : `${label} not issued yet`}
-      style={{
-        display: 'inline-block', height: 20, lineHeight: '18px', padding: '0 7px', margin: '0 2px',
-        borderRadius: 10, fontSize: 9, fontWeight: 700,
-        background: st.any ? 'var(--gl)' : 'transparent',
-        color: st.any ? 'var(--g)' : 'var(--red)',
-        border: `1px solid ${st.any ? 'var(--gm)' : 'transparent'}`,
-      }}
-    >{label} {st.mark}</span>
+    <button
+      type="button"
+      aria-label={`Download ${label} for invoice ${inv.no}`}
+      title={`Download ${label}${st.all ? '' : ' (issued for some lines)'}`}
+      onClick={() => onDownload(inv, type)}
+      style={{ ...base, cursor: 'pointer', background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--gm)' }}
+    >{label} {st.mark}</button>
   );
 }
 
@@ -385,6 +399,8 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
   const [poFilter, setPoFilter] = useState('');
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('newest');
+  const [certJob, setCertJob] = useState(null);   // { line, type, data } for the hidden cert capture
+  const certRef = useRef(null);
   // A specific-PO lookup always shows that PO's full history regardless of the period
   // filter — a deliberate, narrow lookup rather than the general browse view, and the
   // filter bar is hidden while it is scoped. (renderInvRegisterForPO)
@@ -411,6 +427,31 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
       ? String(b.date || '').localeCompare(String(a.date || ''))
       : String(a.date || '').localeCompare(String(b.date || ''))));
   }, [reg, rFrom, rTo, poFilter, q, sort]);
+
+  // Regenerate a stored certificate PDF for an invoice line (legacy genCertStored):
+  // find the first invoice line that carries this cert type, then render the saved
+  // certificate data into a hidden CertificateDoc and capture it.
+  function downloadCert(inv, type) {
+    const items = (inv.items && inv.items.length) ? inv.items : [{ spec: inv.spec || '' }];
+    const item = items.find((it) => getCert(inv, type, it.spec || ''));
+    if (!item) return;
+    const spec = item.spec || '';
+    const rec = getCert(inv, type, spec);
+    if (!rec || !rec.data) {
+      // Status says a cert exists but the data was never saved — legacy guards the same.
+      alert('Certificate not saved yet — open QC → Certificates, fill it in and Submit.');
+      return;
+    }
+    setCertJob({ line: { invoice: inv, item, spec, invNo: inv.no, customer: inv.customer || '' }, type, data: rec.data });
+  }
+
+  useEffect(() => {
+    if (!certJob || !certRef.current) return;
+    const { type, line } = certJob;
+    elementToPDF(certRef.current, `${type.toUpperCase()}_${String(line.invNo).replace(/[^\w-]+/g, '_')}_${line.spec}`)
+      .catch((e) => alert('PDF error: ' + (e && e.message ? e.message : e)))
+      .finally(() => setCertJob(null));
+  }, [certJob]);
 
   return (
     <div style={{ marginTop: 24 }}>
@@ -467,8 +508,8 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
                     <td>{fmtDate(e.date)}</td><td style={{ fontSize: 11 }}>{e.po}</td><td style={{ fontSize: 11 }}>{e.customer}</td>
                     <td style={{ textAlign: 'right' }}>{dash(e.qty)}</td><td style={{ textAlign: 'right' }}>{rupees(e.amount)}</td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                      <CertBadge inv={e} type="coa" label="COA" />
-                      <CertBadge inv={e} type="fg" label="FG" />
+                      <CertBadge inv={e} type="coa" label="COA" onDownload={downloadCert} />
+                      <CertBadge inv={e} type="fg" label="FG" onDownload={downloadCert} />
                     </td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                       <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>{' '}
@@ -480,6 +521,13 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
           </table>
         </div>
       </div>
+      {/* Off-screen certificate, rendered only while a download is in flight, so the
+          same CertificateDoc the QC screen prints is captured to PDF here too. */}
+      {certJob && (
+        <div style={{ position: 'fixed', left: -10000, top: 0, pointerEvents: 'none' }} aria-hidden="true">
+          <CertificateDoc line={certJob.line} type={certJob.type} data={certJob.data} innerRef={certRef} />
+        </div>
+      )}
     </div>
   );
 }
