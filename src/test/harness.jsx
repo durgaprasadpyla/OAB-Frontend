@@ -343,9 +343,24 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
 
     if (u.includes('/rest/v1/oab_data')) {
       if (method === 'GET') {
+        // Bulk read (id=in.(1,2,3,…)) — the SPA loads all modules in one request. It
+        // SKIPS modules the role may not read (no per-row 403); a genuine read failure
+        // 500s the whole request (mirrors OabDataController.get).
+        const inM = /id=in\.\(([^)]*)\)/.exec(u);
+        if (inM) {
+          const ids = inM[1].split(',').map((x) => Number(x.trim())).filter((n) => n > 0);
+          if (ids.some((id) => failRead[id])) return res(500, { error: 'boom' });
+          const out = [];
+          ids.forEach((id) => {
+            if (forbidRead[id]) return;                  // skipped, not 403
+            const val = modules[ID_TO_KEY[id]];
+            if (val != null) out.push({ id, data: JSON.stringify(val), version: versions[id] || 0 });
+          });
+          return res(200, out);
+        }
         const m = /id=eq\.(\d+)/.exec(u);
         const id = m ? Number(m[1]) : 0;
-        if (forbidRead[id]) return res(403, { error: 'forbidden' });   // role may not read this module
+        if (forbidRead[id]) return res(403, { error: 'forbidden' });   // single read: strict per-module 403
         if (failRead[id]) return res(500, { error: 'boom' });          // genuine server failure
         const val = modules[ID_TO_KEY[id]];
         if (val == null) return res(200, []);

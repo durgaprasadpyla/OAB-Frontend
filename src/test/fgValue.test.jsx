@@ -82,10 +82,12 @@ describe('FG Value — valuation and FIFO ageing', () => {
     });
   });
 
-  it('keeps a fully-drawn spec on the FG Entry summary, which reports history not stock', () => {
+  it('drops a fully-drawn spec from the FG Entry summary (stock only, per 2026-08 client change)', () => {
+    // Once FG is allocated + dispatched the available qty is zero, so the SKU falls off
+    // the FG Entry stock summary too (not just the FG Value board).
     const drawnDown = { ...modules, fgLedger: { 'SP-A': { prod: [{ date: daysAgo(9), qty: 100, ts: 1 }], alloc: [{ qty: 100 }] } } };
     renderApp(<FGLedger />, { modules: drawnDown, role: 'superadmin' });
-    return waitFor(() => expect(within(summaryCard()).getByText('SP-A')).toBeInTheDocument());
+    return waitFor(() => expect(within(summaryCard()).queryByText('SP-A')).not.toBeInTheDocument());
   });
 });
 

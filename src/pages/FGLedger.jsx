@@ -163,6 +163,9 @@ export default function FGLedger() {
           price, value: av * price, agingDays: ag.days, ageing: ag.display,
         };
       })
+      // Hide fully-consumed specs: once FG is allocated + dispatched the available
+      // qty is zero, so the SKU drops off this stock summary (client 2026-08-22).
+      .filter((r) => r.av > 0.0001)
       .filter((r) => !s || [r.spec, r.customer, r.sku].some((v) => String(v).toLowerCase().includes(s)));
 
     const bySpec = (a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true });

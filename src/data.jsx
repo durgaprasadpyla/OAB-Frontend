@@ -76,6 +76,30 @@ async function loadOne(id) {
   return { value: null, version: 0 };
 }
 
+/**
+ * Load EVERY module in ONE request (PostgREST `id=in.(...)`), instead of a GET — and
+ * its CORS preflight — per module. On a remote backend the ~24 round-trips of the
+ * per-module load dominate page-load/refresh time; this collapses them to one request.
+ * Returns { [id]: {value, version} }. Modules a role may not read, or that have no row
+ * yet, are simply absent (the backend's bulk read skips them) — the caller defaults
+ * those to empty. Throws if the bulk read itself fails, so the caller can fall back.
+ */
+async function loadAllBulk() {
+  const ids = Object.values(KEY_TO_ID);
+  const rows = await api(`/rest/v1/oab_data?id=in.(${ids.join(',')})&select=id,data,version`);
+  const byId = {};
+  if (Array.isArray(rows)) {
+    for (const row of rows) {
+      if (!row || row.id == null) continue;
+      let value = null;
+      if (row.data != null) { try { value = JSON.parse(row.data); } catch { value = null; } }
+      const version = Number.isFinite(Number(row.version)) ? Number(row.version) : 0;
+      byId[Number(row.id)] = { value, version };
+    }
+  }
+  return byId;
+}
+
 async function saveOne(id, obj, version) {
   // api() JSON-stringifies the body; the backend expects {id, data:"<json string>", version}
   // and returns {id, version:<new>}. Fall back to an optimistic bump if absent.
@@ -106,12 +130,22 @@ export function DataProvider({ children }) {
     setLoading(true); setError('');
     try {
       const entries = Object.entries(KEY_TO_ID);
-      const results = await Promise.all(entries.map(([, id]) => loadOne(id)));
+      let byId;
+      try {
+        byId = await loadAllBulk();                       // one request for all modules
+      } catch {
+        // Bulk read unavailable/failed — fall back to per-module loads. A genuine 500
+        // on a module still surfaces (rethrown here); a 403 is still swallowed per module.
+        byId = {};
+        const results = await Promise.all(entries.map(([, id]) => loadOne(id).then((r) => [id, r])));
+        results.forEach(([id, r]) => { byId[id] = r; });
+      }
       const base = emptyModules();
       const vers = {};
-      entries.forEach(([key], i) => {
-        if (results[i] && results[i].value != null) base[key] = results[i].value;
-        vers[key] = results[i] ? results[i].version : 0;
+      entries.forEach(([key, id]) => {
+        const r = byId[id];
+        if (r && r.value != null) base[key] = r.value;
+        vers[key] = r ? r.version : 0;
       });
       setMods(base);
       setVersions(vers);
