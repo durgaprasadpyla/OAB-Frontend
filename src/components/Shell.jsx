@@ -82,10 +82,18 @@ export default function Shell() {
 
   function backup() {
     const cols = ['sheet', 'sno', 'so', 'spec', 'customer', 'jobName', 'poQty', 'invDisp', 'manDisp', 'fg', 'stage', 'closed'];
+    // JSS is authoritative for the SKU (job name): export the current spec's name so a
+    // repointed spec self-corrects in the backup too (falls back to the stored name).
+    const jssBySpec = {};
+    (mods.jss || []).forEach((j) => { if (j && j.spec) jssBySpec[j.spec] = j; });
     const rows = [cols];
     for (const sheet of ['SF', 'OT']) {
       (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet] || []).forEach((r) =>
-        rows.push(cols.map((c) => (c === 'sheet' ? sheet : (r[c] ?? '')))));
+        rows.push(cols.map((c) => {
+          if (c === 'sheet') return sheet;
+          if (c === 'jobName') return (jssBySpec[r.spec] && jssBySpec[r.spec].jobName) || r.jobName || '';
+          return r[c] ?? '';
+        })));
     }
     exportAOA(rows, `OAB_Backup_${today()}.xlsx`, 'OAB');
   }

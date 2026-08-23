@@ -33,8 +33,15 @@ export function ageColor(age) {
   return age >= 45 ? '#C0392B' : age >= 21 ? '#B7770D' : 'var(--g)';
 }
 
-/** Flatten both sheets into dispatch rows, open orders only. */
-export function dispatchRows(oab, now = new Date()) {
+/**
+ * Flatten both sheets into dispatch rows, open orders only. When `jss` is supplied the
+ * SKU (job name) is taken from the current spec's JSS record rather than the copy stored
+ * on the row, so a repointed spec self-corrects here too (falls back to the stored name
+ * for specs absent from the master). Callers that omit `jss` keep the prior output.
+ */
+export function dispatchRows(oab, now = new Date(), jss = []) {
+  const bySpec = {};
+  (Array.isArray(jss) ? jss : []).forEach((j) => { if (j && j.spec) bySpec[j.spec] = j; });
   return ['SF', 'OT']
     .flatMap((k) => (Array.isArray(oab && oab[k]) ? oab[k] : []))
     .filter((r) => r && !r.closed)
@@ -42,8 +49,9 @@ export function dispatchRows(oab, now = new Date()) {
       const inv = num(r.invDisp);
       const man = num(r.manDisp);
       const ordered = num(r.poQty);
+      const j = bySpec[r.spec];
       return {
-        so: r.so || '', spec: r.spec || '', jobName: r.jobName || '', customer: r.customer || '',
+        so: r.so || '', spec: r.spec || '', jobName: (j && j.jobName) || r.jobName || '', customer: r.customer || '',
         poNum: r.poNum || '', poDate: r.poDate || '', age: ageDays(r.poDate, now),
         ordered, inv, man, disp: inv + man, fg: num(r.fg), bal: ordered - (inv + man),
       };
@@ -105,10 +113,10 @@ export default function DispatchBySO() {
   // Attach the Price Master rate and the outstanding value (balance × rate) so the
   // "By value" sort has something to order on; both default to 0 when a spec has no
   // price, which is harmless for the other sort modes.
-  const all = useMemo(() => dispatchRows(mods.oab && mods.oab.OAB).map((r) => {
+  const all = useMemo(() => dispatchRows(mods.oab && mods.oab.OAB, undefined, mods.jss).map((r) => {
     const rate = num(getPM(r.spec, mods.prices).price);
     return { ...r, rate, value: r.bal * rate };
-  }), [mods.oab, mods.prices]);
+  }), [mods.oab, mods.prices, mods.jss]);
   const rows = useMemo(() => sortDispatchRows(all, { q, overOnly, sort }), [all, q, overOnly, sort]);
   const overCount = rows.filter((r) => r.bal < 0).length;
 
