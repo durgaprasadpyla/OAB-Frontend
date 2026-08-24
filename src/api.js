@@ -155,3 +155,37 @@ export const hrApi = {
 /** Forced password change after a first login or an admin reset. */
 export const changePassword = (currentPassword, newPassword) =>
   api('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+
+// ── Production-planning master data (Stage 2: /api/master/**) ────────────────
+// Normalized masters (departments, specialties, machines, routes+stages, dispatch
+// types) and the item master (+ stock ledger). Reads need any token; config writes
+// are superadmin-only, item writes purchase/padmin/superadmin, stock writes add
+// stores — all enforced server-side (403 surfaces as err.code='forbidden').
+export const masterApi = {
+  listDepartments: (p) => api('/api/master/departments' + qs(p)),
+  createDepartment: (body) => api('/api/master/departments', { method: 'POST', body }),
+  updateDepartment: (id, body) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listSpecialties: (p) => api('/api/master/specialties' + qs(p)),
+  createSpecialty: (body) => api('/api/master/specialties', { method: 'POST', body }),
+  updateSpecialty: (id, body) => api('/api/master/specialties/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listMachines: (p) => api('/api/master/machines' + qs(p)),
+  createMachine: (body) => api('/api/master/machines', { method: 'POST', body }),
+  updateMachine: (id, body) => api('/api/master/machines/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listRoutes: (p) => api('/api/master/routes' + qs(p)),
+  getRoute: (id) => api('/api/master/routes/' + encodeURIComponent(id)),
+  createRoute: (body) => api('/api/master/routes', { method: 'POST', body }),
+  updateRoute: (id, body) => api('/api/master/routes/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listDispatchTypes: (p) => api('/api/master/dispatch-types' + qs(p)),
+  createDispatchType: (body) => api('/api/master/dispatch-types', { method: 'POST', body }),
+  updateDispatchType: (id, body) => api('/api/master/dispatch-types/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listItems: (p) => api('/api/master/items' + qs(p)),
+  getItem: (id) => api('/api/master/items/' + encodeURIComponent(id)),
+  createItem: (body) => api('/api/master/items', { method: 'POST', body }),
+  updateItem: (id, body) => api('/api/master/items/' + encodeURIComponent(id), { method: 'PUT', body }),
+  adjustStock: (id, body) => api('/api/master/items/' + encodeURIComponent(id) + '/stock', { method: 'POST', body }),
+};
