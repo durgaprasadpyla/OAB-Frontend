@@ -227,3 +227,16 @@ export const notificationsApi = {
   count: () => api('/api/notifications/count'),
   markRead: (id) => api('/api/notifications/' + encodeURIComponent(id) + '/read', { method: 'POST' }),
 };
+
+// ── Production workflow (Stage 5: /api/production/**) ────────────────────────
+// The route state machine: init an SO's stage balances, record actual + wastage at
+// a stage (good output auto-moves to the next department, remainder stays pending),
+// and read progress / the pending work pool. Writes are Plant / Plant Manager /
+// Super Admin; reads any token. SO numbers contain '/', so they go in the body/query.
+export const productionApi = {
+  get: (so) => api('/api/production?so=' + encodeURIComponent(so)),
+  pending: () => api('/api/production/pending'),
+  init: (so) => api('/api/production/init', { method: 'POST', body: { so } }),
+  record: (body) => api('/api/production/record', { method: 'POST', body }),
+  setStatus: (so, stageSeq, status) => api('/api/production/status', { method: 'POST', body: { so, stageSeq, status } }),
+};

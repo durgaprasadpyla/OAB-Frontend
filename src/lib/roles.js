@@ -54,6 +54,7 @@ export function navTabs(role) {
   // Production-planning master data hub (routes, machines, departments, specialties,
   // dispatch types, item master). Config is superadmin; padmin can manage items.
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
+  if (role === 'superadmin') tabs.push({ to: '/production', label: '🏭 Production' });
   return tabs;
 }
 
@@ -72,6 +73,8 @@ export function canAccess(role, path) {
   // Master Data hub: superadmin + padmin (config/items), planner + stores (read /
   // stock). Per-section write permission is enforced again on the backend.
   if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
+  // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view).
+  if (p === '/production') return ['plant', 'pm', 'superadmin', 'planner'].includes(role);
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';

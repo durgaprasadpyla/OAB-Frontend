@@ -13,17 +13,19 @@ import { today } from '../lib/format.js';
  * and are unchanged.
  */
 const ROLE_BAR = {
-  plant: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'Production Floor', signOut: 'Sign Out' },
+  plant: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'Production Floor', signOut: 'Sign Out',
+    links: [{ to: '/plant', label: 'Floor Status' }, { to: '/production', label: '🏭 Production' }] },
   qc: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'QC / Spec Entry', signOut: 'Sign Out' },
   purchase: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Purchase — Generate, Track & Close POs', signOut: 'Sign Out' },
-  pm: { bg: '#ffffff', fg: '#123a6b', border: '1px solid #e2e6ee', brand: 'Bloomflex — Production', sub: 'Printing progress tracker', signOut: 'Sign Out' },
+  pm: { bg: '#ffffff', fg: '#123a6b', border: '1px solid #e2e6ee', brand: 'Bloomflex — Production', sub: 'Printing progress tracker', signOut: 'Sign Out',
+    links: [{ to: '/pm', label: 'Printing Progress' }, { to: '/production', label: '🏭 Production' }] },
   scrap: { bg: 'linear-gradient(90deg,#5a3d1c,#8a6a2f)', brand: 'Bloomflex — Scrap', signOut: 'Logout' },
   sales: { bg: '#1a4fa0', brand: 'BLOOMFLEX', sub: 'Sales Rep', signOut: 'Sign Out' },
   quote: { bg: '#5e35b1', brand: 'BLOOMFLEX', sub: 'Quotation Desk', signOut: 'Sign Out' },
 };
 
 /** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */
-function RoleBar({ cfg, who, onSignOut }) {
+function RoleBar({ cfg, who, onSignOut, onNav, activePath }) {
   const dark = cfg.fg !== '#123a6b';
   return (
     <div
@@ -39,6 +41,18 @@ function RoleBar({ cfg, who, onSignOut }) {
         {cfg.sub ? <>&nbsp;<span style={{ fontWeight: 400, fontSize: 12, opacity: dark ? 0.8 : 1, color: cfg.fg ? '#8a93a3' : undefined }}>{cfg.sub}</span></> : null}
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        {(cfg.links || []).map((l) => (
+          <button
+            key={l.to}
+            onClick={() => onNav(l.to)}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600,
+              background: activePath === l.to ? (dark ? 'rgba(255,255,255,.28)' : '#dbe7fb') : (dark ? 'rgba(255,255,255,.12)' : '#eef3fb'),
+              color: cfg.fg || '#fff',
+              border: '1px solid ' + (dark ? 'rgba(255,255,255,.4)' : '#cfd8e3'),
+            }}
+          >{l.label}</button>
+        ))}
         {who ? <span style={{ fontSize: 12, opacity: 0.9 }}>{who}</span> : null}
         <button
           onClick={onSignOut}
@@ -121,6 +135,8 @@ export default function Shell() {
           cfg={roleBar}
           who={role === 'sales' ? user : ''}
           onSignOut={signOut}
+          onNav={(to) => nav(to)}
+          activePath={loc.pathname}
         />
         {body}
       </div>
