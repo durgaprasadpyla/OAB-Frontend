@@ -208,3 +208,22 @@ export const bomApi = {
   get: (spec) => api('/api/bom/' + encodeURIComponent(spec)),
   set: (spec, body) => api('/api/bom/' + encodeURIComponent(spec), { method: 'PUT', body }),
 };
+
+// ── Stock check + low-stock alerts (Stage 4: /api/stock/**) ──────────────────
+// check: compute an SO's material requirement and raise/clear its alerts (ops/
+// planner). recompute: all open SOs (superadmin). alerts: OPEN shortages
+// (superadmin/stores/pm/padmin). Every rule is enforced server-side.
+export const stockApi = {
+  check: (so) => api('/api/stock/check', { method: 'POST', body: { so } }),
+  recompute: () => api('/api/stock/recompute', { method: 'POST' }),
+  alerts: (status = 'OPEN') => api('/api/stock/alerts?status=' + encodeURIComponent(status)),
+  resolveAlert: (id) => api('/api/stock/alerts/' + encodeURIComponent(id) + '/resolve', { method: 'POST' }),
+};
+
+// ── Role-aware notifications (Stage 4: /api/notifications/**) ─────────────────
+// The server returns only the caller-role's notifications, so there's no leakage.
+export const notificationsApi = {
+  list: (unread) => api('/api/notifications' + (unread ? '?unread=1' : '')),
+  count: () => api('/api/notifications/count'),
+  markRead: (id) => api('/api/notifications/' + encodeURIComponent(id) + '/read', { method: 'POST' }),
+};

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth.jsx';
-import { masterApi } from '../api.js';
+import { masterApi, stockApi, notificationsApi } from '../api.js';
 import Modal from '../components/Modal.jsx';
 
 // Production-planning master data hub (Stage 2). Config sections (departments,
@@ -205,8 +205,12 @@ export default function MasterData() {
   const canConfig = isSuper;                              // depts/specs/machines/routes/dispatch
   const canItems = role === 'padmin' || isSuper;         // item master
   const canStock = role === 'stores' || role === 'padmin' || isSuper;
+  const canAlerts = ['superadmin', 'stores', 'pm', 'padmin'].includes(role);   // view stock alerts
+  const canResolve = role === 'superadmin' || role === 'stores';               // resolve alerts
 
   const [tab, setTab] = useState('departments');
+  const [alerts, setAlerts] = useState([]);
+  const [notes, setNotes] = useState([]);
   const [d, setD] = useState({ departments: [], specialties: [], machines: [], routes: [], dispatch: [], items: [] });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -231,8 +235,25 @@ export default function MasterData() {
   }, []);
   useEffect(() => { reload(); }, [reload]);
 
+  const loadAlerts = useCallback(async () => {
+    if (!canAlerts) return;
+    try {
+      const [a, n] = await Promise.all([stockApi.alerts('OPEN'), notificationsApi.list()]);
+      setAlerts(a || []); setNotes(n || []);
+    } catch { /* alerts may be forbidden for some roles — ignore */ }
+  }, [canAlerts]);
+  useEffect(() => { loadAlerts(); }, [loadAlerts]);
+
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
   const close = () => setModal(null);
+
+  async function resolveAlert(id) {
+    try { await stockApi.resolveAlert(id); flash('Alert resolved'); await loadAlerts(); }
+    catch (e) { setErr(e.message || 'Could not resolve'); }
+  }
+  async function markRead(id) {
+    try { await notificationsApi.markRead(id); await loadAlerts(); } catch { /* ignore */ }
+  }
 
   // Map modal type → create/update calls.
   async function save(type, row, body) {
@@ -274,7 +295,7 @@ export default function MasterData() {
       )}
 
       <div className="step-bar" style={{ marginTop: 10 }}>
-        {TABS.map((t) => (
+        {[...TABS, ...(canAlerts ? [{ key: 'alerts', label: '🔔 Stock Alerts' + (alerts.length ? ` (${alerts.length})` : '') }] : [])].map((t) => (
           <button key={t.key} className={'step-tab' + (tab === t.key ? ' on' : '')} onClick={() => setTab(t.key)}>{t.label}</button>
         ))}
       </div>
@@ -317,6 +338,48 @@ export default function MasterData() {
             render={(r) => [r.code, r.name, r.uom, r.specialtyName, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
             onEdit={canItems ? (r) => setModal({ type: 'items', row: r }) : null}
             extra={canStock ? (r) => <button className="btn btn-b" onClick={() => setModal({ type: 'stock', row: r })}>Stock</button> : null} />
+        )}
+        {tab === 'alerts' && (
+          <div>
+            <div className="ctitle">Open Low-Stock Alerts <span className={'tag ' + (alerts.length ? 'tr' : 'tg')}>{alerts.length}</span></div>
+            {alerts.length === 0 ? <div className="al al-g">No open shortages.</div> : (
+              <div className="tw sy">
+                <table>
+                  <thead><tr><th>Sale Order</th><th>Item</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
+                  <tbody>
+                    {alerts.map((a) => (
+                      <tr key={a.id} className="nr">
+                        <td><span className="so-pill">{a.so}</span></td>
+                        <td>{a.itemCode}{a.itemName ? ' — ' + a.itemName : ''}</td>
+                        <td>{a.requiredQty}</td>
+                        <td>{a.availableQty}</td>
+                        <td><b>{a.shortageQty}</b></td>
+                        {canResolve && <td><button className="btn btn-s" onClick={() => resolveAlert(a.id)}>Resolve</button></td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="ctitle" style={{ marginTop: 16 }}>My Notifications</div>
+            {notes.length === 0 ? <div className="al al-b">No notifications.</div> : (
+              <div className="tw">
+                <table>
+                  <thead><tr><th style={{ width: 150 }}>When</th><th>Message</th><th style={{ width: 100 }}>Status</th><th style={{ width: 110 }}></th></tr></thead>
+                  <tbody>
+                    {notes.map((n) => (
+                      <tr key={n.id}>
+                        <td>{n.createdAt ? n.createdAt.replace('T', ' ').slice(0, 16) : ''}</td>
+                        <td>{n.message}</td>
+                        <td><span className={'tag ' + (n.status === 'UNREAD' ? 'ty' : 'tgr')}>{n.status}</span></td>
+                        <td>{n.status === 'UNREAD' && <button className="btn btn-s" onClick={() => markRead(n.id)}>Mark read</button>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

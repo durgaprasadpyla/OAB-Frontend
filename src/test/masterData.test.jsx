@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth.jsx';
 import MasterData from '../pages/MasterData.jsx';
@@ -56,6 +56,8 @@ function mockMaster(role, data = {}) {
     if (u.includes('/api/master/routes')) return res(200, data.routes || []);
     if (u.includes('/api/master/dispatch-types')) return res(200, data.dispatch || []);
     if (u.includes('/api/master/items')) return res(200, data.items || []);
+    if (u.includes('/api/stock/alerts')) return res(200, data.alerts || []);
+    if (u.includes('/api/notifications')) return res(200, data.notifications || []);
     return res(200, {});
   });
 }
@@ -94,5 +96,19 @@ describe('MasterData page', () => {
     await waitFor(() => expect(screen.getByText('Printing')).toBeInTheDocument());
     expect(screen.getByText(/Read-only view/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^＋ Add$/ })).toBeNull();
+  });
+
+  it('surfaces open stock alerts (with resolve) and notifications for superadmin', async () => {
+    renderMaster('superadmin', {
+      ...seed,
+      alerts: [{ id: 7, so: '26/500', itemCode: 'FILM', itemName: 'Film XYZ', requiredQty: 10000, availableQty: 7000, shortageQty: 3000, status: 'OPEN' }],
+      notifications: [{ id: 3, kind: 'LOW_STOCK', message: 'SO 26/500: FILM short by 3000', status: 'UNREAD', createdAt: '2026-08-24T10:00:00' }],
+    });
+    await waitFor(() => expect(screen.getByText('Printing')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Stock Alerts/ }));
+    await waitFor(() => expect(screen.getByText('26/500')).toBeInTheDocument());
+    expect(screen.getAllByText(/FILM/).length).toBeGreaterThan(0);   // alert row + notification
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+    expect(screen.getByText(/short by 3000/)).toBeInTheDocument();   // the notification message
   });
 });
