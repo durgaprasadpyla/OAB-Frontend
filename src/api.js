@@ -188,4 +188,23 @@ export const masterApi = {
   createItem: (body) => api('/api/master/items', { method: 'POST', body }),
   updateItem: (id, body) => api('/api/master/items/' + encodeURIComponent(id), { method: 'PUT', body }),
   adjustStock: (id, body) => api('/api/master/items/' + encodeURIComponent(id) + '/stock', { method: 'POST', body }),
+  // One-shot bridge: seed the normalized item master from the purchase catalogue.
+  syncItemsFromPurchase: () => api('/api/master/items/sync-from-purchase', { method: 'POST' }),
+};
+
+// ── JSS planning attributes (Stage 3: /api/jss/**) ───────────────────────────
+// Per-JSS (keyed by spec code) dispatch type + auto-resolved route, ordered route
+// departments, and eligible machines per department (multi, with speed + changeover).
+// Reads need any token; writes are QC / superadmin (403 -> err.code='forbidden').
+export const jssApi = {
+  get: (spec) => api('/api/jss/' + encodeURIComponent(spec)),
+  routeDepartments: (spec) => api('/api/jss/' + encodeURIComponent(spec) + '/route-departments'),
+  setConfig: (spec, body) => api('/api/jss/' + encodeURIComponent(spec) + '/config', { method: 'PUT', body }),
+  setMachines: (spec, machines) => api('/api/jss/' + encodeURIComponent(spec) + '/machines', { method: 'PUT', body: { machines } }),
+};
+
+// ── Department-wise BOM (Stage 3: /api/bom/**) ───────────────────────────────
+export const bomApi = {
+  get: (spec) => api('/api/bom/' + encodeURIComponent(spec)),
+  set: (spec, body) => api('/api/bom/' + encodeURIComponent(spec), { method: 'PUT', body }),
 };
