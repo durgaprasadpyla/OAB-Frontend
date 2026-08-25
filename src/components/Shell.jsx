@@ -14,14 +14,17 @@ import { today } from '../lib/format.js';
  */
 const ROLE_BAR = {
   plant: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'Production Floor', signOut: 'Sign Out',
-    links: [{ to: '/plant', label: 'Floor Status' }, { to: '/production', label: '🏭 Production' }] },
+    links: [{ to: '/plant', label: 'Floor Status' }, { to: '/production', label: '🏭 Production' }, { to: '/reports', label: '📈 Reports' }] },
   qc: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'QC / Spec Entry', signOut: 'Sign Out' },
   purchase: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Purchase — Generate, Track & Close POs', signOut: 'Sign Out' },
   pm: { bg: '#ffffff', fg: '#123a6b', border: '1px solid #e2e6ee', brand: 'Bloomflex — Production', sub: 'Printing progress tracker', signOut: 'Sign Out',
-    links: [{ to: '/pm', label: 'Printing Progress' }, { to: '/production', label: '🏭 Production' }] },
+    links: [{ to: '/pm', label: 'Printing Progress' }, { to: '/production', label: '🏭 Production' }, { to: '/planner', label: '🗓 Planner' }, { to: '/reports', label: '📈 Reports' }] },
   scrap: { bg: 'linear-gradient(90deg,#5a3d1c,#8a6a2f)', brand: 'Bloomflex — Scrap', signOut: 'Logout' },
   sales: { bg: '#1a4fa0', brand: 'BLOOMFLEX', sub: 'Sales Rep', signOut: 'Sign Out' },
   quote: { bg: '#5e35b1', brand: 'BLOOMFLEX', sub: 'Quotation Desk', signOut: 'Sign Out' },
+  planner: { bg: '#0a5aa0', brand: 'BLOOMFLEX', sub: 'Production Planner', signOut: 'Sign Out',
+    links: [{ to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Daily Board' }, { to: '/reports', label: '📈 Reports' }] },
+  stores: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Stores', signOut: 'Sign Out' },
 };
 
 /** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */

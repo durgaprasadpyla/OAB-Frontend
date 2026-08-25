@@ -55,6 +55,8 @@ export function navTabs(role) {
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
   if (role === 'superadmin') tabs.push({ to: '/production', label: '🏭 Production' });
   if (role === 'superadmin') tabs.push({ to: '/planner', label: '🗓 Planner' });
+  if (role === 'superadmin') tabs.push({ to: '/board', label: '📋 Board' });
+  if (role === 'superadmin') tabs.push({ to: '/reports', label: '📈 Reports' });
   return tabs;
 }
 
@@ -75,8 +77,10 @@ export function canAccess(role, path) {
   if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
   // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view).
   if (p === '/production') return ['plant', 'pm', 'superadmin', 'planner'].includes(role);
-  // Weekly planner: Planner + Super Admin (plan), Plant Manager (view).
-  if (p === '/planner') return ['planner', 'superadmin', 'pm'].includes(role);
+  // Weekly planner + daily board: Planner + Super Admin (plan), Plant Manager (view).
+  if (p === '/planner' || p === '/board') return ['planner', 'superadmin', 'pm'].includes(role);
+  // Reports: planning + production management.
+  if (p === '/reports') return ['planner', 'superadmin', 'pm', 'plant'].includes(role);
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';

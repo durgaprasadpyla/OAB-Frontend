@@ -190,6 +190,8 @@ export const masterApi = {
   adjustStock: (id, body) => api('/api/master/items/' + encodeURIComponent(id) + '/stock', { method: 'POST', body }),
   // One-shot bridge: seed the normalized item master from the purchase catalogue.
   syncItemsFromPurchase: () => api('/api/master/items/sync-from-purchase', { method: 'POST' }),
+  // Bulk import (§15): rows validated server-side; returns {imported,duplicates,failed,errors}.
+  importItems: (rows) => api('/api/master/items/import', { method: 'POST', body: { rows } }),
 };
 
 // ── JSS planning attributes (Stage 3: /api/jss/**) ───────────────────────────
@@ -255,4 +257,14 @@ export const planningApi = {
   week: (from, to) => api('/api/planning/week?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
   assign: (body) => api('/api/planning/assign', { method: 'POST', body }),
   unassign: (jobId) => api('/api/planning/unassign', { method: 'POST', body: { jobId } }),
+  move: (body) => api('/api/planning/move', { method: 'POST', body }),
+  reorder: (body) => api('/api/planning/reorder', { method: 'POST', body }),
+};
+
+// ── Reports (Stage 8: /api/reports/**) — planned-vs-actual, wastage, utilization.
+export const reportsApi = {
+  production: (from, to, groupBy = 'department') =>
+    api('/api/reports/production?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&groupBy=' + encodeURIComponent(groupBy)),
+  utilization: (from, to) =>
+    api('/api/reports/utilization?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
 };

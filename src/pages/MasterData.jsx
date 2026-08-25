@@ -1,7 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth.jsx';
 import { masterApi, stockApi, notificationsApi } from '../api.js';
+import { exportObjects, readSheet } from '../lib/xlsx.js';
 import Modal from '../components/Modal.jsx';
+
+const ITEM_EXPORT_COLS = [
+  { key: 'code', label: 'code' }, { key: 'name', label: 'name' }, { key: 'uom', label: 'uom' },
+  { key: 'specialtyName', label: 'specialty' }, { key: 'departmentName', label: 'department' },
+  { key: 'itemType', label: 'itemType' }, { key: 'materialType', label: 'materialType' },
+  { key: 'subGroup', label: 'subGroup' }, { key: 'microns', label: 'microns' },
+  { key: 'currentStock', label: 'currentStock' }, { key: 'reorderLevel', label: 'reorderLevel' },
+];
 
 // Production-planning master data hub (Stage 2). Config sections (departments,
 // specialties, machines, routes, dispatch types) are superadmin-editable; the item
@@ -211,6 +220,8 @@ export default function MasterData() {
   const [tab, setTab] = useState('departments');
   const [alerts, setAlerts] = useState([]);
   const [notes, setNotes] = useState([]);
+  const [importResult, setImportResult] = useState(null);
+  const [importing, setImporting] = useState(false);
   const [d, setD] = useState({ departments: [], specialties: [], machines: [], routes: [], dispatch: [], items: [] });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -253,6 +264,22 @@ export default function MasterData() {
   }
   async function markRead(id) {
     try { await notificationsApi.markRead(id); await loadAlerts(); } catch { /* ignore */ }
+  }
+
+  function exportItems() {
+    exportObjects(d.items || [], ITEM_EXPORT_COLS, 'Item_Master');
+  }
+  async function importItems(file) {
+    if (!file) return;
+    setImporting(true); setErr(''); setImportResult(null);
+    try {
+      const rows = await readSheet(file);   // array of {code,name,specialty,department,...}
+      const res = await masterApi.importItems(rows);
+      setImportResult(res);
+      flash(`Imported ${res.imported}, ${res.duplicates} duplicate, ${res.failed} failed`);
+      await reload();
+    } catch (e) { setErr(e.message || 'Import failed'); }
+    finally { setImporting(false); }
   }
 
   // Map modal type → create/update calls.
@@ -333,11 +360,33 @@ export default function MasterData() {
             onEdit={canConfig ? (r) => setModal({ type: 'dispatch', row: r }) : null} />
         )}
         {tab === 'items' && (
-          <Section title="Item Master" canAdd={canItems} onAdd={() => setModal({ type: 'items', row: {} })}
-            cols={['Code', 'Name', 'UOM', 'Specialty', 'Department', 'Stock', 'Active']} rows={d.items}
-            render={(r) => [r.code, r.name, r.uom, r.specialtyName, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
-            onEdit={canItems ? (r) => setModal({ type: 'items', row: r }) : null}
-            extra={canStock ? (r) => <button className="btn btn-b" onClick={() => setModal({ type: 'stock', row: r })}>Stock</button> : null} />
+          <div>
+            <div className="fbar" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn btn-s" onClick={exportItems}>⬇ Export</button>
+              {canItems && (
+                <label className="btn btn-s" style={{ cursor: 'pointer' }}>
+                  {importing ? 'Importing…' : '⬆ Import'}
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+                    onChange={(e) => { const f = e.target.files[0]; e.target.value = ''; importItems(f); }} />
+                </label>
+              )}
+            </div>
+            {importResult && (
+              <div className={'al ' + (importResult.failed ? 'al-y' : 'al-g')}>
+                Imported <b>{importResult.imported}</b> · duplicates {importResult.duplicates} · failed {importResult.failed}
+                {importResult.errors && importResult.errors.length ? (
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                    {importResult.errors.slice(0, 20).map((er, i) => <li key={i}>Row {er.row}{er.code ? ` (${er.code})` : ''}: {er.message}</li>)}
+                  </ul>
+                ) : null}
+              </div>
+            )}
+            <Section title="Item Master" canAdd={canItems} onAdd={() => setModal({ type: 'items', row: {} })}
+              cols={['Code', 'Name', 'UOM', 'Specialty', 'Department', 'Stock', 'Active']} rows={d.items}
+              render={(r) => [r.code, r.name, r.uom, r.specialtyName, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
+              onEdit={canItems ? (r) => setModal({ type: 'items', row: r }) : null}
+              extra={canStock ? (r) => <button className="btn btn-b" onClick={() => setModal({ type: 'stock', row: r })}>Stock</button> : null} />
+          </div>
         )}
         {tab === 'alerts' && (
           <div>

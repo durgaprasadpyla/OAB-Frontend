@@ -181,6 +181,10 @@ export default function Invoice() {
     setH((x) => ({ ...x, ...hdr }));
     setPlItems(entry.packingList || []);
     setAutoPdf(pdf);
+    // Bring the preview into view. Without this the invoice renders above the
+    // register but below the current scroll position, so it looks like nothing
+    // happened and users refreshed to "escape" (§16). Viewing only, not download.
+    if (!pdf) { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }
   }
 
   useEffect(() => {
