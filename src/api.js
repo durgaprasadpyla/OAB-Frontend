@@ -240,3 +240,19 @@ export const productionApi = {
   record: (body) => api('/api/production/record', { method: 'POST', body }),
   setStatus: (so, stageSeq, status) => api('/api/production/status', { method: 'POST', body: { so, stageSeq, status } }),
 };
+
+// ── Weekly planning (Stage 6: /api/planning/**) ──────────────────────────────
+// Ready-to-Plan pool, planner date-specific machine hours, and machine-job
+// assignment (eligibility-checked, capped at the department's remaining qty,
+// transaction-safe, with a capacity/over-booked result). Reads for the planning &
+// production roles; assignment is planner/superadmin; marking ready adds plant/pm.
+export const planningApi = {
+  setReady: (so, ready) => api('/api/planning/ready', { method: 'POST', body: { so, ready } }),
+  pool: () => api('/api/planning/pool'),
+  soPlan: (so) => api('/api/planning/so?so=' + encodeURIComponent(so)),
+  machineHours: (from, to) => api('/api/planning/machine-hours?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  setMachineHours: (machineId, date, hours, note) => api('/api/planning/machine-hours', { method: 'PUT', body: { machineId, date, hours, note } }),
+  week: (from, to) => api('/api/planning/week?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  assign: (body) => api('/api/planning/assign', { method: 'POST', body }),
+  unassign: (jobId) => api('/api/planning/unassign', { method: 'POST', body: { jobId } }),
+};

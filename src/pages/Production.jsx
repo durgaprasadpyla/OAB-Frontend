@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { productionApi, masterApi } from '../api.js';
+import { productionApi, masterApi, planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
 
@@ -64,6 +64,7 @@ export default function Production() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
   const [rec, setRec] = useState(null);   // stage being recorded
+  const [ready, setReady] = useState(false);   // is the open SO Ready to Plan
 
   const loadPending = useCallback(async () => {
     try {
@@ -76,10 +77,19 @@ export default function Production() {
   const openSo = useCallback(async (s) => {
     if (!s) return;
     setLoading(true); setErr(''); setSo(s);
-    try { setProd(await productionApi.get(s)); }
+    try {
+      setProd(await productionApi.get(s));
+      // Best-effort: is this SO already flagged Ready to Plan?
+      try { const sp = await planningApi.soPlan(s); setReady(!!sp.readyToPlan); } catch { setReady(false); }
+    }
     catch (e) { setErr(e.message || 'Failed to load SO'); }
     finally { setLoading(false); }
   }, []);
+
+  async function toggleReady() {
+    try { const sp = await planningApi.setReady(so, !ready); setReady(!!sp.readyToPlan); flash(!ready ? 'Marked Ready to Plan' : 'Removed from planning pool'); }
+    catch (e) { setErr(e.message || 'Could not update Ready to Plan'); }
+  }
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
@@ -153,7 +163,10 @@ export default function Production() {
         <div className="card" style={{ marginTop: 12 }}>
           <div className="fbar" style={{ justifyContent: 'space-between' }}>
             <div className="ctitle" style={{ margin: 0 }}>SO <span className="so-pill">{so}</span>{prod.spec ? ' · ' + prod.spec : ''}{prod.poQty != null ? ' · qty ' + prod.poQty : ''}</div>
-            <button className="btn btn-s" onClick={() => { setSo(''); setProd(null); }}>← Back to pending</button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className={'btn ' + (ready ? 'btn-b' : 'btn-g')} onClick={toggleReady}>{ready ? '✓ Ready to Plan' : 'Mark Ready to Plan'}</button>
+              <button className="btn btn-s" onClick={() => { setSo(''); setProd(null); }}>← Back to pending</button>
+            </div>
           </div>
           {!prod.hasRoute ? (
             <div>

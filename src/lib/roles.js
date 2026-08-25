@@ -24,10 +24,9 @@ export function landingPath(role) {
     case 'sadmin': return '/sdashboard';
     case 'quote': return '/quotes';
     case 'sales': return '/rep';
-    // Production-planning roles. Their dedicated workspaces (planner board, stores
-    // stock desk) arrive in later stages; until then they land on the Master Data
-    // hub (read-only for them; stores may adjust stock there).
-    case 'planner': return '/master';
+    // Production-planning roles. Planner lands on the weekly planner; stores lands
+    // on the Master Data hub (stock alerts + item stock) until it gets its own desk.
+    case 'planner': return '/planner';
     case 'stores': return '/master';
     default: return '/po'; // user / padmin / superadmin → main workspace
   }
@@ -55,6 +54,7 @@ export function navTabs(role) {
   // dispatch types, item master). Config is superadmin; padmin can manage items.
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
   if (role === 'superadmin') tabs.push({ to: '/production', label: '🏭 Production' });
+  if (role === 'superadmin') tabs.push({ to: '/planner', label: '🗓 Planner' });
   return tabs;
 }
 
@@ -75,6 +75,8 @@ export function canAccess(role, path) {
   if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
   // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view).
   if (p === '/production') return ['plant', 'pm', 'superadmin', 'planner'].includes(role);
+  // Weekly planner: Planner + Super Admin (plan), Plant Manager (view).
+  if (p === '/planner') return ['planner', 'superadmin', 'pm'].includes(role);
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';
