@@ -46,7 +46,7 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
 /**
  * Reserve the next server-authoritative document number (type ∈ 'SO'|'INV'|'PO').
  * The server increments an atomic counter so concurrent creators never collide.
- * Returns the formatted number string, e.g. "BFX/2026-27/093".
+ * Returns the formatted number string, e.g. "BL/26-27/424".
  */
 export async function allocateNumber(type) {
   const r = await api('/api/seq/' + encodeURIComponent(type), { method: 'POST' });

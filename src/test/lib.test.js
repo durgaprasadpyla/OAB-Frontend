@@ -80,10 +80,10 @@ describe('format + seq', () => {
     expect(nextSO({ y: '26', n: 400 })).toEqual({ so: '26/401', next: { y: '26', n: 401 } });
     expect(isSOFormat('26/401')).toBe(true); expect(isSOFormat('x')).toBe(false);
   });
-  it('nextInvNo (financial-year format, matches the invoice screen)', () => {
-    expect(nextInvNo(222, '2026-07-01').no).toBe('BFX/2026-27/223');
-    expect(nextInvNo(92, '2026-08-19').no).toBe('BFX/2026-27/093');  // zero-padded to 3
-    expect(nextInvNo(0, '2026-02-01').no).toBe('BFX/2025-26/001');   // Jan–Mar belong to the previous FY
+  it('nextInvNo (BL/<yy>-<yy> format, matches the backend SequenceService)', () => {
+    expect(nextInvNo(430, '2026-07-01').no).toBe('BL/26-27/431');    // continues past a higher last number
+    expect(nextInvNo(92, '2026-08-19').no).toBe('BL/26-27/424');     // floored to the FY 26-27 series start (424)
+    expect(nextInvNo(0, '2026-02-01').no).toBe('BL/25-26/1');        // Jan–Mar belong to the previous FY
   });
   it('financialYear (Apr start)', () => { expect(financialYear('2026-07-01')).toBe('2026-2027'); expect(financialYear('2026-02-01')).toBe('2025-2026'); });
 });
