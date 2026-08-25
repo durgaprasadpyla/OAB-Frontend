@@ -249,7 +249,9 @@ export const productionApi = {
 // transaction-safe, with a capacity/over-booked result). Reads for the planning &
 // production roles; assignment is planner/superadmin; marking ready adds plant/pm.
 export const planningApi = {
-  setReady: (so, ready) => api('/api/planning/ready', { method: 'POST', body: { so, ready } }),
+  // Plant is the source of truth for material readiness: mode = 'COMPLETE' (whole job)
+  // or 'PARTIAL' (readyQty meters). readyQty is ignored for COMPLETE / unmarking.
+  setReady: (so, ready, mode, readyQty) => api('/api/planning/ready', { method: 'POST', body: { so, ready, mode, readyQty } }),
   pool: () => api('/api/planning/pool'),
   soPlan: (so) => api('/api/planning/so?so=' + encodeURIComponent(so)),
   machineHours: (from, to) => api('/api/planning/machine-hours?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),

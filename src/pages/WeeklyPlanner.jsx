@@ -97,13 +97,16 @@ export default function WeeklyPlanner() {
         {pool.length === 0 ? <div className="al al-b">No SOs are marked Ready to Plan yet (Plant marks them on the Production screen).</div> : (
           <div className="tw sy">
             <table>
-              <thead><tr><th>Sale Order</th><th>Spec</th><th>Job</th><th>Route</th><th>Qty</th><th>Planned</th><th></th></tr></thead>
+              <thead><tr><th>Sale Order</th><th>Spec</th><th>Job</th><th>Route</th><th>Job Qty</th><th>Status</th><th>Ready</th><th>Planned</th><th></th></tr></thead>
               <tbody>
                 {pool.map((p) => (
                   <tr key={p.so} className={so === p.so ? 'hi' : undefined}>
                     <td><span className="so-pill">{p.so}</span></td>
                     <td>{p.spec}</td><td>{p.jobName}</td><td>{p.routeName}</td>
-                    <td>{p.poQty}</td><td>{p.plannedQty}</td>
+                    <td>{p.poQty}</td>
+                    <td><span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span></td>
+                    <td><b>{p.readyQty}</b></td>
+                    <td>{p.plannedQty}</td>
                     <td><button className="btn btn-s" onClick={() => openSo(p.so)}>Plan</button></td>
                   </tr>
                 ))}
@@ -117,7 +120,10 @@ export default function WeeklyPlanner() {
       {so && soPlan && (
         <div className="card" style={{ marginTop: 12 }}>
           <div className="fbar" style={{ justifyContent: 'space-between' }}>
-            <div className="ctitle" style={{ margin: 0 }}>Plan SO <span className="so-pill">{so}</span> · {soPlan.routeName || 'no route'}</div>
+            <div className="ctitle" style={{ margin: 0 }}>Plan SO <span className="so-pill">{so}</span> · {soPlan.routeName || 'no route'}
+              {soPlan.readyQty != null && <span className={'tag ' + (soPlan.readyMode === 'PARTIAL' ? 'tb' : 'tg')} style={{ marginLeft: 8 }}>
+                {soPlan.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'} · {soPlan.readyQty} m ready</span>}
+            </div>
             <button className="btn btn-s" onClick={() => { setSo(''); setSoPlan(null); }}>Close</button>
           </div>
           <div className="g4">

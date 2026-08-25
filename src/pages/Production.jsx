@@ -64,7 +64,12 @@ export default function Production() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
   const [rec, setRec] = useState(null);   // stage being recorded
-  const [ready, setReady] = useState(false);   // is the open SO Ready to Plan
+  // Ready-to-Plan readiness for the open SO. The Plant is the source of truth:
+  // COMPLETE = whole job ready; PARTIAL = only `readyMeters` metres ready.
+  const [savedReady, setSavedReady] = useState(null); // { mode, qty } once persisted, else null
+  const [readyMode, setReadyMode] = useState('');     // dropdown selection: '' | 'COMPLETE' | 'PARTIAL'
+  const [readyMeters, setReadyMeters] = useState(''); // PARTIAL metres input
+  const [savingReady, setSavingReady] = useState(false);
 
   const loadPending = useCallback(async () => {
     try {
@@ -79,16 +84,53 @@ export default function Production() {
     setLoading(true); setErr(''); setSo(s);
     try {
       setProd(await productionApi.get(s));
-      // Best-effort: is this SO already flagged Ready to Plan?
-      try { const sp = await planningApi.soPlan(s); setReady(!!sp.readyToPlan); } catch { setReady(false); }
+      // Best-effort: how is this SO currently flagged Ready to Plan?
+      try {
+        const sp = await planningApi.soPlan(s);
+        if (sp && sp.readyToPlan) {
+          const mode = sp.readyMode || 'COMPLETE';
+          setSavedReady({ mode, qty: sp.readyQty });
+          setReadyMode(mode);
+          setReadyMeters(mode === 'PARTIAL' && sp.readyQty != null ? String(sp.readyQty) : '');
+        } else { setSavedReady(null); setReadyMode(''); setReadyMeters(''); }
+      } catch { setSavedReady(null); setReadyMode(''); setReadyMeters(''); }
     }
     catch (e) { setErr(e.message || 'Failed to load SO'); }
     finally { setLoading(false); }
   }, []);
 
-  async function toggleReady() {
-    try { const sp = await planningApi.setReady(so, !ready); setReady(!!sp.readyToPlan); flash(!ready ? 'Marked Ready to Plan' : 'Removed from planning pool'); }
-    catch (e) { setErr(e.message || 'Could not update Ready to Plan'); }
+  // Plant marks readiness. COMPLETE ⇒ whole job ready; PARTIAL ⇒ the entered metres.
+  // Validated here and (authoritatively) on the server.
+  async function saveReady() {
+    setErr('');
+    const jobQty = Number(prod?.poQty);
+    if (readyMode === 'PARTIAL') {
+      const q = Number(readyMeters);
+      if (!(q > 0)) { setErr('Enter the metres ready to plan (must be greater than 0)'); return; }
+      if (jobQty > 0 && q > jobQty + 1e-9) { setErr(`Metres ready cannot exceed the job quantity (${jobQty})`); return; }
+    } else if (readyMode !== 'COMPLETE') { setErr('Choose Ready to Plan – Complete or – Partial'); return; }
+    setSavingReady(true);
+    try {
+      const qty = readyMode === 'PARTIAL' ? Number(readyMeters) : undefined;
+      const sp = await planningApi.setReady(so, true, readyMode, qty);
+      const mode = sp.readyMode || readyMode;
+      setSavedReady({ mode, qty: sp.readyQty });
+      setReadyMode(mode);
+      if (mode === 'PARTIAL' && sp.readyQty != null) setReadyMeters(String(sp.readyQty));
+      flash(mode === 'PARTIAL' ? `Ready to Plan — Partial (${sp.readyQty} m ready)` : 'Ready to Plan — Complete');
+      await loadPending();
+    } catch (e) { setErr(e.message || 'Could not update Ready to Plan'); }
+    finally { setSavingReady(false); }
+  }
+
+  async function clearReady() {
+    setErr('');
+    try {
+      await planningApi.setReady(so, false);
+      setSavedReady(null); setReadyMode(''); setReadyMeters('');
+      flash('Removed from planning pool');
+      await loadPending();
+    } catch (e) { setErr(e.message || 'Could not update Ready to Plan'); }
   }
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
@@ -161,12 +203,33 @@ export default function Production() {
 
       {so && prod && !loading && (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="fbar" style={{ justifyContent: 'space-between' }}>
+          <div className="fbar" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div className="ctitle" style={{ margin: 0 }}>SO <span className="so-pill">{so}</span>{prod.spec ? ' · ' + prod.spec : ''}{prod.poQty != null ? ' · qty ' + prod.poQty : ''}</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className={'btn ' + (ready ? 'btn-b' : 'btn-g')} onClick={toggleReady}>{ready ? '✓ Ready to Plan' : 'Mark Ready to Plan'}</button>
-              <button className="btn btn-s" onClick={() => { setSo(''); setProd(null); }}>← Back to pending</button>
+            <button className="btn btn-s" onClick={() => { setSo(''); setProd(null); }}>← Back to pending</button>
+          </div>
+
+          {/* Ready to Plan — the Plant is the source of truth for material readiness.
+              Complete = whole job ready; Partial = the Plant enters the metres ready. */}
+          <div className="fbar" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+            <div className="fg" style={{ margin: 0, minWidth: 230 }}>
+              <label>Ready to Plan
+                {savedReady && <span className={'tag ' + (savedReady.mode === 'PARTIAL' ? 'tb' : 'tg')} style={{ marginLeft: 6 }}>
+                  {savedReady.mode === 'PARTIAL' ? `Partial · ${savedReady.qty} m ready` : `Complete · ${savedReady.qty} m`}</span>}
+              </label>
+              <select value={readyMode} onChange={(e) => setReadyMode(e.target.value)}>
+                <option value="" disabled>— select readiness —</option>
+                <option value="COMPLETE">Ready to Plan – Complete</option>
+                <option value="PARTIAL">Ready to Plan – Partial</option>
+              </select>
             </div>
+            {readyMode === 'PARTIAL' && (
+              <div className="fg" style={{ margin: 0, maxWidth: 190 }}>
+                <label>Metres ready{prod.poQty != null ? ` (of ${prod.poQty})` : ''}</label>
+                <input type="number" step="any" min="0" value={readyMeters} placeholder="e.g. 6000" onChange={(e) => setReadyMeters(e.target.value)} />
+              </div>
+            )}
+            <button className="btn btn-g" onClick={saveReady} disabled={savingReady || !readyMode}>{savedReady ? 'Update readiness' : 'Mark Ready'}</button>
+            {savedReady && <button className="btn btn-s" onClick={clearReady}>Remove from pool</button>}
           </div>
           {!prod.hasRoute ? (
             <div>

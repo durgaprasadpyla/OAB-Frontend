@@ -121,7 +121,9 @@ export default function DailyBoard() {
               {pool.map((p) => (
                 <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
                   style={{ border: '1px solid var(--bd)', borderRadius: 8, padding: '8px 10px', cursor: 'grab', background: 'var(--gl)' }}>
-                  <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty} <span className="tag tgr">planned {p.plannedQty}</span>
+                  <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
+                  <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
+                  <span className="tag ty">ready {p.readyQty}</span> <span className="tag tgr">planned {p.plannedQty}</span>
                 </div>
               ))}
             </div>
@@ -191,21 +193,21 @@ function DropForm({ drop, onSubmit, onCancel }) {
     e.preventDefault(); setErr('');
     const q = mode === 'full' ? drop.remaining : Number(qty);
     if (!(q > 0)) { setErr('Enter a positive quantity'); return; }
-    if (q > drop.remaining + 1e-9) { setErr(`Only ${drop.remaining} remain for this department`); return; }
+    if (q > drop.remaining + 1e-9) { setErr(`Only ${drop.remaining} ready to plan for this department`); return; }
     try { await onSubmit(q); } catch (e2) { setErr(e2.message || 'Assign failed'); }
   }
   return (
     <form onSubmit={submit}>
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
       <div className="al al-b" style={{ marginBottom: 10 }}>
-        <span className="so-pill">{drop.so}</span> → <b>{drop.machine.code}</b> ({drop.department.departmentName}) · remaining <b>{drop.remaining}</b>
+        <span className="so-pill">{drop.so}</span> → <b>{drop.machine.code}</b> ({drop.department.departmentName}) · ready to plan <b>{drop.remaining}</b>
       </div>
       <div className="fbar">
-        <label className="cb"><input type="radio" checked={mode === 'full'} onChange={() => setMode('full')} /> Complete entire quantity ({drop.remaining})</label>
-        <label className="cb"><input type="radio" checked={mode === 'partial'} onChange={() => setMode('partial')} /> Part of the quantity</label>
+        <label className="cb"><input type="radio" checked={mode === 'full'} onChange={() => setMode('full')} /> All ready qty on this machine ({drop.remaining})</label>
+        <label className="cb"><input type="radio" checked={mode === 'partial'} onChange={() => setMode('partial')} /> Split across machines</label>
       </div>
       {mode === 'partial' && (
-        <div className="fg" style={{ maxWidth: 240 }}><label>Planned quantity</label>
+        <div className="fg" style={{ maxWidth: 240 }}><label>Quantity on this machine</label>
           <input type="number" step="any" value={qty} onChange={(e) => setQty(e.target.value)} /></div>
       )}
       <div className="act">
