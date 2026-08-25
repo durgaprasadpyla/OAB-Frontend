@@ -10,6 +10,9 @@ export const ROLE_LABEL = {
   hr: 'HR',
   sadmin: 'Sales Admin', quote: 'Quotation Desk', sales: 'Sales Rep',
   planner: 'Planner', stores: 'Stores',
+  // Production-planning module logins (Enhancements 2.0). Each lands on its own
+  // role-specific page: PPC = planning dashboard, MIS = status board, PLAN = readiness.
+  ppc: 'PPC', mis: 'MIS', plan: 'Planning',
 };
 
 /** Where a role lands after sign-in. */
@@ -28,6 +31,12 @@ export function landingPath(role) {
     // on the Master Data hub (stock alerts + item stock) until it gets its own desk.
     case 'planner': return '/planner';
     case 'stores': return '/master';
+    // Enhancements 2.0 planning module logins → each to its own role-specific landing:
+    // PPC → planning dashboard (planned-vs-actual + wastage), MIS → status board,
+    // PLAN → Ready-to-Plan readiness screen.
+    case 'ppc': return '/ppc';
+    case 'mis': return '/mis';
+    case 'plan': return '/plan';
     default: return '/po'; // user / padmin / superadmin → main workspace
   }
 }
@@ -52,11 +61,13 @@ export function navTabs(role) {
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/pdashboard', label: '📦 P Dashboard' });
   // Production-planning master data hub (routes, machines, departments, specialties,
   // dispatch types, item master). Config is superadmin; padmin can manage items.
+  // (Enhancements 2.0 §6 keeps Master Data as a Super Admin tab.)
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
-  if (role === 'superadmin') tabs.push({ to: '/production', label: '🏭 Production' });
-  if (role === 'superadmin') tabs.push({ to: '/planner', label: '🗓 Planner' });
-  if (role === 'superadmin') tabs.push({ to: '/board', label: '📋 Board' });
-  if (role === 'superadmin') tabs.push({ to: '/reports', label: '📈 Reports' });
+  // Planning is consolidated behind ONE Super Admin entry — the PPC dashboard is a hub
+  // that links out to Weekly, Daily Board, Production and Reports. We intentionally do
+  // NOT add a separate nav tab per planning screen (Enhancements 2.0: role-specific
+  // landing pages, not extra tabs); the PPC / MIS / PLAN logins reach those directly.
+  if (role === 'superadmin') tabs.push({ to: '/ppc', label: '🗂 Planning' });
   return tabs;
 }
 
@@ -75,12 +86,18 @@ export function canAccess(role, path) {
   // Master Data hub: superadmin + padmin (config/items), planner + stores (read /
   // stock). Per-section write permission is enforced again on the backend.
   if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
-  // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view).
-  if (p === '/production') return ['plant', 'pm', 'superadmin', 'planner'].includes(role);
-  // Weekly planner + daily board: Planner + Super Admin (plan), Plant Manager (view).
-  if (p === '/planner' || p === '/board') return ['planner', 'superadmin', 'pm'].includes(role);
-  // Reports: planning + production management.
-  if (p === '/reports') return ['planner', 'superadmin', 'pm', 'plant'].includes(role);
+  // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view),
+  // MIS (records actuals — Enhancements 2.0 §51).
+  if (p === '/production') return ['plant', 'pm', 'mis', 'superadmin', 'planner'].includes(role);
+  // Weekly planner + daily board: Planner + PPC + Super Admin (plan), Plant Manager (view).
+  if (p === '/planner' || p === '/board') return ['planner', 'ppc', 'superadmin', 'pm'].includes(role);
+  // Reports: planning + production management (shared by all planning logins, §53).
+  if (p === '/reports') return ['planner', 'ppc', 'mis', 'plan', 'superadmin', 'pm', 'plant'].includes(role);
+  // Enhancements 2.0 planning-module landings — each strictly for its own login
+  // (Super Admin keeps a break-glass view to oversee planning from one place).
+  if (p === '/ppc') return role === 'ppc' || role === 'superadmin';
+  if (p === '/mis') return role === 'mis' || role === 'superadmin';
+  if (p === '/plan') return role === 'plan' || role === 'superadmin';
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { productionApi, masterApi, planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
+import { useAuth } from '../auth.jsx';
 
 // Production execution (Stage 5): Plant / Plant Manager record actual production +
 // wastage against an SO's route stages. Good output automatically becomes available
@@ -70,6 +71,11 @@ export default function Production() {
   const [readyMode, setReadyMode] = useState('');     // dropdown selection: '' | 'COMPLETE' | 'PARTIAL'
   const [readyMeters, setReadyMeters] = useState(''); // PARTIAL metres input
   const [savingReady, setSavingReady] = useState(false);
+  // Ready-to-Plan is the readiness gatekeeper's action (Plant / Plant Manager / PLAN /
+  // Super Admin). Other roles that reach this screen to read or record actuals (e.g. MIS,
+  // Planner) don't see the control at all — the write is also refused server-side.
+  const auth = useAuth();
+  const canMarkReady = ['plant', 'pm', 'plan', 'superadmin'].includes(auth?.role);
 
   const loadPending = useCallback(async () => {
     try {
@@ -209,7 +215,9 @@ export default function Production() {
           </div>
 
           {/* Ready to Plan — the Plant is the source of truth for material readiness.
-              Complete = whole job ready; Partial = the Plant enters the metres ready. */}
+              Complete = whole job ready; Partial = the Plant enters the metres ready.
+              Only readiness-gatekeeper roles see this control (§18). */}
+          {canMarkReady && (
           <div className="fbar" style={{ marginTop: 8, alignItems: 'flex-end' }}>
             <div className="fg" style={{ margin: 0, minWidth: 230 }}>
               <label>Ready to Plan
@@ -231,6 +239,7 @@ export default function Production() {
             <button className="btn btn-g" onClick={saveReady} disabled={savingReady || !readyMode}>{savedReady ? 'Update readiness' : 'Mark Ready'}</button>
             {savedReady && <button className="btn btn-s" onClick={clearReady}>Remove from pool</button>}
           </div>
+          )}
           {!prod.hasRoute ? (
             <div>
               <div className="al al-y">No route stages yet for this SO.</div>

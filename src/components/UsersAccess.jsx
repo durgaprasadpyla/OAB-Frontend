@@ -10,7 +10,9 @@ import { usersApi } from '../api.js';
 // backend redesign and is not offered here; access is governed by the role.
 
 // Descriptive role labels, mirroring the monolith's ROLE_OPTIONS (index.html 6194),
-// extended with the roles the React port added: superadmin, sadmin, quote, hr.
+// extended with the roles the React port added: superadmin, sadmin, quote, hr, and the
+// production-planning module logins (planner/stores + Enhancements 2.0 ppc/mis/plan).
+// Sales reps are provisioned separately (module-12 sales blob), so 'sales' is not here.
 const ROLE_OPTIONS = [
   { v: 'user', l: 'Operations — OAB / Daily Update / Invoice' },
   { v: 'padmin', l: 'Purchase Admin' },
@@ -23,6 +25,11 @@ const ROLE_OPTIONS = [
   { v: 'sadmin', l: 'Sales Admin' },
   { v: 'quote', l: 'Quotation Desk' },
   { v: 'hr', l: 'HR' },
+  { v: 'planner', l: 'Production Planner' },
+  { v: 'stores', l: 'Stores' },
+  { v: 'ppc', l: 'PPC — Production Planning & Control' },
+  { v: 'mis', l: 'MIS — Status & Analytics' },
+  { v: 'plan', l: 'Planning — Ready to Plan' },
 ];
 const ROLES = ROLE_OPTIONS.map((r) => r.v);
 const roleLabel = (v) => (ROLE_OPTIONS.find((r) => r.v === v) || {}).l || (v || '-');
