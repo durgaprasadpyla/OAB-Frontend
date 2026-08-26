@@ -29,8 +29,19 @@ export default function DropdownAdmin() {
   // Departments (Enhancements 2.0 §5) are backed by the normalized Department master, not
   // the sales blob — so the PAdmin Item Master reads the same source (/api/master/departments).
   const [depts, setDepts] = useState([]);
+  const [deptErr, setDeptErr] = useState('');
+  const [deptLoaded, setDeptLoaded] = useState(false);
   const loadDepts = useCallback(async () => {
-    try { const r = await masterApi.listDepartments({ includeInactive: 1 }); setDepts(Array.isArray(r) ? r : []); } catch { /* best-effort */ }
+    setDeptErr('');
+    try {
+      const r = await masterApi.listDepartments({ includeInactive: 1 });
+      setDepts(Array.isArray(r) ? r : []);   // tolerate an unexpected non-array shape
+      setDeptLoaded(true);
+    } catch (e) {
+      // Do NOT silently swallow — a masked failure looks like "no departments" and
+      // confuses the user. Surface the real reason so the page never appears broken.
+      setDeptErr(e && e.message ? e.message : 'Could not reach the Department master');
+    }
   }, []);
   useEffect(() => { if (role === 'superadmin') loadDepts(); }, [loadDepts, role]);
 
@@ -101,7 +112,7 @@ export default function DropdownAdmin() {
       </div>
 
       {def.master ? (
-        <DepartmentsPanel depts={depts} reload={loadDepts} />
+        <DepartmentsPanel depts={depts} reload={loadDepts} error={deptErr} loaded={deptLoaded} />
       ) : (
       <div className="card">
         <div className="fbar">
@@ -168,12 +179,13 @@ export default function DropdownAdmin() {
  * the PAdmin Item Master reads the same source. Add / rename / enable-disable; writes are
  * Super Admin only (enforced server-side).
  */
-function DepartmentsPanel({ depts, reload }) {
+function DepartmentsPanel({ depts, reload, error, loaded }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3000); };
-  const active = depts.filter((d) => d.active !== false);
+  const list = Array.isArray(depts) ? depts : [];
+  const active = list.filter((d) => d.active !== false);
 
   async function add() {
     const n = name.trim();
@@ -197,6 +209,12 @@ function DepartmentsPanel({ depts, reload }) {
     <div className="card">
       <div className="ctitle">Departments <span className="tag tgr">{active.length}</span></div>
       <div className="pg-sub" style={{ marginTop: 0 }}>Production departments — configured here by Super Admin and used by the PAdmin Item Master Department dropdown (and machine / route setup).</div>
+      {error && (
+        <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>Couldn’t load the Department master — {error}. You can still add one below once it’s reachable.</span>
+          <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={reload}>Retry</button>
+        </div>
+      )}
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="fbar">
         <input placeholder="New department name" value={name} aria-label="New department name"
@@ -207,9 +225,11 @@ function DepartmentsPanel({ depts, reload }) {
         <table>
           <thead><tr><th>Department</th><th style={{ width: 96 }}>Status</th></tr></thead>
           <tbody>
-            {depts.length === 0 ? (
-              <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No departments yet — add one above.</td></tr>
-            ) : depts.map((d) => (
+            {list.length === 0 ? (
+              <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+                {error ? 'Departments unavailable — see the message above.' : loaded ? 'No departments yet — add one above.' : 'Loading departments…'}
+              </td></tr>
+            ) : list.map((d) => (
               <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
                 <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} /></td>
                 <td><button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button></td>

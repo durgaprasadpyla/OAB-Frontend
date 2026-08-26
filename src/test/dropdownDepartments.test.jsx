@@ -15,19 +15,21 @@ function res(status, body) {
   return { status, ok: status >= 200 && status < 300, headers: { get: () => 'application/json' }, json: async () => body, text: async () => JSON.stringify(body) };
 }
 
-let depts, created;
+let depts, created, deptFail;
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_role', 'superadmin');
   depts = [{ id: 1, name: 'Printing', active: true }, { id: 2, name: 'Slitting', active: true }];
   created = [];
+  deptFail = false;
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = (opts.method || 'GET').toUpperCase();
     const body = opts.body ? JSON.parse(opts.body) : {};
     if (u.includes('/api/auth/me')) return res(200, { username: 'admin', role: 'superadmin' });
     if (u.includes('/api/master/departments')) {
+      if (method === 'GET' && deptFail) return res(500, 'boom');   // Department master unreachable
       if (method === 'POST') { const d = { id: depts.length + 1, name: body.name, active: true }; depts.push(d); created.push(body); return res(201, d); }
       return res(200, depts);
     }
@@ -56,5 +58,21 @@ describe('Drop-down selections → Departments', () => {
     await waitFor(() => expect(created.some((c) => c.name === 'Lamination')).toBe(true));
     // reload reflects it — proving the Item Master (same endpoint) would see it too
     expect(await screen.findByDisplayValue('Lamination')).toBeInTheDocument();
+  });
+
+  it('surfaces a user-facing error when the Department master cannot be loaded (not a silent empty)', async () => {
+    deptFail = true;
+    mount();
+    // the failure is shown to the user, not masked as "no departments"
+    expect(await screen.findByText(/Couldn’t load the Department master/)).toBeInTheDocument();
+    expect(screen.queryByText(/No departments yet/)).toBeNull();
+    // the add field is still usable (graceful, page not broken)
+    expect(screen.getByPlaceholderText('New department name')).toBeInTheDocument();
+  });
+
+  it('handles no configured departments gracefully', async () => {
+    depts = [];
+    mount();
+    expect(await screen.findByText(/No departments yet/)).toBeInTheDocument();
   });
 });
