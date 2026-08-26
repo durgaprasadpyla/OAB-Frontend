@@ -24,15 +24,18 @@ export default function PpcDashboard() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const [delays, setDelays] = useState([]);   // §82: delayed job starts
+
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [p, pr, w] = await Promise.all([
+      const [p, pr, w, dl] = await Promise.all([
         planningApi.pool(),
         reportsApi.production(from, to, 'department'),
         planningApi.week(from, to),
+        reportsApi.delays(from, to),
       ]);
-      setPool(p || []); setProd(pr || []); setWeek(w || { jobs: [], capacity: [] });
+      setPool(p || []); setProd(pr || []); setWeek(w || { jobs: [], capacity: [] }); setDelays(dl || []);
     } catch (e) { setErr(e.message || 'Failed to load dashboard'); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -43,6 +46,7 @@ export default function PpcDashboard() {
   const actualQty = useMemo(() => sum(prod, 'actualQty'), [prod]);
   const wastageQty = useMemo(() => sum(prod, 'wastageQty'), [prod]);
   const overbooked = useMemo(() => (week.capacity || []).filter((c) => c.overbooked).length, [week]);
+  const changedJobs = useMemo(() => (week.jobs || []).filter((j) => j.changed), [week]);   // §56
 
   return (
     <div id="app">
@@ -67,6 +71,8 @@ export default function PpcDashboard() {
         <div className="stat"><div className="sl">Actual qty</div><div className="sv">{n1(actualQty)}</div></div>
         <div className="stat"><div className="sl">Wastage</div><div className="sv" style={{ color: wastageQty > 0 ? '#c0392b' : undefined }}>{n1(wastageQty)}</div></div>
         <div className="stat"><div className="sl">Over-booked days</div><div className="sv" style={{ color: overbooked > 0 ? '#c0392b' : undefined }}>{overbooked}</div></div>
+        <div className="stat"><div className="sl">Delayed starts</div><div className="sv" style={{ color: delays.length > 0 ? '#c0392b' : undefined }}>{delays.length}</div></div>
+        <div className="stat"><div className="sl">Plan changes</div><div className="sv" style={{ color: changedJobs.length > 0 ? '#c9a100' : undefined }}>{changedJobs.length}</div></div>
       </div>
 
       {/* Primary actions — the planning workspace (also on the role bar). */}
@@ -98,6 +104,39 @@ export default function PpcDashboard() {
           </table></div>
         )}
       </div>
+
+      {/* §82: delayed job starts, highlighted for the PPC too */}
+      {delays.length > 0 && (
+        <div className="card" style={{ marginTop: 12, borderLeft: '4px solid var(--red)' }}>
+          <div className="ctitle">⏰ Delayed Starts <span className="tag tr">{delays.length}</span></div>
+          <div className="tw sy" style={{ maxHeight: 220 }}><table>
+            <thead><tr><th>Date</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Started</th><th>Late by</th></tr></thead>
+            <tbody>{delays.map((d) => (
+              <tr key={d.id} className="nr">
+                <td>{d.prodDate}</td><td><span className="so-pill">{d.so}</span></td>
+                <td>{d.departmentName}</td><td>{d.machineName || '—'}</td>
+                <td>{d.startTime}</td><td><span className="tag tr">{d.delayMin} min</span></td>
+              </tr>))}</tbody>
+          </table></div>
+        </div>
+      )}
+
+      {/* §56: plan edits after saving, clearly visible on the dashboard */}
+      {changedJobs.length > 0 && (
+        <div className="card" style={{ marginTop: 12, borderLeft: '4px solid #c9a100' }}>
+          <div className="ctitle">⚠ Plan changes <span className="tag ty">{changedJobs.length}</span></div>
+          <div className="tw sy" style={{ maxHeight: 220 }}><table>
+            <thead><tr><th>Date</th><th>Shift</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Qty</th><th>Start–End</th></tr></thead>
+            <tbody>{changedJobs.map((j) => (
+              <tr key={j.id} className="hi">
+                <td>{j.planDate}</td><td>{j.shift || 'A'}</td>
+                <td><span className="so-pill">{j.so}</span></td>
+                <td>{j.departmentName}</td><td>{j.machineName}</td>
+                <td>{j.plannedQty}</td><td>{j.startTime ? `${j.startTime}–${j.endTime}` : '—'}</td>
+              </tr>))}</tbody>
+          </table></div>
+        </div>
+      )}
 
       {/* Machine load / availability for the period */}
       <div className="card" style={{ marginTop: 12 }}>

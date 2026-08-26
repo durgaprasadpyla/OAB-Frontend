@@ -30,6 +30,7 @@ export default function WeeklyPlanner() {
   const [aMachine, setAMachine] = useState('');
   const [aDate, setADate] = useState('');
   const [aQty, setAQty] = useState('');
+  const [aShift, setAShift] = useState('A');   // §77: A = day, B = night
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
@@ -59,7 +60,7 @@ export default function WeeklyPlanner() {
     setErr('');
     if (!aDept || !aMachine || !aDate || !(Number(aQty) > 0)) { setErr('Pick a department, machine, date and a positive quantity'); return; }
     try {
-      const r = await planningApi.assign({ so, departmentId: Number(aDept), machineId: Number(aMachine), planDate: aDate, plannedQty: Number(aQty) });
+      const r = await planningApi.assign({ so, departmentId: Number(aDept), machineId: Number(aMachine), planDate: aDate, plannedQty: Number(aQty), shift: aShift });
       setLastCap(r.capacity);
       flash(r.capacity?.overbooked ? 'Assigned — but the machine is over-booked for that day' : 'Assigned');
       setAQty('');
@@ -148,6 +149,13 @@ export default function WeeklyPlanner() {
               </select>
             </div>
             <div className="fg">
+              <label>Shift</label>
+              <select value={aShift} onChange={(e) => setAShift(e.target.value)} aria-label="Shift">
+                <option value="A">Shift A — day</option>
+                <option value="B">Shift B — night</option>
+              </select>
+            </div>
+            <div className="fg">
               <label>Quantity{deptObj ? ` (rem ${deptObj.remaining})` : ''}</label>
               <input type="number" step="any" value={aQty} onChange={(e) => setAQty(e.target.value)} />
             </div>
@@ -162,12 +170,12 @@ export default function WeeklyPlanner() {
           {Array.isArray(soPlan.jobs) && soPlan.jobs.length > 0 && (
             <div className="tw" style={{ marginTop: 8 }}>
               <table>
-                <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Qty</th><th>Est min</th><th></th></tr></thead>
+                <thead><tr><th>Date</th><th>Shift</th><th>Department</th><th>Machine</th><th>Qty</th><th>Start–End</th><th>Est min</th><th></th></tr></thead>
                 <tbody>
                   {soPlan.jobs.map((j) => (
-                    <tr key={j.id}>
-                      <td>{j.planDate}</td><td>{j.departmentName}</td><td>{j.machineName}</td>
-                      <td>{j.plannedQty}</td><td>{mins(j.estMinutes)}</td>
+                    <tr key={j.id} className={j.changed ? 'hi' : undefined} title={j.changed ? 'Changed after the plan was saved' : undefined}>
+                      <td>{j.planDate}</td><td>{j.shift || 'A'}</td><td>{j.departmentName}</td><td>{j.machineName}</td>
+                      <td>{j.plannedQty}</td><td>{j.startTime ? `${j.startTime}–${j.endTime}` : '—'}</td><td>{mins(j.estMinutes)}{j.changed ? ' ⚠' : ''}</td>
                       <td><button className="btn btn-r" onClick={() => unassign(j.id)}>✕</button></td>
                     </tr>
                   ))}

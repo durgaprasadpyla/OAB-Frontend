@@ -3,12 +3,15 @@ import { planningApi, masterApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
 
-// Daily machine board (Stage 7): machines grouped by department; drag a Ready-to-Plan
-// SO onto a machine to plan it (with a full/partial quantity prompt), drag a planned
-// job card onto another eligible machine to move it, and reorder within a machine.
-// Capacity (qty/speed + changeover) is shown per machine with an over-booked warning.
+// Daily machine board (Stage 7 + Enhancements 2.0 §77-80): machines grouped by
+// department, each machine split into Shift A (day) and Shift B (night) drop zones.
+// Drag a Ready-to-Plan SO onto a shift to plan it (with a full/partial quantity
+// prompt), drag a planned job card onto another machine or shift to move it, and
+// reorder within a machine. Every job card shows its derived start–end time (§80),
+// and a job edited after first save is highlighted as a plan change (§56).
 
 const mins = (v) => (v == null ? 0 : Math.round(Number(v)));
+const SHIFTS = [{ k: 'A', label: 'Shift A · day' }, { k: 'B', label: 'Shift B · night' }];
 
 export default function DailyBoard() {
   const [date, setDate] = useState(today());
@@ -37,7 +40,8 @@ export default function DailyBoard() {
     (machines || []).forEach((mc) => { const k = mc.departmentId == null ? 'none' : mc.departmentId; (g[k] = g[k] || []).push(mc); });
     return g;
   }, [machines]);
-  const jobsFor = (machineId) => (board.jobs || []).filter((j) => String(j.machineId) === String(machineId) && j.planDate === date).sort((a, b) => (a.seqOrder || 0) - (b.seqOrder || 0));
+  const jobsFor = (machineId, shift) => (board.jobs || []).filter((j) => String(j.machineId) === String(machineId) && j.planDate === date
+    && (shift ? (j.shift || 'A') === shift : true)).sort((a, b) => (a.seqOrder || 0) - (b.seqOrder || 0));
   const capFor = (machineId) => (board.capacity || []).find((c) => String(c.machineId) === String(machineId) && c.date === date);
 
   // ── drag/drop ──
@@ -46,14 +50,16 @@ export default function DailyBoard() {
   const startDragJob = (e, jobId) => e.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'job', jobId }));
   const allow = (e) => e.preventDefault();
 
-  async function onDropMachine(e, machine) {
+  async function onDropMachine(e, machine, shift) {
     e.preventDefault();
+    e.stopPropagation();
     const d = dragData(e);
     if (!d) return;
     if (d.kind === 'job') {
-      try { const r = await planningApi.move({ jobId: d.jobId, machineId: machine.id, planDate: date });
+      // Move between machines AND between shifts is plain drag-and-drop (§78).
+      try { const r = await planningApi.move({ jobId: d.jobId, machineId: machine.id, planDate: date, shift });
         if (r.capacity?.overbooked) setWarn({ machineId: machine.id, name: machine.name });
-        flash('Job moved'); await load();
+        flash(`Job moved to ${machine.code} · Shift ${shift}`); await load();
       } catch (e2) { setErr(e2.message); }
       return;
     }
@@ -65,15 +71,15 @@ export default function DailyBoard() {
         if (!dept) { setErr(`SO ${d.so}'s route has no ${machine.name}'s department`); return; }
         const eligible = (dept.machines || []).some((x) => String(x.machineId) === String(machine.id));
         if (!eligible) { setErr(`${machine.code} is not eligible for SO ${d.so} at ${dept.departmentName}`); return; }
-        setDrop({ so: d.so, machine, department: dept, remaining: Number(dept.remaining) });
+        setDrop({ so: d.so, machine, department: dept, remaining: Number(dept.remaining), shift });
       } catch (e2) { setErr(e2.message); }
     }
   }
 
   async function doAssign(qty) {
-    const { so, machine, department } = drop;
+    const { so, machine, department, shift } = drop;
     try {
-      const r = await planningApi.assign({ so, departmentId: department.departmentId, machineId: machine.id, planDate: date, plannedQty: qty });
+      const r = await planningApi.assign({ so, departmentId: department.departmentId, machineId: machine.id, planDate: date, plannedQty: qty, shift });
       setDrop(null);
       if (r.capacity?.overbooked) setWarn({ machineId: machine.id, name: machine.name });
       flash(r.capacity?.overbooked ? 'Assigned — machine is over-booked' : 'Assigned');
@@ -142,9 +148,8 @@ export default function DailyBoard() {
                   const used = mins(cap?.usedMinutes), capM = mins(cap?.capMinutes) || mins((mc.functionalHoursPerDay || 12) * 60);
                   const over = cap?.overbooked;
                   const pct = capM > 0 ? Math.min(100, Math.round((used / capM) * 100)) : 0;
-                  const jobs = jobsFor(mc.id);
                   return (
-                    <div key={mc.id} onDragOver={allow} onDrop={(e) => onDropMachine(e, mc)}
+                    <div key={mc.id}
                       style={{ flex: '1 1 240px', minWidth: 220, border: '1px solid ' + (over ? 'var(--red)' : 'var(--bd)'), borderRadius: 10, padding: 8, background: 'var(--wh)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <b>{mc.code}</b><span className="pg-sub">{mc.name}</span>
@@ -153,19 +158,32 @@ export default function DailyBoard() {
                         <div style={{ width: pct + '%', height: '100%', background: over ? 'var(--red)' : 'var(--g)' }} />
                       </div>
                       <div className="pg-sub" style={{ marginBottom: 6 }}>{used}/{capM} min{over ? ' · OVER-BOOKED' : ''}</div>
-                      {jobs.length === 0 ? <div className="al al-b" style={{ margin: 0 }}>Drop an SO here</div> : jobs.map((j) => (
-                        <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)}
-                          style={{ border: '1px solid var(--bd)', borderRadius: 8, padding: '6px 8px', marginBottom: 6, cursor: 'grab', background: 'var(--gl)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-                            <span><span className="so-pill">{j.so}</span> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span></span>
-                            <span style={{ whiteSpace: 'nowrap' }}>
-                              <button className="btn btn-s" title="up" onClick={() => bump(mc.id, j.id, -1)}>↑</button>
-                              <button className="btn btn-s" title="down" onClick={() => bump(mc.id, j.id, 1)}>↓</button>
-                              <button className="btn btn-r" onClick={() => removeJob(j.id)}>✕</button>
-                            </span>
+                      {/* §77-78: one drop zone per shift; drag between them to re-shift a job. */}
+                      {SHIFTS.map((sh) => {
+                        const jobs = jobsFor(mc.id, sh.k);
+                        return (
+                          <div key={sh.k} onDragOver={allow} onDrop={(e) => onDropMachine(e, mc, sh.k)}
+                            style={{ border: '1px dashed var(--bd)', borderRadius: 8, padding: 6, marginBottom: 6, background: sh.k === 'B' ? '#f4f4fb' : 'transparent' }}>
+                            <div className="pg-sub" style={{ marginBottom: 4, fontWeight: 600 }}>{sh.k === 'A' ? '🌞' : '🌙'} {sh.label}</div>
+                            {jobs.length === 0 ? <div className="pg-sub" style={{ margin: 0, fontStyle: 'italic' }}>Drop an SO here</div> : jobs.map((j) => (
+                              <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)}
+                                title={j.changed ? 'Changed after the plan was saved' : undefined}
+                                style={{ border: j.changed ? '2px solid #c9a100' : '1px solid var(--bd)', borderRadius: 8, padding: '6px 8px', marginBottom: 6, cursor: 'grab', background: j.changed ? '#fff8e1' : 'var(--gl)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                                  <span><span className="so-pill">{j.so}</span> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}</span>
+                                  <span style={{ whiteSpace: 'nowrap' }}>
+                                    <button className="btn btn-s" title="up" onClick={() => bump(mc.id, j.id, -1)}>↑</button>
+                                    <button className="btn btn-s" title="down" onClick={() => bump(mc.id, j.id, 1)}>↓</button>
+                                    <button className="btn btn-r" onClick={() => removeJob(j.id)}>✕</button>
+                                  </span>
+                                </div>
+                                {/* §80: the pre-defined start/end from the shift queue. */}
+                                {(j.startTime || j.endTime) && <div className="pg-sub" style={{ margin: 0 }}>🕐 {j.startTime}–{j.endTime}</div>}
+                              </div>
+                            ))}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   );
                 })}

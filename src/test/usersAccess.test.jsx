@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { DataProvider } from '../data.jsx';
 import UsersAccess from '../components/UsersAccess.jsx';
 
-// UsersAccess talks to /api/admin/users via usersApi (not the data context), so
-// it renders standalone with a small fetch mock modelling the admin endpoints.
+// UsersAccess talks to /api/admin/users via usersApi for STAFF accounts, and (§36)
+// mounts the merged sales-user panel over the module-12 blob, so it renders inside
+// a DataProvider with a small fetch mock modelling the admin endpoints.
 function installUsersFetch(initial) {
   const users = initial.slice();
   const res = (status, data) => ({
@@ -29,6 +31,12 @@ function installUsersFetch(initial) {
         return res(200, usr || {});
       }
     }
+    // §36: the merged sales panel loads module 12 through the data context.
+    if (u.includes('/rest/v1/oab_data') && method === 'GET') {
+      const sales = { sales_users: [{ id: 'rep-1', display_name: 'Rep One', username: 'rep1', password: 'pw1', status: 'Active' }], leads: [] };
+      if (u.includes('id=in.(')) return res(200, [{ id: 12, data: JSON.stringify(sales), version: 1 }]);
+      return res(200, [{ data: JSON.stringify(sales), version: 1 }]);
+    }
     return res(200, {});
   };
   return users;
@@ -43,7 +51,7 @@ describe('Users & Access', () => {
       { id: 1, username: 'superadmin', role: 'superadmin', disabled: false },
       { id: 2, username: 'qcguy', role: 'qc', disabled: false },
     ]);
-    render(<UsersAccess />);
+    render(<DataProvider><UsersAccess /></DataProvider>);
     await screen.findByText('superadmin');
     expect(screen.getByText('qcguy')).toBeInTheDocument();
 
@@ -61,12 +69,26 @@ describe('Users & Access', () => {
   it('disables a user via the admin API', async () => {
     const user = userEvent.setup();
     const store = installUsersFetch([{ id: 1, username: 'superadmin', role: 'superadmin', disabled: false }, { id: 2, username: 'plantguy', role: 'plant', disabled: false }]);
-    render(<UsersAccess />);
+    render(<DataProvider><UsersAccess /></DataProvider>);
     await screen.findByText('plantguy');
 
     const row = screen.getByText('plantguy').closest('tr');
     await user.click(within(row).getByRole('button', { name: /Disable/ }));
 
     await waitFor(() => expect(store.find((u) => u.id === 2).disabled).toBe(true));
+  });
+
+  // §36: sales-user management is merged into this Super Admin page — separate
+  // table, module allocation, and the password DISPLAYED next to the username.
+  it('shows the merged Sales Users panel with the password visible', async () => {
+    installUsersFetch([{ id: 1, username: 'superadmin', role: 'superadmin', disabled: false }]);
+    render(<DataProvider><UsersAccess /></DataProvider>);
+    expect(await screen.findByText(/Sales Users \(SalesOS — separate table\)/)).toBeInTheDocument();
+    // the rep row from module 12, with its password in clear (§36) + module allocation
+    expect(await screen.findByText('rep1')).toBeInTheDocument();
+    expect(screen.getByText('pw1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Edit modules for Rep One/ })).toBeInTheDocument();
+    // and the add form carries the module-allocation checkboxes
+    expect(screen.getByText(/Module allocation/)).toBeInTheDocument();
   });
 });

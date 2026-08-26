@@ -1,5 +1,6 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { stockApi } from '../api.js';
 import { inr } from '../lib/format.js';
 import { calcMetres } from '../lib/calc.js';
 import { custGroupOf } from '../lib/master.js';
@@ -76,8 +77,40 @@ export default function RawMaterialPanel() {
 
   const noBomCount = filtered.length - withBom.length;
 
+  // §34: the low-store-stock sale-order alerts live here, under Raw Material.
+  const [alerts, setAlerts] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try { setAlerts(await stockApi.alerts('OPEN') || []); }
+      catch { /* alerts may be forbidden for some roles — panel still renders */ }
+    })();
+  }, []);
+
   return (
     <>
+      {alerts.length > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid var(--red)' }}>
+          <div className="ctitle">🔔 Low-Stock Sale-Order Alerts <span className="tag tr">{alerts.length}</span></div>
+          <div className="tw sy" style={{ maxHeight: 220 }}>
+            <table>
+              <thead><tr><th>Sale Order</th><th>Item</th><th>Needed by</th><th>Required</th><th>Available</th><th>Shortage</th></tr></thead>
+              <tbody>
+                {alerts.map((a) => (
+                  <tr key={a.id} className="nr">
+                    <td><span className="so-pill">{a.so}</span></td>
+                    <td>{a.itemCode}{a.itemName ? ' — ' + a.itemName : ''}</td>
+                    <td>{a.departmentName || '—'}</td>
+                    <td>{a.requiredQty}</td>
+                    <td>{a.availableQty}</td>
+                    <td><b>{a.shortageQty}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>Open Sale Orders <span className="tag tgr">{filtered.length}</span></div>

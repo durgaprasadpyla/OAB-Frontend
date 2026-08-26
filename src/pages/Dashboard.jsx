@@ -848,9 +848,12 @@ function Trends() {
     const map = {};
     openRows.forEach((r) => {
       const c = r.customer || '—';
-      const m = map[c] || (map[c] = { customer: c, orders: 0, poQty: 0, balQty: 0, value: 0 });
+      const m = map[c] || (map[c] = { customer: c, orders: 0, poQty: 0, balQty: 0, value: 0, balValue: 0 });
       const rate = getPM(r.spec, mods.prices).price || 0;
-      m.orders++; m.poQty += num(r.poQty); m.balQty += balance(r); m.value += num(r.poQty) * rate;   // PO value (legacy 8330)
+      m.orders++; m.poQty += num(r.poQty); m.balQty += balance(r);
+      // §37: PO value AND Balance value, listed separately side by side.
+      m.value += num(r.poQty) * rate;
+      m.balValue += balance(r) * rate;
     });
     return Object.values(map).sort((a, b) => b.poQty - a.poQty);
   }, [openRows, mods.prices]);
@@ -874,8 +877,8 @@ function Trends() {
   }, [openRows, jssBySpec]);
 
   function exportByCustomer() {
-    const rows = [['Customer', 'Open SOs', 'PO Qty', 'Balance Qty', 'Value (₹)']];
-    byCustomer.forEach((c) => rows.push([c.customer, c.orders, c.poQty, c.balQty, Math.round(c.value)]));
+    const rows = [['Customer', 'Open SOs', 'PO Qty', 'Balance Qty', 'PO Value (₹)', 'Balance Value (₹)']];
+    byCustomer.forEach((c) => rows.push([c.customer, c.orders, c.poQty, c.balQty, Math.round(c.value), Math.round(c.balValue)]));
     exportAOA(rows, 'Orders_by_Customer', 'Orders by Customer');
   }
   function exportMaterial() {
@@ -894,10 +897,10 @@ function Trends() {
         </div>
         <div className="tw sy" style={{ maxHeight: 300 }}>
           <table>
-            <thead><tr><th>Customer</th><th style={rt}>Open SOs</th><th style={rt}>PO Qty</th><th style={rt}>Balance Qty</th><th style={rt}>Value (₹)</th></tr></thead>
+            <thead><tr><th>Customer</th><th style={rt}>Open SOs</th><th style={rt}>PO Qty</th><th style={rt}>Balance Qty</th><th style={rt}>PO Value (₹)</th><th style={rt}>Balance Value (₹)</th></tr></thead>
             <tbody>
-              {byCustomer.length === 0 ? <tr><td colSpan={5} style={emptyTd}>No open orders</td></tr>
-                : byCustomer.map((c, i) => <tr key={i}><td style={{ fontSize: 11 }}>{c.customer}</td><td style={rt}>{c.orders}</td><td style={rt}>{dash(c.poQty)}</td><td style={rt}>{dash(c.balQty)}</td><td style={rt}>{rupees(c.value, 0)}</td></tr>)}
+              {byCustomer.length === 0 ? <tr><td colSpan={6} style={emptyTd}>No open orders</td></tr>
+                : byCustomer.map((c, i) => <tr key={i}><td style={{ fontSize: 11 }}>{c.customer}</td><td style={rt}>{c.orders}</td><td style={rt}>{dash(c.poQty)}</td><td style={rt}>{dash(c.balQty)}</td><td style={rt}>{rupees(c.value, 0)}</td><td style={rt}>{rupees(c.balValue, 0)}</td></tr>)}
             </tbody>
           </table>
         </div>

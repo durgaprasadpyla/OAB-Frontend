@@ -354,7 +354,7 @@ describe('Sales Admin — rep accounts', () => {
     await userEvent.type(screen.getByLabelText('Rep full name'), 'Rep Four');
     await userEvent.type(screen.getByLabelText('Rep username'), 'rep4');
     await userEvent.type(screen.getByLabelText('Rep password'), 'secret');
-    await userEvent.click(screen.getByText('Add rep'));
+    await userEvent.click(screen.getByText('Add sales user'));
 
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const blob = saved.filter((s) => s.key === 'sales').pop().data;
@@ -368,7 +368,7 @@ describe('Sales Admin — rep accounts', () => {
     await userEvent.type(screen.getByLabelText('Rep full name'), 'Clash');
     await userEvent.type(screen.getByLabelText('Rep username'), 'rep1');
     await userEvent.type(screen.getByLabelText('Rep password'), 'x');
-    await userEvent.click(screen.getByText('Add rep'));
+    await userEvent.click(screen.getByText('Add sales user'));
 
     expect(screen.getByText(/already taken/)).toBeInTheDocument();
     expect(saved.some((s) => s.key === 'sales')).toBe(false);

@@ -310,6 +310,11 @@ export default function Invoice() {
       {pendInv && (
         <div style={{ marginTop: 8 }}>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+            {/* §39: an explicit exit from the invoice/PDF view back to the invoices
+                screen — no refresh needed. */}
+            <button className="btn btn-r" onClick={() => { setPendInv(null); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }}>
+              ✕ Close — back to Invoices
+            </button>
             <button className="btn btn-s" onClick={() => setPendInv(null)}>← Back to Edit</button>
             <button className="btn btn-g" onClick={savePDF} disabled={pdfBusy}>{pdfBusy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>

@@ -22,18 +22,20 @@ export default function MisStatus() {
   const [pending, setPending] = useState([]);
   const [prod, setProd] = useState([]);
   const [util, setUtil] = useState([]);
+  const [delays, setDelays] = useState([]);   // §59/§82: runs that started late
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [pd, pr, u] = await Promise.all([
+      const [pd, pr, u, dl] = await Promise.all([
         productionApi.pending(),
         reportsApi.production(from, to, 'department'),
         reportsApi.utilization(from, to),
+        reportsApi.delays(from, to),
       ]);
-      setPending(pd || []); setProd(pr || []); setUtil(u || []);
+      setPending(pd || []); setProd(pr || []); setUtil(u || []); setDelays(dl || []);
     } catch (e) { setErr(e.message || 'Failed to load status'); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -76,6 +78,7 @@ export default function MisStatus() {
         <button className={'step-tab' + (tab === 'status' ? ' on' : '')} onClick={() => setTab('status')}>Status board</button>
         <button className={'step-tab' + (tab === 'pva' ? ' on' : '')} onClick={() => setTab('pva')}>Planned vs Actual</button>
         <button className={'step-tab' + (tab === 'util' ? ' on' : '')} onClick={() => setTab('util')}>Machine Utilization</button>
+        <button className={'step-tab' + (tab === 'delays' ? ' on' : '')} onClick={() => setTab('delays')}>⏰ Delayed Starts{delays.length ? ` (${delays.length})` : ''}</button>
       </div>
 
       {loading && <div className="card" style={{ marginTop: 12 }}><div className="spin" /> Loading…</div>}
@@ -85,13 +88,20 @@ export default function MisStatus() {
           <div className="ctitle">Pending stages <span className="tag ty">{pending.length}</span></div>
           {pending.length === 0 ? <div className="al al-g">Nothing pending — every planned stage is complete.</div> : (
             <div className="tw sy"><table>
-              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Remaining</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Remaining</th><th>Planned date</th><th>Actual date</th><th>Delay</th><th>Status</th><th></th></tr></thead>
               <tbody>{pending.map((p, i) => (
-                <tr key={i} className="hi">
+                <tr key={i} className={Number(p.delayDays) > 0 ? 'nr' : 'hi'}>
                   <td><span className="so-pill">{p.so}</span></td>
                   <td>{p.stageSeq}</td>
                   <td>{p.departmentName}</td>
                   <td><b>{p.remaining}</b></td>
+                  <td>{p.plannedDate || '—'}</td>
+                  <td>{p.actualDate || '—'}</td>
+                  <td>{p.delayDays != null
+                    ? (Number(p.delayDays) > 0
+                      ? <span className="tag tr">{p.delayDays} day(s) late</span>
+                      : <span className="tag tg">on time</span>)
+                    : '—'}</td>
                   <td><span className={'tag ' + statusTag(p.status)}>{p.status}</span></td>
                   <td><button className="btn btn-s" onClick={() => nav('/production')}>Record</button></td>
                 </tr>))}</tbody>
@@ -119,12 +129,35 @@ export default function MisStatus() {
           <div className="ctitle">Machine Utilization</div>
           {util.length === 0 ? <div className="al al-g">No machines.</div> : (
             <div className="tw sy"><table>
-              <thead><tr><th>Machine</th><th>Avail min</th><th>Planned min</th><th>Changeover</th><th>Idle min</th><th>Util %</th><th>Actual qty</th><th>Wastage</th></tr></thead>
+              <thead><tr><th>Machine</th><th>Avail min</th><th>Planned min</th><th>Actual min</th><th>Changeover</th><th>Idle min</th><th>Util %</th><th>Actual qty</th><th>Wastage</th></tr></thead>
               <tbody>{util.map((m, i) => (
                 <tr key={i}>
-                  <td>{m.machine}</td><td>{n1(m.availableMinutes)}</td><td>{n1(m.plannedMinutes)}</td><td>{n1(m.changeoverMinutes)}</td><td>{n1(m.idleMinutes)}</td>
+                  <td>{m.machine}</td><td>{n1(m.availableMinutes)}</td><td>{n1(m.plannedMinutes)}</td><td>{n1(m.actualMinutes)}</td><td>{n1(m.changeoverMinutes)}</td><td>{n1(m.idleMinutes)}</td>
                   <td><span className={'tag ' + (Number(m.utilizationPct) > 100 ? 'tr' : Number(m.utilizationPct) > 0 ? 'tb' : 'tgr')}>{m.utilizationPct}%</span></td>
                   <td>{m.actualQty}</td><td>{m.wastageQty}</td></tr>))}</tbody>
+            </table></div>
+          )}
+        </div>
+      )}
+
+      {/* §59/§82: jobs that started later than planned, highlighted for MIS */}
+      {!loading && tab === 'delays' && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="ctitle">Delayed Starts <span className={'tag ' + (delays.length ? 'tr' : 'tg')}>{delays.length}</span></div>
+          {delays.length === 0 ? <div className="al al-g">No delayed starts in this period.</div> : (
+            <div className="tw sy"><table>
+              <thead><tr><th>Date</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Started</th><th>Ended</th><th>Duration</th><th>Late by</th><th>By</th></tr></thead>
+              <tbody>{delays.map((d) => (
+                <tr key={d.id} className="nr">
+                  <td>{d.prodDate}</td>
+                  <td><span className="so-pill">{d.so}</span></td>
+                  <td>{d.departmentName}</td>
+                  <td>{d.machineName || '—'}</td>
+                  <td>{d.startTime}</td><td>{d.endTime || '—'}</td>
+                  <td>{d.durationMin != null ? `${d.durationMin} min` : '—'}</td>
+                  <td><span className="tag tr">{d.delayMin} min</span></td>
+                  <td>{d.actor}</td>
+                </tr>))}</tbody>
             </table></div>
           )}
         </div>

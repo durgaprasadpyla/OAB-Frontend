@@ -17,6 +17,8 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
   const [wastage, setWastage] = useState('');
   const [machineId, setMachineId] = useState('');
   const [prodDate, setProdDate] = useState(today());
+  const [startTime, setStartTime] = useState('');   // §59: actual start (HH:mm)
+  const [endTime, setEndTime] = useState('');       // §59: actual end (HH:mm)
   const [err, setErr] = useState('');
 
   async function submit(e) {
@@ -25,7 +27,8 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
     if (p + w <= 0) { setErr('Enter a produced and/or wastage quantity'); return; }
     if (p + w > Number(stage.remaining) + 1e-9) { setErr(`Only ${stage.remaining} remain at this stage`); return; }
     try {
-      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, machineId: machineId ? Number(machineId) : undefined, prodDate });
+      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, machineId: machineId ? Number(machineId) : undefined, prodDate,
+        startTime: startTime || undefined, endTime: endTime || undefined });
     } catch (e2) { setErr(e2.message || 'Save failed'); }
   }
 
@@ -39,6 +42,12 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
         <div className="fg"><label>Actual produced (good)</label><input type="number" step="any" value={produced} onChange={(e) => setProduced(e.target.value)} /></div>
         <div className="fg"><label>Wastage</label><input type="number" step="any" value={wastage} onChange={(e) => setWastage(e.target.value)} /></div>
         <div className="fg"><label>Date</label><input type="date" value={prodDate} onChange={(e) => setProdDate(e.target.value)} /></div>
+      </div>
+      {/* §59: actual start/end → the server computes duration and start-delay vs plan. */}
+      <div className="g3">
+        <div className="fg"><label>Start time (actual)</label><input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div>
+        <div className="fg"><label>End time (actual)</label><input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div>
+        <div className="fg"><label>&nbsp;</label><div className="pg-sub" style={{ paddingTop: 8, margin: 0 }}>Duration and any delayed start vs the plan are computed automatically.</div></div>
       </div>
       <div className="fg">
         <label>Machine (optional)</label>
@@ -271,15 +280,20 @@ export default function Production() {
               <div className="ctitle" style={{ marginTop: 14 }}>Production log</div>
               <div className="tw">
                 <table>
-                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>By</th></tr></thead>
+                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>Start–End</th><th>Duration</th><th>Delay</th><th>By</th></tr></thead>
                   <tbody>
                     {prod.runs.map((r) => (
-                      <tr key={r.id}>
+                      <tr key={r.id} className={Number(r.delayMin) > 0 ? 'nr' : undefined}>
                         <td>{r.prodDate || ''}</td>
                         <td>{r.departmentName}</td>
                         <td>{r.machineName || '—'}</td>
                         <td>{r.producedQty}</td>
                         <td>{r.wastageQty}</td>
+                        <td>{r.startTime ? `${r.startTime}–${r.endTime || '…'}` : '—'}</td>
+                        <td>{r.durationMin != null ? `${r.durationMin} min` : '—'}</td>
+                        <td>{r.delayMin != null && Number(r.delayMin) > 0
+                          ? <span className="tag tr">late {r.delayMin} min</span>
+                          : r.delayMin != null ? <span className="tag tg">on time</span> : '—'}</td>
                         <td>{r.actor}</td>
                       </tr>
                     ))}

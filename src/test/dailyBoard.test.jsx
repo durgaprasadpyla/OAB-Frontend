@@ -22,16 +22,19 @@ describe('DailyBoard page', () => {
   beforeEach(() => installFetch());
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('shows the Plant readiness on the pool and opens the plan-quantity prompt on drop', async () => {
+  it('shows the Plant readiness on the pool and opens the plan-quantity prompt on a shift drop', async () => {
     render(<DailyBoard />);
     await waitFor(() => expect(screen.getByText('26/500')).toBeInTheDocument());
     // the planner sees the Plant's readiness read-only on the pool card
     expect(screen.getByText('Partial')).toBeInTheDocument();
     expect(screen.getByText(/ready 6000/)).toBeInTheDocument();
-    // the machine card is present
-    const machine = await screen.findByText('CIFLEXO');
-    // drop the SO onto the machine (event bubbles to the card's onDrop)
-    fireEvent.drop(machine, { dataTransfer: soTransfer });
+    // the machine card is present, split into shift A/B drop zones (§77)
+    await screen.findByText('CIFLEXO');
+    expect(screen.getByText(/Shift A · day/)).toBeInTheDocument();
+    expect(screen.getByText(/Shift B · night/)).toBeInTheDocument();
+    // drop the SO onto the machine's Shift A zone
+    const zones = screen.getAllByText('Drop an SO here');
+    fireEvent.drop(zones[0], { dataTransfer: soTransfer });
     // the plan-quantity prompt appears, capped at the ready qty for the department
     await waitFor(() => expect(screen.getByText(/All ready qty on this machine/)).toBeInTheDocument());
     expect(screen.getByText(/Split across machines/)).toBeInTheDocument();

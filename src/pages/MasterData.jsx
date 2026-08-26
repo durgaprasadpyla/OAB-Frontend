@@ -23,6 +23,10 @@ const ITEM_EXPORT_COLS = [
 const TABS = [
   { key: 'departments', label: 'Departments' },
   { key: 'machines', label: 'Machines' },
+  // §7-10: pick a Department, see/add the machines that fall under it (name, hours,
+  // ideal speed + unit) and enable/disable them — disabled machines drop out of the
+  // PPC board and route selection.
+  { key: 'allocation', label: 'Machine ⇄ Department' },
   { key: 'routes', label: 'Routes' },
   { key: 'dispatch', label: 'Dispatch Types' },
   { key: 'items', label: 'Item Master' },
@@ -236,6 +240,7 @@ export default function MasterData() {
   const canResolve = role === 'superadmin' || role === 'stores';               // resolve alerts
 
   const [tab, setTab] = useState('departments');
+  const [allocDept, setAllocDept] = useState('');   // §7: department picked on the allocation tab
   const [alerts, setAlerts] = useState([]);
   const [notes, setNotes] = useState([]);
   const [importResult, setImportResult] = useState(null);
@@ -357,6 +362,59 @@ export default function MasterData() {
               r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null} />
         )}
+        {tab === 'allocation' && (
+          <div>
+            <div className="fbar" style={{ justifyContent: 'space-between' }}>
+              <div className="fg" style={{ margin: 0, minWidth: 260 }}>
+                <label>Department</label>
+                <select value={allocDept} onChange={(e) => setAllocDept(e.target.value)} aria-label="Allocation department">
+                  <option value="">— select a department —</option>
+                  {opt(d.departments).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              </div>
+              {canConfig && allocDept && (
+                <button className="btn btn-g" onClick={() => setModal({ type: 'machines', row: { departmentId: Number(allocDept) } })}>
+                  ＋ Add machine to this department
+                </button>
+              )}
+            </div>
+            {!allocDept ? (
+              <div className="al al-b" style={{ marginTop: 10 }}>Pick a department to see and manage the machines allocated to it.</div>
+            ) : (() => {
+              const list = (d.machines || []).filter((m) => String(m.departmentId) === String(allocDept));
+              return list.length === 0 ? (
+                <div className="al al-y" style={{ marginTop: 10 }}>No machines under this department yet.</div>
+              ) : (
+                <div className="tw sy" style={{ marginTop: 10 }}>
+                  <table>
+                    <thead><tr><th>Code</th><th>Machine</th><th>Ideal speed</th><th>Hrs/day</th><th>Status</th>{canConfig && <th style={{ width: 200 }}>Actions</th>}</tr></thead>
+                    <tbody>
+                      {list.map((m) => (
+                        <tr key={m.id} className={m.active === false ? 'nr' : undefined}>
+                          <td>{m.code}</td>
+                          <td>{m.name}</td>
+                          <td>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>
+                          <td>{m.functionalHoursPerDay ?? '—'}</td>
+                          <td><span className={'tag ' + (m.active === false ? 'tr' : 'tg')}>{m.active === false ? 'Disabled' : 'Enabled'}</span></td>
+                          {canConfig && (
+                            <td>
+                              <button className="btn btn-s" onClick={() => setModal({ type: 'machines', row: m })}>Edit</button>{' '}
+                              {/* §10: disabling here removes the machine from the PPC board + route selection. */}
+                              <button className={'btn ' + (m.active === false ? 'btn-g' : 'btn-r')}
+                                onClick={() => save('machines', m, { active: m.active === false })}>
+                                {m.active === false ? 'Enable' : 'Disable'}
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        )}
         {tab === 'routes' && (
           <Section title="Routes" canAdd={canConfig} onAdd={() => setModal({ type: 'routes', row: {} })}
             cols={['Dispatch Form', 'Name', 'Code', 'Stages (in order)', 'Active']} rows={d.routes}
@@ -404,12 +462,13 @@ export default function MasterData() {
             {alerts.length === 0 ? <div className="al al-g">No open shortages.</div> : (
               <div className="tw sy">
                 <table>
-                  <thead><tr><th>Sale Order</th><th>Item</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
+                  <thead><tr><th>Sale Order</th><th>Item</th><th>Needed by</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
                   <tbody>
                     {alerts.map((a) => (
                       <tr key={a.id} className="nr">
                         <td><span className="so-pill">{a.so}</span></td>
                         <td>{a.itemCode}{a.itemName ? ' — ' + a.itemName : ''}</td>
+                        <td>{a.departmentName || '—'}</td>
                         <td>{a.requiredQty}</td>
                         <td>{a.availableQty}</td>
                         <td><b>{a.shortageQty}</b></td>
