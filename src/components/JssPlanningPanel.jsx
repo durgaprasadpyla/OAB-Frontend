@@ -62,10 +62,15 @@ export default function JssPlanningPanel() {
     (master.machines || []).forEach((mc) => { if (mc.departmentId != null) (m[mc.departmentId] = m[mc.departmentId] || []).push(mc); });
     return m;
   }, [master.machines]);
+  // §15: the routes that belong to the JSS's selected Dispatch Form — the QC picks one by radio.
+  const formRoutes = useMemo(
+    () => (master.routes || []).filter((r) => jss?.config?.dispatchTypeId != null && String(r.dispatchTypeId) === String(jss.config.dispatchTypeId)),
+    [master.routes, jss?.config?.dispatchTypeId],
+  );
 
   async function setDispatch(dispatchTypeId) {
     setErr('');
-    try { await jssApi.setConfig(spec, { dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null }); flash('Dispatch type saved — route auto-selected'); await loadSpec(spec); }
+    try { await jssApi.setConfig(spec, { dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null }); flash('Dispatch Form saved - now choose one of its routes below'); await loadSpec(spec); }
     catch (e) { setErr(e.message); }
   }
   async function setRoute(routeId) {
@@ -103,7 +108,7 @@ export default function JssPlanningPanel() {
 
   return (
     <div>
-      <div className="pg-sub">Configure the route, eligible machines (speed &amp; changeover) and the department-wise BOM for a JSS. The route is chosen automatically from the Dispatch Type.</div>
+      <div className="pg-sub">Configure the route, eligible machines (speed &amp; changeover) and the department-wise BOM for a JSS. Pick the Dispatch Form, then choose one of its routes.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
 
@@ -133,11 +138,22 @@ export default function JssPlanningPanel() {
                 </select>
               </div>
               <div className="fg">
-                <label>Route {jss.config?.dispatchTypeId ? '(auto — editable)' : ''}</label>
-                <select value={jss.config?.routeId ?? ''} onChange={(e) => setRoute(e.target.value)}>
-                  <option value="">— none —</option>
-                  {master.routes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
+                <label>Route — select one for this JSS</label>
+                {!jss.config?.dispatchTypeId ? (
+                  <div className="al al-b" style={{ marginTop: 4 }}>Pick a Dispatch Form first — its routes appear here to choose from.</div>
+                ) : formRoutes.length === 0 ? (
+                  <div className="al al-y" style={{ marginTop: 4 }}>No routes are configured for this Dispatch Form yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4 }}>
+                    {formRoutes.map((r) => (
+                      <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                        <input type="radio" name="jss-route" checked={String(jss.config?.routeId ?? '') === String(r.id)}
+                          onChange={() => setRoute(r.id)} />
+                        <span>{r.name}{(r.stages && r.stages.length) ? ' — ' + r.stages.map((s) => s.departmentName).join(' → ') : ''}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="fg">
                 <label>Departments (in order)</label>

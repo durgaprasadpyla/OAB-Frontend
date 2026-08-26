@@ -103,9 +103,11 @@ function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
 }
 
 /** Route form with an ordered-stage (department) editor. */
-function RouteForm({ initial, departments, onSubmit, onCancel }) {
+function RouteForm({ initial, departments, dispatchTypes, onSubmit, onCancel }) {
   const [name, setName] = useState(initial?.name || '');
   const [code, setCode] = useState(initial?.code || '');
+  // §4/§13: the Dispatch Form this route belongs to (a form owns many routes).
+  const [dispatchTypeId, setDispatchTypeId] = useState(initial?.dispatchTypeId != null ? String(initial.dispatchTypeId) : '');
   const [description, setDescription] = useState(initial?.description || '');
   const [active, setActive] = useState(initial ? initial.active !== false : true);
   const [stages, setStages] = useState((initial?.stages || []).map((s) => String(s.departmentId)));
@@ -125,6 +127,7 @@ function RouteForm({ initial, departments, onSubmit, onCancel }) {
     if (!name.trim()) { setErr('Route name is required'); return; }
     const body = {
       name: name.trim(), code: code.trim() || undefined,
+      dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null,
       description: description.trim() || undefined, active,
       stages: stages.map((id) => ({ departmentId: Number(id) })),
     };
@@ -134,6 +137,13 @@ function RouteForm({ initial, departments, onSubmit, onCancel }) {
   return (
     <form onSubmit={submit}>
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
+      <div className="fg">
+        <label>Dispatch Form (a form can have many routes)</label>
+        <select value={dispatchTypeId} onChange={(e) => setDispatchTypeId(e.target.value)}>
+          <option value="">— unassigned —</option>
+          {opt(dispatchTypes).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
       <div className="g3">
         <div className="fg"><label>Route name *</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="fg"><label>Code</label><input value={code} onChange={(e) => setCode(e.target.value)} /></div>
@@ -349,8 +359,8 @@ export default function MasterData() {
         )}
         {tab === 'routes' && (
           <Section title="Routes" canAdd={canConfig} onAdd={() => setModal({ type: 'routes', row: {} })}
-            cols={['Name', 'Code', 'Stages (in order)', 'Active']} rows={d.routes}
-            render={(r) => [r.name, r.code, (r.stages || []).map((s) => s.departmentName).join(' → ') || '—', r.active ? 'Yes' : 'No']}
+            cols={['Dispatch Form', 'Name', 'Code', 'Stages (in order)', 'Active']} rows={d.routes}
+            render={(r) => [r.dispatchTypeName || '—', r.name, r.code, (r.stages || []).map((s) => s.departmentName).join(' → ') || '—', r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'routes', row: r }) : null} />
         )}
         {tab === 'dispatch' && (
@@ -460,7 +470,7 @@ export default function MasterData() {
       </Modal>
 
       <Modal open={modal?.type === 'routes'} wide title={modal?.row?.id ? 'Edit Route' : 'Add Route'} onClose={close}>
-        <RouteForm initial={modal?.row} departments={d.departments} onCancel={close}
+        <RouteForm initial={modal?.row} departments={d.departments} dispatchTypes={d.dispatch} onCancel={close}
           onSubmit={(b) => save('routes', modal.row, b)} />
       </Modal>
 

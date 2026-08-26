@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth.jsx';
 import MasterData from '../pages/MasterData.jsx';
@@ -89,6 +89,25 @@ describe('MasterData page', () => {
     expect(screen.getByRole('button', { name: 'Routes' })).toBeInTheDocument();
     // superadmin gets an Add button for the config section
     expect(screen.getByRole('button', { name: /Add/ })).toBeInTheDocument();
+  });
+
+  it('routes belong to a Dispatch Form — shows the column and the form dropdown (§4/§13)', async () => {
+    renderMaster('superadmin', {
+      departments: [{ id: 1, name: 'Printing', active: true }],
+      dispatch: [{ id: 9, name: 'Pouch', active: true }, { id: 10, name: 'Roll', active: true }],
+      routes: [{ id: 5, name: 'Pouch-A', code: 'PA', active: true, dispatchTypeId: 9, dispatchTypeName: 'Pouch',
+        stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] }],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Routes' }));
+    // the route list carries a Dispatch Form column with the route's form
+    expect(await screen.findByText('Dispatch Form')).toBeInTheDocument();
+    expect(screen.getByText('Pouch')).toBeInTheDocument();
+    // Add Route → the form offers a Dispatch Form dropdown listing every form
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    const dlg = await screen.findByRole('dialog');
+    expect(within(dlg).getByText(/Dispatch Form/)).toBeInTheDocument();
+    expect(within(dlg).getByRole('option', { name: 'Pouch' })).toBeInTheDocument();
+    expect(within(dlg).getByRole('option', { name: 'Roll' })).toBeInTheDocument();
   });
 
   it('shows a read-only view for planner (no Add controls)', async () => {

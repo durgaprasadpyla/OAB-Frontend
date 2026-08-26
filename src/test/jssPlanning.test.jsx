@@ -28,7 +28,10 @@ function installFetch() {
       { id: 12, code: 'POUCH1', name: 'Pouching 1', departmentId: 5 },
     ]);
     if (u.includes('/api/master/dispatch-types')) return res([{ id: 100, name: 'Pouch', defaultRouteId: 200 }]);
-    if (u.includes('/api/master/routes')) return res([{ id: 200, name: 'Print-Pouch' }]);
+    if (u.includes('/api/master/routes')) return res([
+      { id: 200, name: 'Print-Pouch', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
+      { id: 201, name: 'Print-Roll', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
+    ]);
     if (u.includes('/api/master/items')) return res([{ id: 1000, code: 'FILM', name: 'Film XYZ' }]);
 
     if (u.match(/\/api\/jss\/A1\/config$/) && method === 'PUT') {
@@ -81,5 +84,27 @@ describe('JssPlanningPanel', () => {
     // the config PUT was actually sent
     const putCalls = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).endsWith('/api/jss/A1/config') && (o?.method || '').toUpperCase() === 'PUT');
     expect(putCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows the Dispatch Form routes as radios and lets the QC pick one (§15)', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+
+    // pick the Dispatch Form
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+
+    // the form's routes appear as radio choices
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Print-Pouch/ })).toBeInTheDocument());
+    expect(screen.getByRole('radio', { name: /Print-Roll/ })).toBeInTheDocument();
+
+    // the QC picks the second route → a config PUT with that routeId is sent
+    fireEvent.click(screen.getByRole('radio', { name: /Print-Roll/ }));
+    await waitFor(() => {
+      const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).endsWith('/api/jss/A1/config') && (o?.method || '').toUpperCase() === 'PUT');
+      expect(puts.some(([, o]) => JSON.parse(o.body).routeId === 201)).toBe(true);
+    });
   });
 });
