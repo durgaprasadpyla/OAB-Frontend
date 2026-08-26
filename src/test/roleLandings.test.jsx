@@ -47,8 +47,9 @@ describe('role landings — PPC / MIS / PLAN', () => {
     expect(tabs.filter((t) => t === '/ppc')).toHaveLength(1);
     // The previous per-screen planning tabs are gone from the ops nav.
     ['/planner', '/board', '/production', '/reports'].forEach((t) => expect(tabs).not.toContain(t));
-    // Master Data stays (Enhancements 2.0 §6) and the core ops tabs are untouched.
-    expect(tabs).toContain('/master');
+    // Enhancements 2.0 §6: Master Data is no longer a main-header tab (it moved into the
+    // Dashboard). The core ops tabs are untouched.
+    expect(tabs).not.toContain('/master');
     expect(tabs).toContain('/po');
   });
 

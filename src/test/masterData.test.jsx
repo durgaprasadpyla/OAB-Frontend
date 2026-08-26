@@ -29,13 +29,16 @@ describe('planning roles wiring', () => {
     ['user', 'qc', 'pm', 'plant', 'purchase', 'scrap', 'hr', 'sales'].forEach((r) => expect(canAccess(r, '/master')).toBe(false));
   });
 
-  it('adds a Master Data tab for superadmin and padmin, not other ops or panel roles', () => {
-    expect(navTabs('superadmin').some((t) => t.to === '/master')).toBe(true);
-    expect(navTabs('padmin').some((t) => t.to === '/master')).toBe(true);
-    expect(navTabs('user').some((t) => t.to === '/master')).toBe(false);
+  it('does NOT put Master Data in the main header — §6 moves it into the Dashboard', () => {
+    // Enhancements 2.0 §6: no separate main-header Master Data tab.
+    expect(navTabs('superadmin').some((t) => t.to === '/master')).toBe(false);
+    expect(navTabs('padmin').some((t) => t.to === '/master')).toBe(false);
     expect(navTabs('planner')).toEqual([]);   // panel role — no ops tabs
     // the existing ops tabs are still present
     expect(navTabs('superadmin').some((t) => t.to === '/po')).toBe(true);
+    // but the /master route is still reachable for the roles that use it directly
+    expect(canAccess('superadmin', '/master')).toBe(true);
+    expect(canAccess('stores', '/master')).toBe(true);
   });
 });
 

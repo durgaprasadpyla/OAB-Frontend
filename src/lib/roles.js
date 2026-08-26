@@ -59,10 +59,9 @@ export function navTabs(role) {
   if (role === 'superadmin') tabs.push({ to: '/hr', label: '👥 HR' });
   if (role === 'superadmin') tabs.push({ to: '/sdashboard', label: '💼 S Dashboard' });
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/pdashboard', label: '📦 P Dashboard' });
-  // Production-planning master data hub (routes, machines, departments, specialties,
-  // dispatch types, item master). Config is superadmin; padmin can manage items.
-  // (Enhancements 2.0 §6 keeps Master Data as a Super Admin tab.)
-  if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
+  // Enhancements 2.0 §6: Master Data is NOT a main-header tab — it is a tab INSIDE the
+  // Super Admin Dashboard (next to Drop-down selections). The standalone /master route
+  // still exists for the panel roles that land there (stores) / read it (planner).
   // Planning is consolidated behind ONE Super Admin entry — the PPC dashboard is a hub
   // that links out to Weekly, Daily Board, Production and Reports. We intentionally do
   // NOT add a separate nav tab per planning screen (Enhancements 2.0: role-specific

@@ -16,6 +16,7 @@ import KamPanel from '../components/KamPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 import FgValuePanel from '../components/FgValuePanel.jsx';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
+import MasterData from './MasterData.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -33,6 +34,7 @@ const TABS = [
   { k: 'kam', label: '🎯 Customer KAM & Targets' },
   { k: 'users', label: '👤 Users & Access' },
   { k: 'dropdowns', label: '🧩 Drop-down selections' },
+  { k: 'master', label: '🗂 Master Data' },
   { k: 'bom', label: '🧱 BOM' },
   { k: 'material', label: '🧮 Raw Material' },
   { k: 'costing', label: '🧮 SO Costing' },
@@ -67,6 +69,7 @@ export default function Dashboard() {
       {tab === 'material' && <RawMaterialPanel />}
       {tab === 'fgval' && <FgValuePanel />}
       {tab === 'dropdowns' && <DropdownAdmin />}
+      {tab === 'master' && <MasterData />}
       {tab === 'users' && <UsersAccess />}
       {tab === 'audit' && <AuditLog />}
       {tab === 'system' && <SystemPanel />}

@@ -22,6 +22,13 @@ describe('Dashboard — newly integrated superadmin APIs', () => {
     expect(screen.getByText(/who did what/i)).toBeTruthy();
   });
 
+  it('Master Data is a tab inside the Super Admin Dashboard (§6)', async () => {
+    renderApp(<Dashboard />, { modules: seed, role: 'superadmin' });
+    fireEvent.click(await screen.findByText('🗂 Master Data'));
+    // the MasterData page content renders inside the Dashboard tab
+    await screen.findByText(/Production configuration/);
+  });
+
   it('System tab shows /api/summary rollups and runs a resync', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);      // auto-confirm the resync dialog
     renderApp(<Dashboard />, { modules: seed, role: 'superadmin' });

@@ -341,6 +341,13 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, { ok: true });
     }
 
+    // Production-planning masters + stock/notifications default to empty lists, so a page
+    // that reads them on mount (MasterData — now embedded in the Super Admin Dashboard, §6)
+    // renders cleanly without every test having to stub them.
+    if (u.includes('/api/master/')) return res(200, []);
+    if (u.includes('/api/stock/alerts')) return res(200, []);
+    if (u.includes('/api/notifications')) return res(200, []);
+
     if (u.includes('/rest/v1/oab_data')) {
       if (method === 'GET') {
         // Bulk read (id=in.(1,2,3,…)) — the SPA loads all modules in one request. It
