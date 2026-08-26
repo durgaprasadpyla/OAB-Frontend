@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useData } from '../data.jsx';
+import { useAuth } from '../auth.jsx';
+import { masterApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
 
 // Super-admin editor for the nine shared dropdown lists (module 12).
@@ -13,14 +15,26 @@ const UNITS = ['Micron', 'GSM'];
 
 export default function DropdownAdmin() {
   const { mods, save } = useData();
+  const { role } = useAuth();
   const sales = mods.sales || {};
 
-  const [sel, setSel] = useState(DROPDOWN_DEFS[0].key);
+  // Master-backed categories (Departments, §5) are Super-Admin-only. The sales dropdown
+  // editor (SalesAdmin, sadmin) shows only the sales-blob lists, unchanged.
+  const DEFS = useMemo(() => DROPDOWN_DEFS.filter((d) => !d.master || role === 'superadmin'), [role]);
+  const [sel, setSel] = useState(DEFS[0].key);
   const [work, setWork] = useState(null);      // null = showing the saved list
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const def = DROPDOWN_DEFS.find((d) => d.key === sel);
+  // Departments (Enhancements 2.0 §5) are backed by the normalized Department master, not
+  // the sales blob — so the PAdmin Item Master reads the same source (/api/master/departments).
+  const [depts, setDepts] = useState([]);
+  const loadDepts = useCallback(async () => {
+    try { const r = await masterApi.listDepartments({ includeInactive: 1 }); setDepts(Array.isArray(r) ? r : []); } catch { /* best-effort */ }
+  }, []);
+  useEffect(() => { if (role === 'superadmin') loadDepts(); }, [loadDepts, role]);
+
+  const def = DEFS.find((d) => d.key === sel) || DEFS[0];
   const saved = useMemo(() => ddList(sales, sel), [sales, sel]);
   const rows = work ?? saved;
   const dirty = work !== null;
@@ -67,15 +81,15 @@ export default function DropdownAdmin() {
         <div className="tw sy" style={{ maxHeight: 420 }}>
           <table>
             <tbody>
-              {DROPDOWN_DEFS.map((d) => (
+              {DEFS.map((d) => (
                 <tr
                   key={d.key} style={{ cursor: 'pointer', background: d.key === sel ? 'var(--gl)' : undefined }}
                   onClick={() => pick(d.key)}
                 >
                   <td>
                     <div style={{ fontWeight: 700, fontSize: 12.5, color: d.key === sel ? 'var(--g)' : 'var(--ink)' }}>
-                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({ddList(sales, d.key).length})</span>
-                      {ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
+                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
+                      {!d.master && ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 1 }}>{d.where}</div>
                   </td>
@@ -86,6 +100,9 @@ export default function DropdownAdmin() {
         </div>
       </div>
 
+      {def.master ? (
+        <DepartmentsPanel depts={depts} reload={loadDepts} />
+      ) : (
       <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>{def.label} <span className="tag tgr">{rows.length}</span></div>
@@ -139,6 +156,67 @@ export default function DropdownAdmin() {
           </table>
         </div>
         <button className="btn btn-s" style={{ marginTop: 8 }} onClick={addRow}>＋ Add</button>
+      </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Departments editor (Enhancements 2.0 §5). Lives under Dashboard → Drop-down selections,
+ * but is backed by the shared normalized Department master (/api/master/departments) so
+ * the PAdmin Item Master reads the same source. Add / rename / enable-disable; writes are
+ * Super Admin only (enforced server-side).
+ */
+function DepartmentsPanel({ depts, reload }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3000); };
+  const active = depts.filter((d) => d.active !== false);
+
+  async function add() {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    try { await masterApi.createDepartment({ name: n }); setName(''); flash('g', `Added “${n}”.`); await reload(); }
+    catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function rename(d, next) {
+    const n = String(next || '').trim();
+    if (!n || n === d.name) return;
+    try { await masterApi.updateDepartment(d.id, { name: n }); await reload(); }
+    catch (e) { flash('r', e.message || 'Rename failed'); }
+  }
+  async function toggle(d) {
+    try { await masterApi.updateDepartment(d.id, { active: d.active === false }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+
+  return (
+    <div className="card">
+      <div className="ctitle">Departments <span className="tag tgr">{active.length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>Production departments — configured here by Super Admin and used by the PAdmin Item Master Department dropdown (and machine / route setup).</div>
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="fbar">
+        <input placeholder="New department name" value={name} aria-label="New department name"
+          onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+        <button className="btn btn-g" onClick={add} disabled={busy || !name.trim()}>＋ Add</button>
+      </div>
+      <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
+        <table>
+          <thead><tr><th>Department</th><th style={{ width: 96 }}>Status</th></tr></thead>
+          <tbody>
+            {depts.length === 0 ? (
+              <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No departments yet — add one above.</td></tr>
+            ) : depts.map((d) => (
+              <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
+                <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} /></td>
+                <td><button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

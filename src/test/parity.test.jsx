@@ -53,7 +53,8 @@ describe('ddList — overrides vs defaults', () => {
   });
 
   it('covers all nine lists with a default each', () => {
-    DROPDOWN_DEFS.forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
+    // Master-backed categories (e.g. Departments) draw from a live master, not DD_DEFAULTS.
+    DROPDOWN_DEFS.filter((d) => !d.master).forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
   });
 });
 

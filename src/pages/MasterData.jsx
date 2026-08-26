@@ -6,7 +6,7 @@ import Modal from '../components/Modal.jsx';
 
 const ITEM_EXPORT_COLS = [
   { key: 'code', label: 'code' }, { key: 'name', label: 'name' }, { key: 'uom', label: 'uom' },
-  { key: 'specialtyName', label: 'specialty' }, { key: 'departmentName', label: 'department' },
+  { key: 'departmentName', label: 'department' },
   { key: 'itemType', label: 'itemType' }, { key: 'materialType', label: 'materialType' },
   { key: 'subGroup', label: 'subGroup' }, { key: 'microns', label: 'microns' },
   { key: 'currentStock', label: 'currentStock' }, { key: 'reorderLevel', label: 'reorderLevel' },
@@ -18,9 +18,10 @@ const ITEM_EXPORT_COLS = [
 // can reach the page may read; write controls hide for roles that can't. The backend
 // re-checks every write, so this is convenience, not the only protection.
 
+// Enhancements 2.0 §1: Specialty is NOT a Super Admin tab — it is a per-item field on
+// the Padmin Item Master (see PDashboard.jsx). The Specialties config tab was removed.
 const TABS = [
   { key: 'departments', label: 'Departments' },
-  { key: 'specialties', label: 'Specialties' },
   { key: 'machines', label: 'Machines' },
   { key: 'routes', label: 'Routes' },
   { key: 'dispatch', label: 'Dispatch Types' },
@@ -29,6 +30,13 @@ const TABS = [
 
 const num = (v) => (v === '' || v == null ? '' : v);
 const opt = (list) => (list || []).filter((x) => x.active !== false);
+
+// Enhancements 2.0 §3/§8: machine speed unit is a dropdown — metres/minute or
+// pieces (pouches) per minute — never free text.
+const SPEED_UOMS = [
+  { id: 'm/min', name: 'Metres per minute (m/min)' },
+  { id: 'pcs/min', name: 'Pieces / pouches per minute (pcs/min)' },
+];
 
 /** Generic field-driven form used by the simple masters. */
 function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
@@ -222,7 +230,7 @@ export default function MasterData() {
   const [notes, setNotes] = useState([]);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [d, setD] = useState({ departments: [], specialties: [], machines: [], routes: [], dispatch: [], items: [] });
+  const [d, setD] = useState({ departments: [], machines: [], routes: [], dispatch: [], items: [] });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
@@ -232,15 +240,14 @@ export default function MasterData() {
   const reload = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [departments, specialties, machines, routes, dispatch, items] = await Promise.all([
+      const [departments, machines, routes, dispatch, items] = await Promise.all([
         masterApi.listDepartments({ includeInactive: 1 }),
-        masterApi.listSpecialties({ includeInactive: 1 }),
         masterApi.listMachines({ includeInactive: 1 }),
         masterApi.listRoutes({ includeInactive: 1 }),
         masterApi.listDispatchTypes({ includeInactive: 1 }),
         masterApi.listItems({ includeInactive: 1 }),
       ]);
-      setD({ departments, specialties, machines, routes, dispatch, items });
+      setD({ departments, machines, routes, dispatch, items });
     } catch (e) { setErr(e.message || 'Failed to load master data'); }
     finally { setLoading(false); }
   }, []);
@@ -290,7 +297,6 @@ export default function MasterData() {
       const api = masterApi;
       const call = {
         departments: id ? () => api.updateDepartment(id, body) : () => api.createDepartment(body),
-        specialties: id ? () => api.updateSpecialty(id, body) : () => api.createSpecialty(body),
         machines: id ? () => api.updateMachine(id, body) : () => api.createMachine(body),
         routes: id ? () => api.updateRoute(id, body) : () => api.createRoute(body),
         dispatch: id ? () => api.updateDispatchType(id, body) : () => api.createDispatchType(body),
@@ -309,7 +315,7 @@ export default function MasterData() {
   return (
     <div>
       <div className="pg-ttl">⚙️ Master Data</div>
-      <div className="pg-sub">Production configuration — routes, machines, departments, specialties, dispatch types and the item master.</div>
+      <div className="pg-sub">Production configuration — routes, machines, departments, dispatch types and the item master.</div>
 
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
@@ -333,12 +339,6 @@ export default function MasterData() {
             cols={['Name', 'Code', 'Order', 'Active']} rows={d.departments}
             render={(r) => [r.name, r.code, r.seqHint, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'departments', row: r }) : null} />
-        )}
-        {tab === 'specialties' && (
-          <Section title="Specialties" canAdd={canConfig} onAdd={() => setModal({ type: 'specialties', row: {} })}
-            cols={['Name', 'Code', 'Active']} rows={d.specialties}
-            render={(r) => [r.name, r.code, r.active ? 'Yes' : 'No']}
-            onEdit={canConfig ? (r) => setModal({ type: 'specialties', row: r }) : null} />
         )}
         {tab === 'machines' && (
           <Section title="Machines" canAdd={canConfig} onAdd={() => setModal({ type: 'machines', row: {} })}
@@ -382,8 +382,8 @@ export default function MasterData() {
               </div>
             )}
             <Section title="Item Master" canAdd={canItems} onAdd={() => setModal({ type: 'items', row: {} })}
-              cols={['Code', 'Name', 'UOM', 'Specialty', 'Department', 'Stock', 'Active']} rows={d.items}
-              render={(r) => [r.code, r.name, r.uom, r.specialtyName, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
+              cols={['Code', 'Name', 'UOM', 'Department', 'Stock', 'Active']} rows={d.items}
+              render={(r) => [r.code, r.name, r.uom, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
               onEdit={canItems ? (r) => setModal({ type: 'items', row: r }) : null}
               extra={canStock ? (r) => <button className="btn btn-b" onClick={() => setModal({ type: 'stock', row: r })}>Stock</button> : null} />
           </div>
@@ -444,16 +444,6 @@ export default function MasterData() {
           ]} />
       </Modal>
 
-      <Modal open={modal?.type === 'specialties'} title={modal?.row?.id ? 'Edit Specialty' : 'Add Specialty'} onClose={close}>
-        <EntityForm submitting={busy} onCancel={close} initial={modal?.row}
-          onSubmit={(b) => save('specialties', modal.row, b)}
-          fields={[
-            { key: 'name', label: 'Name', required: true },
-            { key: 'code', label: 'Code' },
-            { key: 'active', label: 'Active', type: 'checkbox' },
-          ]} />
-      </Modal>
-
       <Modal open={modal?.type === 'machines'} title={modal?.row?.id ? 'Edit Machine' : 'Add Machine'} onClose={close}>
         <EntityForm submitting={busy} onCancel={close} initial={modal?.row}
           onSubmit={(b) => save('machines', modal.row, b)}
@@ -463,7 +453,7 @@ export default function MasterData() {
             { key: 'departmentId', label: 'Department', type: 'select', options: d.departments },
             { key: 'machineType', label: 'Machine type' },
             { key: 'defaultSpeed', label: 'Default speed (per min)', type: 'number' },
-            { key: 'speedUom', label: 'Speed UOM', placeholder: 'm/min, pouches/min' },
+            { key: 'speedUom', label: 'Speed unit', type: 'select', options: SPEED_UOMS },
             { key: 'functionalHoursPerDay', label: 'Functional hrs/day', type: 'number' },
             { key: 'active', label: 'Active', type: 'checkbox' },
           ]} />
@@ -492,7 +482,6 @@ export default function MasterData() {
             { key: 'code', label: 'Item code', required: true },
             { key: 'name', label: 'Item name', required: true },
             { key: 'uom', label: 'UOM' },
-            { key: 'specialtyId', label: 'Specialty', type: 'select', options: d.specialties },
             { key: 'departmentId', label: 'Department', type: 'select', options: d.departments },
             { key: 'itemType', label: 'Item type' },
             { key: 'materialType', label: 'Material type' },

@@ -17,6 +17,11 @@ const arr = (v) => (Array.isArray(v) ? v : []);
 
 /** The editable lists, with where each one surfaces. (DROPDOWN_DEFS) */
 export const DROPDOWN_DEFS = [
+  // Enhancements 2.0 §5: production Departments are configured here. Unlike the other
+  // lists (stored in the sales blob), Departments are backed by the shared normalized
+  // Department master (/api/master/departments) so the PAdmin Item Master — which cannot
+  // read the sales blob — reads the same source. `master: true` flags that backing.
+  { key: 'departments', label: 'Departments', where: 'PAdmin — Item Master', type: 'list', master: true },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   { key: 'despatch', label: 'Dispatch Forms', where: 'Sales Rep — SKUs', type: 'list' },
   { key: 'paytypes', label: 'Customer Payment Types', where: 'Sales Rep — Add Customer', type: 'pairs' },
