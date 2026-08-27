@@ -119,21 +119,32 @@ export default function DailyBoard() {
       </div>
 
       <div className="g2" style={{ marginTop: 12, alignItems: 'start' }}>
-        {/* Ready-to-Plan pool */}
+        {/* Ready-to-Plan pool. §81: a fully planned SO drops out of the pool; a
+            partially planned one stays with its balance metres visible. */}
         <div className="card">
-          <div className="ctitle">Ready to Plan <span className="tag ty">{pool.length}</span></div>
-          {pool.length === 0 ? <div className="al al-b">No SOs marked Ready to Plan.</div> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {pool.map((p) => (
-                <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
-                  style={{ border: '1px solid var(--bd)', borderRadius: 8, padding: '8px 10px', cursor: 'grab', background: 'var(--gl)' }}>
-                  <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
-                  <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
-                  <span className="tag ty">ready {p.readyQty}</span> <span className="tag tgr">planned {p.plannedQty}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {(() => {
+            const open = pool.filter((p) => !p.fullyPlanned);
+            const done = pool.length - open.length;
+            return (
+              <>
+                <div className="ctitle">Ready to Plan <span className="tag ty">{open.length}</span></div>
+                {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned.</div> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {open.map((p) => (
+                      <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
+                        style={{ border: '1px solid var(--bd)', borderRadius: 8, padding: '8px 10px', cursor: 'grab', background: 'var(--gl)' }}>
+                        <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
+                        <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
+                        <span className="tag ty">ready {p.readyQty}</span>
+                        {p.remainingQty != null && <span className="tag tr" style={{ marginLeft: 4 }}>balance {p.remainingQty}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {done > 0 && <div className="pg-sub" style={{ marginTop: 6 }}>✅ {done} sale order(s) fully planned — removed from the pool.</div>}
+              </>
+            );
+          })()}
           <div className="pg-sub" style={{ marginTop: 8 }}>Tip: drag a card onto a machine →</div>
         </div>
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { planningApi } from '../api.js';
 import { today } from '../lib/format.js';
+import PlanDownloads from '../components/PlanDownloads.jsx';
 
 // Weekly planner (Stage 6): pick Ready-to-Plan SOs and assign quantities to eligible
 // machines on specific dates. The server checks eligibility, caps each department at
@@ -92,29 +93,39 @@ export default function WeeklyPlanner() {
         </div>
       </div>
 
-      {/* Ready-to-Plan pool */}
+      {/* Ready-to-Plan pool. §81: fully planned SOs drop out; partials keep their balance visible. */}
       <div className="card" style={{ marginTop: 12 }}>
-        <div className="ctitle">Ready to Plan <span className="tag ty">{pool.length}</span></div>
-        {pool.length === 0 ? <div className="al al-b">No SOs are marked Ready to Plan yet (Plant marks them on the Production screen).</div> : (
-          <div className="tw sy">
-            <table>
-              <thead><tr><th>Sale Order</th><th>Spec</th><th>Job</th><th>Route</th><th>Job Qty</th><th>Status</th><th>Ready</th><th>Planned</th><th></th></tr></thead>
-              <tbody>
-                {pool.map((p) => (
-                  <tr key={p.so} className={so === p.so ? 'hi' : undefined}>
-                    <td><span className="so-pill">{p.so}</span></td>
-                    <td>{p.spec}</td><td>{p.jobName}</td><td>{p.routeName}</td>
-                    <td>{p.poQty}</td>
-                    <td><span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span></td>
-                    <td><b>{p.readyQty}</b></td>
-                    <td>{p.plannedQty}</td>
-                    <td><button className="btn btn-s" onClick={() => openSo(p.so)}>Plan</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {(() => {
+          const open = pool.filter((p) => !p.fullyPlanned);
+          const done = pool.length - open.length;
+          return (
+            <>
+              <div className="ctitle">Ready to Plan <span className="tag ty">{open.length}</span></div>
+              {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned (Plant/PLAN marks readiness).</div> : (
+                <div className="tw sy">
+                  <table>
+                    <thead><tr><th>Sale Order</th><th>Spec</th><th>Job</th><th>Route</th><th>Job Qty</th><th>Status</th><th>Ready</th><th>Planned</th><th>Balance</th><th></th></tr></thead>
+                    <tbody>
+                      {open.map((p) => (
+                        <tr key={p.so} className={so === p.so ? 'hi' : undefined}>
+                          <td><span className="so-pill">{p.so}</span></td>
+                          <td>{p.spec}</td><td>{p.jobName}</td><td>{p.routeName}</td>
+                          <td>{p.poQty}</td>
+                          <td><span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span></td>
+                          <td><b>{p.readyQty}</b></td>
+                          <td>{p.plannedQty}</td>
+                          <td>{p.remainingQty != null ? <b>{p.remainingQty}</b> : '—'}</td>
+                          <td><button className="btn btn-s" onClick={() => openSo(p.so)}>Plan</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {done > 0 && <div className="pg-sub" style={{ marginTop: 6 }}>✅ {done} sale order(s) fully planned — removed from the pool.</div>}
+            </>
+          );
+        })()}
       </div>
 
       {/* Assignment panel */}
@@ -214,6 +225,9 @@ export default function WeeklyPlanner() {
           </div>
         )}
       </div>
+
+      {/* §63: the planner downloads the weekly / daily plan too. */}
+      <PlanDownloads compact />
 
       {/* Week capacity view */}
       <div className="card" style={{ marginTop: 12 }}>

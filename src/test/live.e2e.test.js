@@ -239,7 +239,9 @@ describe('LIVE — sales system (module 12)', () => {
 
 describe('LIVE — dropdown overrides actually stored in this database', () => {
   t('resolves every list, using the stored override where present', () => {
-    DROPDOWN_DEFS.forEach((d) => {
+    // Master-backed defs (Departments §5, Dispatch Forms §16) live in the normalized
+    // tables, not the sales blob — ddList never resolves them, so they are excluded.
+    DROPDOWN_DEFS.filter((d) => !d.master).forEach((d) => {
       const list = ddList(mod.sales, d.key);
       expect(Array.isArray(list), d.key).toBe(true);
       expect(list.length, `${d.key} resolved empty`).toBeGreaterThan(0);

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useData } from '../data.jsx';
 import { planningApi } from '../api.js';
-import { exportAOA } from '../lib/xlsx.js';
 import { today } from '../lib/format.js';
+import PlanDownloads from '../components/PlanDownloads.jsx';
 
 // PLAN landing page — Enhancements 2.0 §46-56. Against each open sale order the
 // readiness gatekeeper picks: Ready to plan (entire / partial SO with metres), or
@@ -30,8 +30,7 @@ export default function PlanReadiness() {
   const [busy, setBusy] = useState('');          // so currently saving
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
-  const [dailyDate, setDailyDate] = useState(today());
-  const [weekFrom, setWeekFrom] = useState(today());
+  const [weekFrom] = useState(today());          // §56 change panel's week window
   const [changes, setChanges] = useState([]);    // §56: jobs edited after first save
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
@@ -113,23 +112,6 @@ export default function PlanReadiness() {
     finally { setBusy(''); }
   }
 
-  async function download(kind) {
-    setErr('');
-    const from = kind === 'daily' ? dailyDate : weekFrom;
-    const to = kind === 'daily' ? dailyDate : addDays(weekFrom, 6);
-    try {
-      const w = await planningApi.week(from, to);
-      const jobs = (w && w.jobs) || [];
-      if (jobs.length === 0) { flash('No planned jobs in that range to download.'); return; }
-      const header = ['Date', 'Shift', 'Sale Order', 'Spec', 'Department', 'Machine', 'Planned Qty', 'Start', 'End', 'Est Min', 'Status', 'Changed'];
-      const rows = [header, ...jobs.map((j) => [j.planDate, j.shift || 'A', j.so, j.specCode, j.departmentName, j.machineName,
-        num(j.plannedQty), j.startTime || '', j.endTime || '', Math.round(num(j.estMinutes)), j.status, j.changed ? 'CHANGED' : ''])];
-      const name = kind === 'daily' ? `Daily_Plan_${from}.xlsx` : `Weekly_Plan_${from}_to_${to}.xlsx`;
-      exportAOA(rows, name, kind === 'daily' ? 'Daily Plan' : 'Weekly Plan');
-      flash(`Downloaded ${jobs.length} planned job(s).`);
-    } catch (e) { setErr(e.message || 'Download failed'); }
-  }
-
   return (
     <div id="app">
       <div className="pg-ttl">✅ Planning — Ready to Plan</div>
@@ -144,16 +126,8 @@ export default function PlanReadiness() {
         <div className="stat"><div className="sl">Unmarked</div><div className="sv">{openRows.length - readyCount - notReadyCount}</div></div>
       </div>
 
-      {/* Plan downloads (§55) */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <div className="ctitle">Download plans</div>
-        <div className="fbar">
-          <div className="fg" style={{ margin: 0 }}><label>Daily plan — date</label><input type="date" value={dailyDate} onChange={(e) => setDailyDate(e.target.value)} /></div>
-          <button className="btn btn-s" onClick={() => download('daily')}>⬇ Daily Plan (xlsx)</button>
-          <div className="fg" style={{ margin: 0, marginLeft: 16 }}><label>Weekly plan — week from</label><input type="date" value={weekFrom} onChange={(e) => setWeekFrom(e.target.value)} /></div>
-          <button className="btn btn-s" onClick={() => download('weekly')}>⬇ Weekly Plan (xlsx)</button>
-        </div>
-      </div>
+      {/* Plan downloads (§55) — shared with the planner and the Plant login (§63) */}
+      <PlanDownloads compact />
 
       {/* §56: changes to an already-saved plan, clearly visible */}
       {changes.length > 0 && (
