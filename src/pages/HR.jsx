@@ -464,7 +464,10 @@ function Org() {
             { key: 'code', label: 'Code', type: 'text', placeholder: 'Code' },
             { key: 'description', label: 'Description', type: 'text', placeholder: 'Description' },
           ]}
-          load={() => hrApi.listDepartments({})} create={(b) => hrApi.createDepartment(b)}
+          // includeInactive: the MANAGEMENT panel must show deactivated rows too —
+          // they still hold their (case-insensitive) unique name, so hiding them made
+          // "add printing" 409 against an invisible PRINTING with no way to re-enable it.
+          load={() => hrApi.listDepartments({ includeInactive: 1 })} create={(b) => hrApi.createDepartment(b)}
           update={(id, b) => hrApi.updateDepartment(id, b)} onMsg={flash} onChanged={depts.reload}
         />
         <SimpleList
@@ -472,7 +475,7 @@ function Org() {
           extraFields={[
             { key: 'departmentId', label: 'Department', type: 'select', options: deptOpts, displayKey: 'departmentName', placeholder: '— Department —' },
           ]}
-          load={() => hrApi.listDesignations({})} create={(b) => hrApi.createDesignation(b)}
+          load={() => hrApi.listDesignations({ includeInactive: 1 })} create={(b) => hrApi.createDesignation(b)}
           update={(id, b) => hrApi.updateDesignation(id, b)} onMsg={flash}
         />
       </div>
@@ -482,7 +485,7 @@ function Org() {
           { key: 'defaultDays', label: 'Default days', type: 'number', placeholder: 'Default days' },
           { key: 'code', label: 'Code', type: 'text', placeholder: 'Code' },
         ]}
-        load={() => hrApi.listLeaveTypes({})} create={(b) => hrApi.createLeaveType(b)}
+        load={() => hrApi.listLeaveTypes({ includeInactive: 1 })} create={(b) => hrApi.createLeaveType(b)}
         update={(id, b) => hrApi.updateLeaveType(id, b)} onMsg={flash}
       />
     </>
