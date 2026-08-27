@@ -49,6 +49,10 @@ async function loadSlot(id) {
 
 beforeAll(async () => {
   try {
+    // The suite runs single-fork, so a fetch mock installed by an EARLIER test file
+    // can still be on globalThis here — it happily answers /api/health and makes this
+    // file "live" against a fake. Only a native fetch can reach a real backend.
+    if (!String(globalThis.fetch).includes('[native code]')) return;
     const h = await fetch(BASE + '/api/health', { signal: AbortSignal.timeout(3000) });
     if (!h.ok) return;
     const lr = await fetch(BASE + '/api/auth/login', {

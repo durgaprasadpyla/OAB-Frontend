@@ -89,6 +89,6 @@ describe('Users & Access', () => {
     expect(screen.getByText('pw1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Edit modules for Rep One/ })).toBeInTheDocument();
     // and the add form carries the module-allocation checkboxes
-    expect(screen.getByText(/Module allocation/)).toBeInTheDocument();
+    expect(screen.getByText(/Module allocation \(/)).toBeInTheDocument();
   });
 });
