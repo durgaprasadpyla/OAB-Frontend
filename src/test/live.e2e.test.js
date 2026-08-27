@@ -103,7 +103,7 @@ describe('LIVE — module 1 (OAB + invoice register)', () => {
 
   t('the next invoice number continues the register in the BFX series', () => {
     const { no } = nextInvNo(mod.oab.lastInvNo);
-    expect(no).toMatch(/^BFX\/\d{4}-\d{2}\/\d{3}$/);
+    expect(no).toMatch(/^BL\/\d{2}-\d{2}\/\d+$/);
   });
 
   t('metres calculation returns a finite number for every open row', () => {

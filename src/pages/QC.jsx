@@ -5,6 +5,7 @@ import { pouchWeightQC } from '../lib/calc.js';
 import { custGroups, custsInGroup, specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
 import BomPanel from '../components/BomPanel.jsx';
+import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
 import CertificatePanel from '../components/CertificatePanel.jsx';
 import CsaPanel from '../components/CsaPanel.jsx';
@@ -175,6 +176,15 @@ export default function QC() {
     exportAOA([header, ...rows], 'Bloomflex_JSS_Master_' + today().replace(/-/g, '_'), 'JSS Master');
   }
 
+  if (tab === 'planning') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">QC — JSS Planning</div>
+        <QcTabs tab={tab} setTab={setTab} />
+        <JssPlanningPanel />
+      </div>
+    );
+  }
   if (tab === 'bom') {
     return (
       <div id="app">
@@ -371,7 +381,8 @@ export default function QC() {
 // Labels and order match production's QC tab bar (qcSwitch).
 const QC_TABS = [
   { k: 'spec', label: '➕ Add JSS Spec' },
-  { k: 'bom', label: '🧱 BOM' },
+  { k: 'planning', label: '🗺 JSS Planning' },
+  { k: 'bom', label: '🧱 BOM (legacy)' },
   { k: 'cert', label: '📄 Certificates (COA / Food Grade)' },
   { k: 'capa', label: '🛠 CAPA' },
   { k: 'csa', label: '🧪 CSA Reports' },

@@ -46,7 +46,7 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
 /**
  * Reserve the next server-authoritative document number (type ∈ 'SO'|'INV'|'PO').
  * The server increments an atomic counter so concurrent creators never collide.
- * Returns the formatted number string, e.g. "BFX/2026-27/093".
+ * Returns the formatted number string, e.g. "BL/26-27/424".
  */
 export async function allocateNumber(type) {
   const r = await api('/api/seq/' + encodeURIComponent(type), { method: 'POST' });
@@ -155,3 +155,118 @@ export const hrApi = {
 /** Forced password change after a first login or an admin reset. */
 export const changePassword = (currentPassword, newPassword) =>
   api('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+
+// ── Production-planning master data (Stage 2: /api/master/**) ────────────────
+// Normalized masters (departments, specialties, machines, routes+stages, dispatch
+// types) and the item master (+ stock ledger). Reads need any token; config writes
+// are superadmin-only, item writes purchase/padmin/superadmin, stock writes add
+// stores — all enforced server-side (403 surfaces as err.code='forbidden').
+export const masterApi = {
+  listDepartments: (p) => api('/api/master/departments' + qs(p)),
+  createDepartment: (body) => api('/api/master/departments', { method: 'POST', body }),
+  updateDepartment: (id, body) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listSpecialties: (p) => api('/api/master/specialties' + qs(p)),
+  createSpecialty: (body) => api('/api/master/specialties', { method: 'POST', body }),
+  updateSpecialty: (id, body) => api('/api/master/specialties/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listMachines: (p) => api('/api/master/machines' + qs(p)),
+  createMachine: (body) => api('/api/master/machines', { method: 'POST', body }),
+  updateMachine: (id, body) => api('/api/master/machines/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listRoutes: (p) => api('/api/master/routes' + qs(p)),
+  getRoute: (id) => api('/api/master/routes/' + encodeURIComponent(id)),
+  createRoute: (body) => api('/api/master/routes', { method: 'POST', body }),
+  updateRoute: (id, body) => api('/api/master/routes/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listDispatchTypes: (p) => api('/api/master/dispatch-types' + qs(p)),
+  createDispatchType: (body) => api('/api/master/dispatch-types', { method: 'POST', body }),
+  updateDispatchType: (id, body) => api('/api/master/dispatch-types/' + encodeURIComponent(id), { method: 'PUT', body }),
+
+  listItems: (p) => api('/api/master/items' + qs(p)),
+  getItem: (id) => api('/api/master/items/' + encodeURIComponent(id)),
+  createItem: (body) => api('/api/master/items', { method: 'POST', body }),
+  updateItem: (id, body) => api('/api/master/items/' + encodeURIComponent(id), { method: 'PUT', body }),
+  adjustStock: (id, body) => api('/api/master/items/' + encodeURIComponent(id) + '/stock', { method: 'POST', body }),
+  // One-shot bridge: seed the normalized item master from the purchase catalogue.
+  syncItemsFromPurchase: () => api('/api/master/items/sync-from-purchase', { method: 'POST' }),
+  // Bulk import (§15): rows validated server-side; returns {imported,duplicates,failed,errors}.
+  importItems: (rows) => api('/api/master/items/import', { method: 'POST', body: { rows } }),
+};
+
+// ── JSS planning attributes (Stage 3: /api/jss/**) ───────────────────────────
+// Per-JSS (keyed by spec code) dispatch type + auto-resolved route, ordered route
+// departments, and eligible machines per department (multi, with speed + changeover).
+// Reads need any token; writes are QC / superadmin (403 -> err.code='forbidden').
+export const jssApi = {
+  get: (spec) => api('/api/jss/' + encodeURIComponent(spec)),
+  routeDepartments: (spec) => api('/api/jss/' + encodeURIComponent(spec) + '/route-departments'),
+  setConfig: (spec, body) => api('/api/jss/' + encodeURIComponent(spec) + '/config', { method: 'PUT', body }),
+  setMachines: (spec, machines) => api('/api/jss/' + encodeURIComponent(spec) + '/machines', { method: 'PUT', body: { machines } }),
+};
+
+// ── Department-wise BOM (Stage 3: /api/bom/**) ───────────────────────────────
+export const bomApi = {
+  get: (spec) => api('/api/bom/' + encodeURIComponent(spec)),
+  set: (spec, body) => api('/api/bom/' + encodeURIComponent(spec), { method: 'PUT', body }),
+};
+
+// ── Stock check + low-stock alerts (Stage 4: /api/stock/**) ──────────────────
+// check: compute an SO's material requirement and raise/clear its alerts (ops/
+// planner). recompute: all open SOs (superadmin). alerts: OPEN shortages
+// (superadmin/stores/pm/padmin). Every rule is enforced server-side.
+export const stockApi = {
+  check: (so) => api('/api/stock/check', { method: 'POST', body: { so } }),
+  recompute: () => api('/api/stock/recompute', { method: 'POST' }),
+  alerts: (status = 'OPEN') => api('/api/stock/alerts?status=' + encodeURIComponent(status)),
+  resolveAlert: (id) => api('/api/stock/alerts/' + encodeURIComponent(id) + '/resolve', { method: 'POST' }),
+};
+
+// ── Role-aware notifications (Stage 4: /api/notifications/**) ─────────────────
+// The server returns only the caller-role's notifications, so there's no leakage.
+export const notificationsApi = {
+  list: (unread) => api('/api/notifications' + (unread ? '?unread=1' : '')),
+  count: () => api('/api/notifications/count'),
+  markRead: (id) => api('/api/notifications/' + encodeURIComponent(id) + '/read', { method: 'POST' }),
+};
+
+// ── Production workflow (Stage 5: /api/production/**) ────────────────────────
+// The route state machine: init an SO's stage balances, record actual + wastage at
+// a stage (good output auto-moves to the next department, remainder stays pending),
+// and read progress / the pending work pool. Writes are Plant / Plant Manager /
+// Super Admin; reads any token. SO numbers contain '/', so they go in the body/query.
+export const productionApi = {
+  get: (so) => api('/api/production?so=' + encodeURIComponent(so)),
+  pending: () => api('/api/production/pending'),
+  init: (so) => api('/api/production/init', { method: 'POST', body: { so } }),
+  record: (body) => api('/api/production/record', { method: 'POST', body }),
+  setStatus: (so, stageSeq, status) => api('/api/production/status', { method: 'POST', body: { so, stageSeq, status } }),
+};
+
+// ── Weekly planning (Stage 6: /api/planning/**) ──────────────────────────────
+// Ready-to-Plan pool, planner date-specific machine hours, and machine-job
+// assignment (eligibility-checked, capped at the department's remaining qty,
+// transaction-safe, with a capacity/over-booked result). Reads for the planning &
+// production roles; assignment is planner/superadmin; marking ready adds plant/pm.
+export const planningApi = {
+  // Plant is the source of truth for material readiness: mode = 'COMPLETE' (whole job)
+  // or 'PARTIAL' (readyQty meters). readyQty is ignored for COMPLETE / unmarking.
+  setReady: (so, ready, mode, readyQty) => api('/api/planning/ready', { method: 'POST', body: { so, ready, mode, readyQty } }),
+  pool: () => api('/api/planning/pool'),
+  soPlan: (so) => api('/api/planning/so?so=' + encodeURIComponent(so)),
+  machineHours: (from, to) => api('/api/planning/machine-hours?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  setMachineHours: (machineId, date, hours, note) => api('/api/planning/machine-hours', { method: 'PUT', body: { machineId, date, hours, note } }),
+  week: (from, to) => api('/api/planning/week?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  assign: (body) => api('/api/planning/assign', { method: 'POST', body }),
+  unassign: (jobId) => api('/api/planning/unassign', { method: 'POST', body: { jobId } }),
+  move: (body) => api('/api/planning/move', { method: 'POST', body }),
+  reorder: (body) => api('/api/planning/reorder', { method: 'POST', body }),
+};
+
+// ── Reports (Stage 8: /api/reports/**) — planned-vs-actual, wastage, utilization.
+export const reportsApi = {
+  production: (from, to, groupBy = 'department') =>
+    api('/api/reports/production?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&groupBy=' + encodeURIComponent(groupBy)),
+  utilization: (from, to) =>
+    api('/api/reports/utilization?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+};

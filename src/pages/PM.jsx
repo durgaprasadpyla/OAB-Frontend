@@ -65,7 +65,9 @@ export default function PM() {
         const printedKg = num(pm.printedKg);
         const printedMt = printedKg * mtPerKg;
         out.push({
-          sheet, so: r.so, spec: r.spec || '', customer: r.customer || '', sku: r.jobName || '',
+          // SKU follows the current spec (j) — the row's stored jobName is only the copy
+          // captured at SO creation, so a repointed spec self-corrects here too.
+          sheet, so: r.so, spec: r.spec || '', customer: r.customer || '', sku: (j && j.jobName) || r.jobName || '',
           dispLoc: r.dispLoc || '', poQty: num(r.poQty), disp, bal,
           prodStatus: ps[r.so] || 'Ready', stage: r.stage || '',
           substrate: j ? (j.material || '') : '', filmWidth: j ? (j.filmWidth || '') : '',

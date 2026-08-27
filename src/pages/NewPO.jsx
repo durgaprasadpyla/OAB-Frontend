@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../data.jsx';
-import { ordersApi } from '../api.js';
+import { ordersApi, stockApi } from '../api.js';
 import { today, fmtDate, dash } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, getCustByLoc, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
@@ -24,6 +24,7 @@ export default function NewPO() {
   const [skus, setSkus] = useState([]);           // [{...jss, checked, qty}]
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
+  const [shortages, setShortages] = useState([]);   // low-stock shortfalls for the just-created SOs
   const [busy, setBusy] = useState(false);
   const [allocRows, setAllocRows] = useState(null);   // FG drawdown candidates (modal), or null
 
@@ -119,6 +120,18 @@ export default function NewPO() {
       const created = (resp && resp.created) || [];
       setAdded({ count: created.length, first: created[0], last: created[created.length - 1] });
       setStep(4);
+      // Best-effort low-stock check for the just-created SOs (§8): compute material
+      // requirements against the BOM + stock and surface any shortfall. The server
+      // also raises SO-specific alerts + notifies Plant Manager / Stores / Super Admin.
+      // Purely additive — a failure here never affects the already-created SOs.
+      setShortages([]);
+      Promise.all(created.map((so) => stockApi.check(so).catch(() => null)))
+        .then((results) => {
+          const short = [];
+          results.forEach((r) => { if (r && Array.isArray(r.requirements)) r.requirements.filter((x) => x.short).forEach((x) => short.push({ so: r.so, ...x })); });
+          setShortages(short);
+        })
+        .catch(() => {});
       // Offer to draw down existing finished goods for any created SO whose spec
       // has FG in stock. The server assigns SO numbers in item order, so
       // created[i] corresponds to selPO[i]; only map when the lengths agree so a
@@ -157,7 +170,7 @@ export default function NewPO() {
 
   function reset() {
     setPoNum(''); setPoExp(''); setGroup(''); setCustomer(''); setLoc(''); setSkus([]); setSelPO([]); setAdded(null);
-    setPoDate(today()); setStep(1);
+    setShortages([]); setPoDate(today()); setStep(1);
   }
 
   const activeCount = skus.length;
@@ -323,6 +336,16 @@ export default function NewPO() {
             {added.count} row{added.count > 1 ? 's' : ''} added &nbsp;·&nbsp; SO{added.count > 1 ? 's' : ''}:{' '}
             <span className="so-pill">{added.first}</span>{added.count > 1 ? <> → <span className="so-pill">{added.last}</span></> : null}
           </div>
+          {shortages.length > 0 && (
+            <div className="al al-r" style={{ textAlign: 'left', margin: '0 auto 14px', maxWidth: 640 }}>
+              <b>⚠ Low stock on {shortages.length} item{shortages.length > 1 ? 's' : ''}.</b> Stores &amp; Super Admin have been alerted.
+              <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                {shortages.map((s, i) => (
+                  <li key={i}><span className="so-pill">{s.so}</span> {s.itemCode} short by <b>{s.shortageQty}</b> (need {s.requiredQty}, have {s.availableQty})</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
             <button className="btn btn-g" onClick={reset}>+ New PO</button>
             <button className="btn btn-s" onClick={() => nav('/oab?sheet=SF')}>View OAB →</button>

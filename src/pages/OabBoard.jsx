@@ -57,7 +57,7 @@ export default function OabBoard() {
   const order = useSoOrder();
   const tableRef = useRef(null);
 
-  // JSS is authoritative for customer/sub-brand names (syncOABFromJSS, 1826).
+  // JSS is authoritative for customer / sub-brand / SKU (job) names (syncOABFromJSS, 1826).
   const jssBySpec = useMemo(() => {
     const m = {};
     (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; });
@@ -71,9 +71,15 @@ export default function OabBoard() {
   }), [rawRows]);
   const openRows = useMemo(() => allRows.filter((r) => !r.closed).map((r) => {
     const j = jssBySpec[r.spec];
-    return j ? { ...r, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand } : r;
+    // Re-derive customer/sub-brand AND the SKU (job name) from the current spec, so a
+    // repointed spec updates the SKU too — the row's stored jobName is only the value
+    // captured at SO creation (fixes the stale-SKU-after-spec-change bug).
+    return j ? { ...r, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand, jobName: j.jobName || r.jobName } : r;
   }), [allRows, jssBySpec]);
-  const closedRows = useMemo(() => allRows.filter((r) => r.closed), [allRows]);
+  const closedRows = useMemo(() => allRows.filter((r) => r.closed).map((r) => {
+    const j = jssBySpec[r.spec];
+    return j ? { ...r, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand, jobName: j.jobName || r.jobName } : r;
+  }), [allRows, jssBySpec]);
 
   const customers = useMemo(() => [...new Set(openRows.map((r) => r.customer))].filter(Boolean).sort(), [openRows]);
   const stages = useMemo(() => [...new Set(openRows.map((r) => r.stage))].filter(Boolean).sort(), [openRows]);

@@ -22,6 +22,11 @@ import HR from './pages/HR.jsx';
 import RepPortal from './pages/RepPortal.jsx';
 import QuotationDesk from './pages/QuotationDesk.jsx';
 import SalesAdmin from './pages/SalesAdmin.jsx';
+import MasterData from './pages/MasterData.jsx';
+import Production from './pages/Production.jsx';
+import WeeklyPlanner from './pages/WeeklyPlanner.jsx';
+import DailyBoard from './pages/DailyBoard.jsx';
+import Reports from './pages/Reports.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -62,6 +67,11 @@ export default function App() {
         <Route path="/rep" element={<RoleRoute path="/rep"><RepPortal /></RoleRoute>} />
         <Route path="/quotes" element={<RoleRoute path="/quotes"><QuotationDesk /></RoleRoute>} />
         <Route path="/sdashboard" element={<RoleRoute path="/sdashboard"><SalesAdmin /></RoleRoute>} />
+        <Route path="/master" element={<RoleRoute path="/master"><MasterData /></RoleRoute>} />
+        <Route path="/production" element={<RoleRoute path="/production"><Production /></RoleRoute>} />
+        <Route path="/planner" element={<RoleRoute path="/planner"><WeeklyPlanner /></RoleRoute>} />
+        <Route path="/board" element={<RoleRoute path="/board"><DailyBoard /></RoleRoute>} />
+        <Route path="/reports" element={<RoleRoute path="/reports"><Reports /></RoleRoute>} />
         <Route path="*" element={<Landing />} />
       </Route>
     </Routes>

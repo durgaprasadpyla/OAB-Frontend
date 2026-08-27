@@ -15,18 +15,22 @@ export function isSOFormat(s) {
 }
 
 /**
- * Next invoice number, e.g. "BFX/2026-27/093". Returns { no, next }.
+ * Next invoice number PREVIEW, e.g. "BL/26-27/424". Returns { no, next }.
  *
- * Single, authoritative definition of the invoice-number format, matching the
- * backend SequenceService: BFX company code (client's series since Aug 2026),
- * Apr-start financial year as <yyyy>-<yy>, number zero-padded to 3 digits.
- * The legacy "BL/<yy>-<yy>/<n>" series is retired (historical entries keep it).
+ * This is only a client-side default for the (editable) invoice-number field — the
+ * server (SequenceService / createInvoice) is authoritative and assigns the real,
+ * atomic number on submit. The format mirrors the backend so the preview matches:
+ * "BL" prefix, short-short Apr-start financial year (<yy>-<yy>), plain number.
+ * The FY 26-27 series restarts at 424 (client, 2026), so the preview is floored there.
  * `dateIso` (optional) selects the financial year; defaults to today.
  */
+export const INV_SERIES_START = 424;
 export function nextInvNo(lastInvNo, dateIso) {
   const [y1, y2] = financialYear(dateIso).split('-');
-  const n = num(lastInvNo) + 1;
-  return { no: `BFX/${y1}-${y2.slice(-2)}/${String(n).padStart(3, '0')}`, next: n };
+  const period = `${y1.slice(-2)}-${y2.slice(-2)}`;               // "26-27"
+  const floor = period === '26-27' ? INV_SERIES_START : 1;
+  const n = Math.max(num(lastInvNo) + 1, floor);
+  return { no: `BL/${period}/${n}`, next: n };
 }
 
 // nextPONum was removed: purchase PO numbers are now assigned server-side

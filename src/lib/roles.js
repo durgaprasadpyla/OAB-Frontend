@@ -9,6 +9,7 @@ export const ROLE_LABEL = {
   pm: 'Production', scrap: 'Scrap', superadmin: 'Super Admin', qc: 'QC', user: '',
   hr: 'HR',
   sadmin: 'Sales Admin', quote: 'Quotation Desk', sales: 'Sales Rep',
+  planner: 'Planner', stores: 'Stores',
 };
 
 /** Where a role lands after sign-in. */
@@ -23,6 +24,10 @@ export function landingPath(role) {
     case 'sadmin': return '/sdashboard';
     case 'quote': return '/quotes';
     case 'sales': return '/rep';
+    // Production-planning roles. Planner lands on the weekly planner; stores lands
+    // on the Master Data hub (stock alerts + item stock) until it gets its own desk.
+    case 'planner': return '/planner';
+    case 'stores': return '/master';
     default: return '/po'; // user / padmin / superadmin → main workspace
   }
 }
@@ -45,6 +50,13 @@ export function navTabs(role) {
   if (role === 'superadmin') tabs.push({ to: '/hr', label: '👥 HR' });
   if (role === 'superadmin') tabs.push({ to: '/sdashboard', label: '💼 S Dashboard' });
   if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/pdashboard', label: '📦 P Dashboard' });
+  // Production-planning master data hub (routes, machines, departments, specialties,
+  // dispatch types, item master). Config is superadmin; padmin can manage items.
+  if (role === 'padmin' || role === 'superadmin') tabs.push({ to: '/master', label: '⚙️ Master Data' });
+  if (role === 'superadmin') tabs.push({ to: '/production', label: '🏭 Production' });
+  if (role === 'superadmin') tabs.push({ to: '/planner', label: '🗓 Planner' });
+  if (role === 'superadmin') tabs.push({ to: '/board', label: '📋 Board' });
+  if (role === 'superadmin') tabs.push({ to: '/reports', label: '📈 Reports' });
   return tabs;
 }
 
@@ -60,6 +72,15 @@ export function canAccess(role, path) {
   if (p === '/scrap') return role === 'scrap';
   if (p === '/purchase') return role === 'purchase';
   if (p === '/hr') return role === 'hr' || role === 'superadmin';
+  // Master Data hub: superadmin + padmin (config/items), planner + stores (read /
+  // stock). Per-section write permission is enforced again on the backend.
+  if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
+  // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view).
+  if (p === '/production') return ['plant', 'pm', 'superadmin', 'planner'].includes(role);
+  // Weekly planner + daily board: Planner + Super Admin (plan), Plant Manager (view).
+  if (p === '/planner' || p === '/board') return ['planner', 'superadmin', 'pm'].includes(role);
+  // Reports: planning + production management.
+  if (p === '/reports') return ['planner', 'superadmin', 'pm', 'plant'].includes(role);
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';

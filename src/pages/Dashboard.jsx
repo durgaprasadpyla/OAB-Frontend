@@ -583,10 +583,10 @@ function JssEditor() {
     setBusy(true);
     try {
       await save('jss', rows);
-      // Sync customer/subBrand onto OAB rows sharing a spec (syncOABFromJSS).
+      // Sync customer/subBrand/jobName onto OAB rows sharing a spec (syncOABFromJSS).
       const map = {}; rows.forEach((j) => { if (j.spec) map[j.spec] = j; });
       const nextOab = clone(mods.oab); let dirty = false;
-      ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => { const j = map[r.spec]; if (!j) return; if (j.customer && r.customer !== j.customer) { r.customer = j.customer; dirty = true; } if (j.subBrand && r.subBrand !== j.subBrand) { r.subBrand = j.subBrand; dirty = true; } }));
+      ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => { const j = map[r.spec]; if (!j) return; if (j.customer && r.customer !== j.customer) { r.customer = j.customer; dirty = true; } if (j.subBrand && r.subBrand !== j.subBrand) { r.subBrand = j.subBrand; dirty = true; } if (j.jobName && r.jobName !== j.jobName) { r.jobName = j.jobName; dirty = true; } }));
       if (dirty) await save('oab', nextOab);
       setMsg('✅ JSS saved' + (dirty ? ' · OAB names synced' : '')); setTimeout(() => setMsg(''), 4000);
     } catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
@@ -736,7 +736,14 @@ function DeleteSOs() {
   const { mods, save, reloadModule } = useData();
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
-  const rows = ['SF', 'OT'].flatMap((key) => (mods.oab?.OAB?.[key] || []).map((r) => ({ ...r, _key: key })))
+  // JSS is authoritative for customer / sub-brand / SKU (job) names: show the current
+  // spec's values, not the copy stored on the row when the SO was created, so a repointed
+  // spec shows the right SKU here too (mirrors OabBoard's openRows enrichment).
+  const jssBySpec = useMemo(() => { const m = {}; (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; }); return m; }, [mods.jss]);
+  const rows = ['SF', 'OT'].flatMap((key) => (mods.oab?.OAB?.[key] || []).map((r) => {
+    const j = jssBySpec[r.spec];
+    return j ? { ...r, _key: key, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand, jobName: j.jobName || r.jobName } : { ...r, _key: key };
+  }))
     .filter((r) => !q || [r.so, r.customer, r.jobName, r.spec].some((v) => String(v || '').toLowerCase().includes(q.toLowerCase())));
 
   // Delete goes through the granular server endpoint, not a whole-blob save: the
@@ -771,13 +778,41 @@ function DeleteSOs() {
     catch (e) { alert('Update failed: ' + e.message); } finally { setBusy(false); }
   }
 
+  // Re-point an SO to a different spec (superadmin). The new spec must exist in the JSS
+  // master; the row's SKU (job name), customer and sub-brand are pulled from that spec —
+  // same as a freshly created SO (NewPO) — so the stored row matches it. Display already
+  // derives these live, but writing them keeps exports / PDF / backup correct too.
+  // Persisted through the normal module-1 save; like Edit PO# it's a field change, so the
+  // 3-way merge keeps it (mine wins) without clobbering anyone else's work.
+  async function editSpec(row) {
+    const entry = window.prompt(`Change Spec for SO ${row.so} (${row.customer || ''}).\nCurrent spec: ${row.spec || '(none)'}\n\nEnter the new Spec No. (must already exist in the JSS master):`, row.spec || '');
+    if (entry === null) return;
+    const spec = entry.trim();
+    if (!spec) { alert('Spec cannot be blank.'); return; }
+    if (spec === String(row.spec || '').trim()) return;   // unchanged
+    const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === spec);
+    if (!j) { alert(`Unknown spec "${spec}" — it is not in the JSS master. Add it in the JSS Editor first.`); return; }
+    if (!window.confirm(`Re-point SO ${row.so} to spec ${spec}?\n\nSKU (Job Name) becomes: ${j.jobName || '(blank)'}\nCustomer: ${j.customer || row.customer || '(unchanged)'}`)) return;
+    const next = clone(mods.oab);
+    const arr = (next.OAB && next.OAB[row._key]) || [];
+    const target = arr.find((x) => x.so === row.so);
+    if (!target) { alert('SO not found — the list may be out of date.'); return; }
+    target.spec = spec;
+    if (j.jobName) target.jobName = j.jobName;
+    if (j.customer) target.customer = j.customer;
+    if (j.subBrand) target.subBrand = j.subBrand;
+    setBusy(true);
+    try { await save('oab', next); }
+    catch (e) { alert('Update failed: ' + e.message); } finally { setBusy(false); }
+  }
+
   return (
     <div className="card">
       <div className="fbar">
         <div className="ctitle" style={{ margin: 0 }}>Delete Sales Orders</div>
         <input placeholder="Search SO / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="al al-y">Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit PO# to correct the PO number, PO date or dispatch location without deleting the order.</div>
+      <div className="al al-y">Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit Spec to move an order to a different spec (its SKU, customer and sub-brand follow the new spec) or ✎ Edit PO# to correct the PO number, PO date or dispatch location — without deleting the order.</div>
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
           <thead><tr><th>SO</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th><th>Status</th><th></th></tr></thead>
@@ -785,6 +820,7 @@ function DeleteSOs() {
             {rows.map((r, i) => (
               <tr key={i}><td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td><td>{r._key}</td><td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td><td style={{ fontSize: 11 }}>{r.customer}</td><td style={{ fontSize: 11 }}>{r.jobName}</td><td style={{ fontSize: 11 }}>{r.poNum || '-'}</td><td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td><td style={{ textAlign: 'right' }}>{dash(r.poQty)}</td><td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(num(r.invDisp) + num(r.manDisp))}</td><td>{r.closed ? <span className="tag tg" style={{ fontSize: 9 }}>Closed</span> : <span className="tag ty" style={{ fontSize: 9 }}>Open</span>}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editSpec(r)}>✎ Edit Spec</button>
                   <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editPO(r)}>✎ Edit PO#</button>
                   <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', color: 'var(--red)', borderColor: '#F5A8A0' }} disabled={busy} onClick={() => del(r.so)}>Delete</button>
                 </td></tr>
