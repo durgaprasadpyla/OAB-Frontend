@@ -11,11 +11,12 @@ import SalesPosTab from '../components/SalesPosTab.jsx';
 import SalesContactsTab from '../components/SalesContactsTab.jsx';
 import SalesManageTab from '../components/SalesManageTab.jsx';
 import SalesTargetsTab from '../components/SalesTargetsTab.jsx';
+import SalesUsersPanel from '../components/SalesUsersPanel.jsx';
 import {
-  REP_ACCOUNT_STATUSES, STAGE_STYLE, PAY_STYLE, FOLLOW_UP_STYLE, UNASSIGNED,
+  STAGE_STYLE, PAY_STYLE, FOLLOW_UP_STYLE, UNASSIGNED,
   salesOverview, repWorkload, nudgeList, nextFollowUp, followUpState,
   leadLineItems, allCategories, assignLine, bulkAssignLines, filterLineItems,
-  activeReps, repName, addRep, updateRep, leadCategories, repCategoriesOf,
+  activeReps, repName, leadCategories, repCategoriesOf,
   salesToday,
 } from '../lib/sales.js';
 
@@ -84,7 +85,9 @@ export default function SalesAdmin() {
       {tab === 'leads' && <AllCustomers sales={sales} patch={patch} />}
       {tab === 'contacts' && <SalesContactsTab sales={sales} save={save} />}
       {tab === 'alloc' && <Allocation sales={sales} patch={patch} />}
-      {tab === 'reps' && <Reps sales={sales} patch={patch} />}
+      {/* §36: sales-user management is the SHARED panel also mounted in the Super
+          Admin's Users & Access — one merged admin surface, one sales_users table. */}
+      {tab === 'reps' && <SalesUsersPanel sales={sales} patch={patch} />}
       {tab === 'export' && <ExportData sales={sales} />}
       {tab === 'manage' && <SalesManageTab sales={sales} save={save} />}
       {tab === 'lists' && <DropdownAdmin />}
@@ -403,119 +406,6 @@ function Allocation({ sales, patch }) {
         </table>
       </div>
     </div>
-  );
-}
-
-/* ─────────────────────────── Rep accounts ─────────────────────────── */
-// Rep logins with a search box, an in-place password reveal/reset and delete —
-// the sales reps are stored in the blob (sales_users), not the app_user table, so
-// this is where their credentials are managed. (sdashUsersFilter 9984 / sdashResetPw
-// 10137 / sdashDeleteRep 10021)
-function Reps({ sales, patch }) {
-  const [form, setForm] = useState({ name: '', username: '', password: '', phone: '', status: 'Active' });
-  const [msg, setMsg] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [q, setQ] = useState('');
-  const [shown, setShown] = useState(() => new Set());
-  const users = sales.sales_users || [];
-
-  const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return t ? users.filter((r) => [r.display_name, r.username].join(' ').toLowerCase().includes(t)) : users;
-  }, [users, q]);
-
-  const toggleShow = (id) => setShown((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-
-  async function add() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await patch({ sales_users: addRep(users, form) });
-      setForm({ name: '', username: '', password: '', phone: '', status: 'Active' });
-      setMsg({ t: 'g', text: '✅ Sales rep added.' });
-    } catch (e) { setMsg({ t: 'r', text: e.message || String(e) }); }
-    finally { setBusy(false); }
-  }
-
-  async function setStatus(rep, status) {
-    try { await patch({ sales_users: updateRep(users, rep.id, { status, disabled: status !== 'Active' }) }); }
-    catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
-  }
-
-  async function resetPw(rep) {
-    const np = window.prompt(`Set a new password for ${rep.display_name || rep.username}:`, rep.password || '');
-    if (np == null) return;
-    try { await patch({ sales_users: updateRep(users, rep.id, { password: np }) }); setMsg({ t: 'g', text: `✅ Password reset for ${rep.display_name || rep.username}.` }); }
-    catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
-  }
-
-  async function deleteRep(rep) {
-    if (!window.confirm(`Delete sales rep "${rep.display_name || rep.username}"? Their login will stop working. Leads they were assigned stay in the system (shown as unassigned).`)) return;
-    try { await patch({ sales_users: users.filter((r) => r.id !== rep.id) }); setMsg({ t: 'g', text: '✅ Rep deleted.' }); }
-    catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
-  }
-
-  return (
-    <>
-      <div className="card">
-        <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Sales Reps <span className="tag tgr">{filtered.length}</span></div>
-          <input placeholder="Search name / username…" value={q} aria-label="Search reps" onChange={(e) => setQ(e.target.value)} />
-        </div>
-        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
-        <div className="tw sy" style={{ maxHeight: 320 }}>
-          <table>
-            <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th style={{ minWidth: 160 }}>Password</th><th style={{ width: 140 }}>Status</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
-            <tbody>
-              {filtered.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No reps match</td></tr>
-                : filtered.map((r) => {
-                  const lines = (sales.leads || []).reduce((n, l) => n + repCategoriesOf(l, r.id).length, 0);
-                  return (
-                    <tr key={r.id}>
-                      <td style={{ fontWeight: 600 }}>{r.display_name}</td>
-                      <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.username}</td>
-                      <td style={{ fontSize: 11 }}>{r.phone || '—'}</td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: 11, color: shown.has(r.id) ? 'var(--ink)' : 'var(--i3)' }}>{shown.has(r.id) ? (r.password || '(none set)') : '••••••'}</span>
-                        <button className="btn btn-s" style={{ marginLeft: 6, height: 22, fontSize: 10 }} aria-label={`${shown.has(r.id) ? 'Hide' : 'Show'} password for ${r.display_name}`} onClick={() => toggleShow(r.id)}>{shown.has(r.id) ? 'hide' : 'show'}</button>
-                        <button className="btn btn-s" style={{ marginLeft: 4, height: 22, fontSize: 10 }} aria-label={`Reset password for ${r.display_name}`} onClick={() => resetPw(r)}>reset</button>
-                      </td>
-                      <td>
-                        <select value={r.status || 'Active'} aria-label={`Status for ${r.display_name}`} onChange={(e) => setStatus(r, e.target.value)}>
-                          {REP_ACCOUNT_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>{inr(lines)}</td>
-                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete ${r.display_name}`} onClick={() => deleteRep(r)}>Delete</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-        </div>
-        <div className="pg-sub" style={{ margin: '8px 0 0' }}>
-          Deactivating a rep leaves their allocations in place — reassign them on the Category
-          Allocation tab, where an inactive owner stays visible until you do.
-        </div>
-      </div>
-
-      <div className="card" style={{ maxWidth: 520 }}>
-        <div className="ctitle">＋ Add a sales rep</div>
-        <div className="fg"><label>Full name *</label><input value={form.name} aria-label="Rep full name" onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-        <div className="fg"><label>Username *</label><input value={form.username} aria-label="Rep username" onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
-        <div className="fg"><label>Password *</label><input type="password" value={form.password} aria-label="Rep password" onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
-        <div className="fg"><label>Phone</label><input value={form.phone} aria-label="Rep phone" onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-        <div className="fg">
-          <label>Status</label>
-          <select value={form.status} aria-label="Rep status" onChange={(e) => setForm({ ...form, status: e.target.value })}>
-            {REP_ACCOUNT_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <button className="btn btn-g" onClick={add} disabled={busy}>{busy ? 'Adding…' : 'Add rep'}</button>
-      </div>
-    </>
   );
 }
 

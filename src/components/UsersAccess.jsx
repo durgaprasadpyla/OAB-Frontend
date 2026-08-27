@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react';
 import { usersApi } from '../api.js';
+import { useData } from '../data.jsx';
+import SalesUsersPanel from './SalesUsersPanel.jsx';
 
 // Users & Access (superadmin) — manage the real app_user accounts via the
 // backend admin endpoints. Add users, change roles, set a contact/WhatsApp
-// phone, enable/disable, reset passwords. Passwords are write-only; the server
-// never returns hashes (so they cannot be displayed — reset only).
+// phone, enable/disable, reset passwords. STAFF passwords are write-only; the
+// server never returns hashes (so they cannot be displayed — reset only).
 //
-// NOTE: per-user MODULE access (an ACL beyond the single role) is still a
-// backend redesign and is not offered here; access is governed by the role.
+// §36: sales-user creation is MERGED into this page — the same SalesUsersPanel
+// the S-Dashboard uses, over the separate sales_users table (module 12), with
+// module-wise allocation and (here, in the Super Admin login) the password
+// displayed next to each username.
 
 // Descriptive role labels, mirroring the monolith's ROLE_OPTIONS (index.html 6194),
-// extended with the roles the React port added: superadmin, sadmin, quote, hr.
+// extended with the roles the React port added: superadmin, sadmin, quote, hr, and the
+// production-planning module logins (planner/stores + Enhancements 2.0 ppc/mis/plan).
+// Sales reps are provisioned separately (module-12 sales blob), so 'sales' is not here.
 const ROLE_OPTIONS = [
   { v: 'user', l: 'Operations — OAB / Daily Update / Invoice' },
   { v: 'padmin', l: 'Purchase Admin' },
@@ -23,11 +29,20 @@ const ROLE_OPTIONS = [
   { v: 'sadmin', l: 'Sales Admin' },
   { v: 'quote', l: 'Quotation Desk' },
   { v: 'hr', l: 'HR' },
+  { v: 'planner', l: 'Production Planner' },
+  { v: 'stores', l: 'Stores' },
+  { v: 'ppc', l: 'PPC — Production Planning & Control' },
+  { v: 'mis', l: 'MIS — Status & Analytics' },
+  { v: 'plan', l: 'Planning — Ready to Plan' },
 ];
 const ROLES = ROLE_OPTIONS.map((r) => r.v);
 const roleLabel = (v) => (ROLE_OPTIONS.find((r) => r.v === v) || {}).l || (v || '-');
 
 export default function UsersAccess() {
+  // §36: the sales_users table (module-12 blob) managed right here alongside staff.
+  const { mods, save } = useData();
+  const sales = mods.sales || {};
+  const patchSales = (p) => save('sales', (prev) => ({ ...(prev || {}), ...p }));
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -137,8 +152,13 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Passwords are reset-only (never shown).</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Staff passwords are reset-only (never shown).</p>
       </div>
+
+      {/* §36: the merged sales-user management — separate table, module-wise
+          allocation, password shown next to the username in this Super Admin view. */}
+      <div className="ctitle" style={{ marginTop: 16 }}>💼 Sales Users (SalesOS — separate table)</div>
+      <SalesUsersPanel sales={sales} patch={patchSales} showPasswords />
     </>
   );
 }

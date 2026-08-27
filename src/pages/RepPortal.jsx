@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
 import { fmtDate } from '../lib/format.js';
@@ -17,7 +17,7 @@ import {
   STAGE_STYLE, PAY_STYLE, FOLLOW_UP_STYLE,
   leadsForRep, repCategoriesOf, leadCategories, contactsForLead, interactionsForLead,
   nextFollowUp, followUpState, buildLead, buildInteraction, salesUid, salesToday,
-  quotesForLead, acceptedMinPrice, REP_PAYTYPES,
+  quotesForLead, acceptedMinPrice, REP_PAYTYPES, repModulesOf,
 } from '../lib/sales.js';
 
 // Contact rank options (repRanks). '' is "no rank".
@@ -94,6 +94,15 @@ export default function RepPortal() {
     return (sales.skus || []).filter((s) => ids.has(s.lead_id)).map((s) => s.id);
   }, [myLeads, sales.skus]);
 
+  // §36 module-wise allocation: only the modules granted to this rep are shown.
+  // No stored allocation = every module (repModulesOf).
+  const myRep = useMemo(() => (sales.sales_users || []).find((r) => r.id === repId), [sales.sales_users, repId]);
+  const myModules = useMemo(() => new Set(repModulesOf(myRep)), [myRep]);
+  const visibleTabs = useMemo(() => TABS.filter((t) => myModules.has(t.k)), [myModules]);
+  useEffect(() => {
+    if (!myModules.has(tab) && visibleTabs.length) setTab(visibleTabs[0].k);
+  }, [myModules, tab, visibleTabs]);
+
   return (
     <div id="app">
       <div className="pg-ttl">Sales Rep Portal</div>
@@ -102,7 +111,7 @@ export default function RepPortal() {
         You see only the product categories assigned to you.
       </div>
       <div className="step-bar" style={{ flexWrap: 'wrap' }}>
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
         ))}
       </div>

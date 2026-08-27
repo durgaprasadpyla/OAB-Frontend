@@ -23,6 +23,7 @@ export default function FGLedger() {
   const prices = mods.prices || {};
 
   const [custFilter, setCustFilter] = useState('');
+  const [groupFilter, setGroupFilter] = useState('');   // §43: search by Group as well as Customer
   const [spec, setSpec] = useState('');
   const [specText, setSpecText] = useState('');   // raw text in the Spec field
   const [skuText, setSkuText] = useState('');     // raw text in the SKU field
@@ -46,15 +47,25 @@ export default function FGLedger() {
     return out;
   }, [jss]);
 
+  // §43: the buying Group of a spec (via the customer master) drives a filter of
+  // its own, next to the Customer filter.
+  const groupOf = (j) => specGroup(j, mods.customers) || j.group || '';
+  const groups = useMemo(
+    () => [...new Set(specPool.map((j) => groupOf(j)).filter(Boolean))].sort(),
+    [specPool, mods.customers], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const customers = useMemo(
-    () => [...new Set(specPool.map((j) => j.customer).filter(Boolean))].sort(),
-    [specPool],
+    () => [...new Set(specPool
+      .filter((j) => !groupFilter || groupOf(j) === groupFilter)
+      .map((j) => j.customer).filter(Boolean))].sort(),
+    [specPool, groupFilter], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const specOptions = useMemo(() => {
     let pool = specPool;
+    if (groupFilter) pool = pool.filter((j) => groupOf(j) === groupFilter);
     if (custFilter) pool = pool.filter((j) => j.customer === custFilter);
     return pool.slice().sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
-  }, [specPool, custFilter]);
+  }, [specPool, custFilter, groupFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const jssFor = (sp) => jss.find((j) => String(j.spec || '').trim() === String(sp || '').trim()) || {};
   const selJss = spec ? jssFor(spec) : {};
@@ -87,6 +98,7 @@ export default function FGLedger() {
     setSearchMsg('');
     const j = jssFor(sp);
     setCustFilter(j.customer || '');
+    setGroupFilter(groupOf(j));
     setSkuText(`${j.jobName || '(no name)'} — ${sp}`);
     if (!date) setDate(today());
   }
@@ -106,6 +118,8 @@ export default function FGLedger() {
   }
   // Typing a customer narrows the other two lists and drops any current spec.
   function onCustText(v) { setCustFilter(v); clearSpec(); setSpecText(''); setSkuText(''); }
+  // Typing a group narrows customers + specs the same way (§43).
+  function onGroupText(v) { setGroupFilter(v); setCustFilter(''); clearSpec(); setSpecText(''); setSkuText(''); }
 
   /**
    * Manual search. An exact spec jumps straight to it; otherwise the typed
@@ -115,8 +129,8 @@ export default function FGLedger() {
   function searchFg() {
     const sp = specLookup[norm(specText)] || specLookup[norm(skuText)];
     if (sp) { selectSpec(sp); return; }
-    const term = [custFilter, skuText].map((t) => String(t || '').trim()).filter(Boolean).join(' ').trim();
-    if (!term) { setSearchMsg('⚠ Type a Customer Name or SKU, or pick an exact Spec, then Search.'); return; }
+    const term = [groupFilter, custFilter, skuText].map((t) => String(t || '').trim()).filter(Boolean).join(' ').trim();
+    if (!term) { setSearchMsg('⚠ Type a Group, Customer Name or SKU, or pick an exact Spec, then Search.'); return; }
     setSearchMsg('');
     setSumQ(term);
   }
@@ -198,8 +212,8 @@ export default function FGLedger() {
           so a partial Customer/SKU still gets you somewhere. Field order matches
           production: Spec, Customer, SKU. */}
       <div className="card">
-        <div className="ctitle">Select Spec (type or pick any one — the other two auto-fill)</div>
-        <div className="g3">
+        <div className="ctitle">Select Spec (type or pick any one — the others auto-fill)</div>
+        <div className="g4">
           <div className="fg">
             <label>JSS / Spec #</label>
             <input
@@ -209,6 +223,18 @@ export default function FGLedger() {
             />
             <datalist id="fg-spec-list">
               {specOptions.map((j) => <option key={j.spec} value={j.spec}>{j.jobName || ''}</option>)}
+            </datalist>
+          </div>
+          {/* §43: filter by buying Group, with type-to-search like the others. */}
+          <div className="fg">
+            <label>Group</label>
+            <input
+              list="fg-group-list" value={groupFilter} aria-label="Group"
+              placeholder="— All groups — (type to search)"
+              onChange={(e) => onGroupText(e.target.value)}
+            />
+            <datalist id="fg-group-list">
+              {groups.map((g) => <option key={g} value={g} />)}
             </datalist>
           </div>
           <div className="fg">

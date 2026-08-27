@@ -481,6 +481,27 @@ export function filterLineItems(items, { q = '', category = '', repId = '' } = {
 export const REP_ACCOUNT_STATUSES = ['Active', 'Inactive', 'Left'];
 
 /**
+ * §36 module-wise allocation: the Sales Portal modules a rep can be granted.
+ * Keys match the RepPortal tab keys. A rep with no explicit allocation sees all.
+ */
+export const REP_MODULES = [
+  { k: 'followups', label: 'Follow-ups' },
+  { k: 'visit', label: 'Log Visit' },
+  { k: 'po', label: 'Enter PO' },
+  { k: 'targets', label: 'My Targets' },
+  { k: 'customers', label: 'My Customers' },
+  { k: 'contacts', label: 'My Contacts' },
+  { k: 'add', label: 'Add Customer' },
+  { k: 'sku', label: 'SKUs' },
+  { k: 'nego', label: 'Negotiations' },
+];
+
+/** The module keys a rep may use (no allocation stored = every module). */
+export function repModulesOf(rep) {
+  return Array.isArray(rep?.modules) && rep.modules.length ? rep.modules : REP_MODULES.map((m) => m.k);
+}
+
+/**
  * Add a sales-rep login to the blob. Usernames must be unique — the rep-login
  * endpoint matches on username, so a duplicate would make one account
  * unreachable. (sdashAddRep 9950)
@@ -489,7 +510,7 @@ export const REP_ACCOUNT_STATUSES = ['Active', 'Inactive', 'Left'];
  * /api/auth/sales-rep-login compares against. Hashing needs a matching backend
  * change; see MIGRATION.md.
  */
-export function addRep(salesUsers, { name, username, password, phone, status } = {}, { uid = salesUid } = {}) {
+export function addRep(salesUsers, { name, username, password, phone, status, modules } = {}, { uid = salesUid } = {}) {
   const display = s(name);
   const user = s(username);
   if (!display) throw new Error('Full name is required.');
@@ -505,6 +526,8 @@ export function addRep(salesUsers, { name, username, password, phone, status } =
     password: String(password),
     phone: s(phone),
     status: REP_ACCOUNT_STATUSES.includes(status) ? status : 'Active',
+    // §36: module-wise allocation (empty/absent = all modules).
+    ...(Array.isArray(modules) && modules.length ? { modules } : {}),
   }];
 }
 

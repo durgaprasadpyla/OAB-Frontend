@@ -25,6 +25,14 @@ const ROLE_BAR = {
   planner: { bg: '#0a5aa0', brand: 'BLOOMFLEX', sub: 'Production Planner', signOut: 'Sign Out',
     links: [{ to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Daily Board' }, { to: '/reports', label: '📈 Reports' }] },
   stores: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Stores', signOut: 'Sign Out' },
+  // Enhancements 2.0 planning-module logins — each is a single-screen (panel) role with
+  // its own coloured brand bar and its own in-workspace navigation (NOT ops nav tabs).
+  ppc: { bg: '#0a4d8c', brand: 'BLOOMFLEX', sub: 'Production Planning & Control', signOut: 'Sign Out',
+    links: [{ to: '/ppc', label: '📊 Dashboard' }, { to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Daily Board' }, { to: '/reports', label: '📈 Reports' }] },
+  mis: { bg: '#0f766e', brand: 'BLOOMFLEX', sub: 'MIS — Status & Analytics', signOut: 'Sign Out',
+    links: [{ to: '/mis', label: '📋 Status' }, { to: '/production', label: '🏭 Record Actuals' }, { to: '/reports', label: '📈 Reports' }] },
+  plan: { bg: '#b45309', brand: 'BLOOMFLEX', sub: 'Planning — Ready to Plan', signOut: 'Sign Out',
+    links: [{ to: '/plan', label: '✅ Ready to Plan' }, { to: '/reports', label: '📈 Reports' }] },
 };
 
 /** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */

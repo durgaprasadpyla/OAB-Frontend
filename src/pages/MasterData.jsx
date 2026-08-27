@@ -6,7 +6,7 @@ import Modal from '../components/Modal.jsx';
 
 const ITEM_EXPORT_COLS = [
   { key: 'code', label: 'code' }, { key: 'name', label: 'name' }, { key: 'uom', label: 'uom' },
-  { key: 'specialtyName', label: 'specialty' }, { key: 'departmentName', label: 'department' },
+  { key: 'departmentName', label: 'department' },
   { key: 'itemType', label: 'itemType' }, { key: 'materialType', label: 'materialType' },
   { key: 'subGroup', label: 'subGroup' }, { key: 'microns', label: 'microns' },
   { key: 'currentStock', label: 'currentStock' }, { key: 'reorderLevel', label: 'reorderLevel' },
@@ -18,10 +18,15 @@ const ITEM_EXPORT_COLS = [
 // can reach the page may read; write controls hide for roles that can't. The backend
 // re-checks every write, so this is convenience, not the only protection.
 
+// Enhancements 2.0 §1: Specialty is NOT a Super Admin tab — it is a per-item field on
+// the Padmin Item Master (see PDashboard.jsx). The Specialties config tab was removed.
 const TABS = [
   { key: 'departments', label: 'Departments' },
-  { key: 'specialties', label: 'Specialties' },
   { key: 'machines', label: 'Machines' },
+  // §7-10: pick a Department, see/add the machines that fall under it (name, hours,
+  // ideal speed + unit) and enable/disable them — disabled machines drop out of the
+  // PPC board and route selection.
+  { key: 'allocation', label: 'Machine ⇄ Department' },
   { key: 'routes', label: 'Routes' },
   { key: 'dispatch', label: 'Dispatch Types' },
   { key: 'items', label: 'Item Master' },
@@ -29,6 +34,13 @@ const TABS = [
 
 const num = (v) => (v === '' || v == null ? '' : v);
 const opt = (list) => (list || []).filter((x) => x.active !== false);
+
+// Enhancements 2.0 §3/§8: machine speed unit is a dropdown — metres/minute or
+// pieces (pouches) per minute — never free text.
+const SPEED_UOMS = [
+  { id: 'm/min', name: 'Metres per minute (m/min)' },
+  { id: 'pcs/min', name: 'Pieces / pouches per minute (pcs/min)' },
+];
 
 /** Generic field-driven form used by the simple masters. */
 function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
@@ -95,9 +107,11 @@ function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
 }
 
 /** Route form with an ordered-stage (department) editor. */
-function RouteForm({ initial, departments, onSubmit, onCancel }) {
+function RouteForm({ initial, departments, dispatchTypes, onSubmit, onCancel }) {
   const [name, setName] = useState(initial?.name || '');
   const [code, setCode] = useState(initial?.code || '');
+  // §4/§13: the Dispatch Form this route belongs to (a form owns many routes).
+  const [dispatchTypeId, setDispatchTypeId] = useState(initial?.dispatchTypeId != null ? String(initial.dispatchTypeId) : '');
   const [description, setDescription] = useState(initial?.description || '');
   const [active, setActive] = useState(initial ? initial.active !== false : true);
   const [stages, setStages] = useState((initial?.stages || []).map((s) => String(s.departmentId)));
@@ -117,6 +131,7 @@ function RouteForm({ initial, departments, onSubmit, onCancel }) {
     if (!name.trim()) { setErr('Route name is required'); return; }
     const body = {
       name: name.trim(), code: code.trim() || undefined,
+      dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null,
       description: description.trim() || undefined, active,
       stages: stages.map((id) => ({ departmentId: Number(id) })),
     };
@@ -126,6 +141,13 @@ function RouteForm({ initial, departments, onSubmit, onCancel }) {
   return (
     <form onSubmit={submit}>
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
+      <div className="fg">
+        <label>Dispatch Form (a form can have many routes)</label>
+        <select value={dispatchTypeId} onChange={(e) => setDispatchTypeId(e.target.value)}>
+          <option value="">— unassigned —</option>
+          {opt(dispatchTypes).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
       <div className="g3">
         <div className="fg"><label>Route name *</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="fg"><label>Code</label><input value={code} onChange={(e) => setCode(e.target.value)} /></div>
@@ -218,11 +240,12 @@ export default function MasterData() {
   const canResolve = role === 'superadmin' || role === 'stores';               // resolve alerts
 
   const [tab, setTab] = useState('departments');
+  const [allocDept, setAllocDept] = useState('');   // §7: department picked on the allocation tab
   const [alerts, setAlerts] = useState([]);
   const [notes, setNotes] = useState([]);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [d, setD] = useState({ departments: [], specialties: [], machines: [], routes: [], dispatch: [], items: [] });
+  const [d, setD] = useState({ departments: [], machines: [], routes: [], dispatch: [], items: [] });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
@@ -232,15 +255,14 @@ export default function MasterData() {
   const reload = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [departments, specialties, machines, routes, dispatch, items] = await Promise.all([
+      const [departments, machines, routes, dispatch, items] = await Promise.all([
         masterApi.listDepartments({ includeInactive: 1 }),
-        masterApi.listSpecialties({ includeInactive: 1 }),
         masterApi.listMachines({ includeInactive: 1 }),
         masterApi.listRoutes({ includeInactive: 1 }),
         masterApi.listDispatchTypes({ includeInactive: 1 }),
         masterApi.listItems({ includeInactive: 1 }),
       ]);
-      setD({ departments, specialties, machines, routes, dispatch, items });
+      setD({ departments, machines, routes, dispatch, items });
     } catch (e) { setErr(e.message || 'Failed to load master data'); }
     finally { setLoading(false); }
   }, []);
@@ -290,7 +312,6 @@ export default function MasterData() {
       const api = masterApi;
       const call = {
         departments: id ? () => api.updateDepartment(id, body) : () => api.createDepartment(body),
-        specialties: id ? () => api.updateSpecialty(id, body) : () => api.createSpecialty(body),
         machines: id ? () => api.updateMachine(id, body) : () => api.createMachine(body),
         routes: id ? () => api.updateRoute(id, body) : () => api.createRoute(body),
         dispatch: id ? () => api.updateDispatchType(id, body) : () => api.createDispatchType(body),
@@ -309,7 +330,7 @@ export default function MasterData() {
   return (
     <div>
       <div className="pg-ttl">⚙️ Master Data</div>
-      <div className="pg-sub">Production configuration — routes, machines, departments, specialties, dispatch types and the item master.</div>
+      <div className="pg-sub">Production configuration — routes, machines, departments, dispatch types and the item master.</div>
 
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
@@ -334,12 +355,6 @@ export default function MasterData() {
             render={(r) => [r.name, r.code, r.seqHint, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'departments', row: r }) : null} />
         )}
-        {tab === 'specialties' && (
-          <Section title="Specialties" canAdd={canConfig} onAdd={() => setModal({ type: 'specialties', row: {} })}
-            cols={['Name', 'Code', 'Active']} rows={d.specialties}
-            render={(r) => [r.name, r.code, r.active ? 'Yes' : 'No']}
-            onEdit={canConfig ? (r) => setModal({ type: 'specialties', row: r }) : null} />
-        )}
         {tab === 'machines' && (
           <Section title="Machines" canAdd={canConfig} onAdd={() => setModal({ type: 'machines', row: {} })}
             cols={['Code', 'Name', 'Department', 'Type', 'Speed', 'Hrs/day', 'Active']} rows={d.machines}
@@ -347,10 +362,63 @@ export default function MasterData() {
               r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null} />
         )}
+        {tab === 'allocation' && (
+          <div>
+            <div className="fbar" style={{ justifyContent: 'space-between' }}>
+              <div className="fg" style={{ margin: 0, minWidth: 260 }}>
+                <label>Department</label>
+                <select value={allocDept} onChange={(e) => setAllocDept(e.target.value)} aria-label="Allocation department">
+                  <option value="">— select a department —</option>
+                  {opt(d.departments).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              </div>
+              {canConfig && allocDept && (
+                <button className="btn btn-g" onClick={() => setModal({ type: 'machines', row: { departmentId: Number(allocDept) } })}>
+                  ＋ Add machine to this department
+                </button>
+              )}
+            </div>
+            {!allocDept ? (
+              <div className="al al-b" style={{ marginTop: 10 }}>Pick a department to see and manage the machines allocated to it.</div>
+            ) : (() => {
+              const list = (d.machines || []).filter((m) => String(m.departmentId) === String(allocDept));
+              return list.length === 0 ? (
+                <div className="al al-y" style={{ marginTop: 10 }}>No machines under this department yet.</div>
+              ) : (
+                <div className="tw sy" style={{ marginTop: 10 }}>
+                  <table>
+                    <thead><tr><th>Code</th><th>Machine</th><th>Ideal speed</th><th>Hrs/day</th><th>Status</th>{canConfig && <th style={{ width: 200 }}>Actions</th>}</tr></thead>
+                    <tbody>
+                      {list.map((m) => (
+                        <tr key={m.id} className={m.active === false ? 'nr' : undefined}>
+                          <td>{m.code}</td>
+                          <td>{m.name}</td>
+                          <td>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>
+                          <td>{m.functionalHoursPerDay ?? '—'}</td>
+                          <td><span className={'tag ' + (m.active === false ? 'tr' : 'tg')}>{m.active === false ? 'Disabled' : 'Enabled'}</span></td>
+                          {canConfig && (
+                            <td>
+                              <button className="btn btn-s" onClick={() => setModal({ type: 'machines', row: m })}>Edit</button>{' '}
+                              {/* §10: disabling here removes the machine from the PPC board + route selection. */}
+                              <button className={'btn ' + (m.active === false ? 'btn-g' : 'btn-r')}
+                                onClick={() => save('machines', m, { active: m.active === false })}>
+                                {m.active === false ? 'Enable' : 'Disable'}
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        )}
         {tab === 'routes' && (
           <Section title="Routes" canAdd={canConfig} onAdd={() => setModal({ type: 'routes', row: {} })}
-            cols={['Name', 'Code', 'Stages (in order)', 'Active']} rows={d.routes}
-            render={(r) => [r.name, r.code, (r.stages || []).map((s) => s.departmentName).join(' → ') || '—', r.active ? 'Yes' : 'No']}
+            cols={['Dispatch Form', 'Name', 'Code', 'Stages (in order)', 'Active']} rows={d.routes}
+            render={(r) => [r.dispatchTypeName || '—', r.name, r.code, (r.stages || []).map((s) => s.departmentName).join(' → ') || '—', r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'routes', row: r }) : null} />
         )}
         {tab === 'dispatch' && (
@@ -382,8 +450,8 @@ export default function MasterData() {
               </div>
             )}
             <Section title="Item Master" canAdd={canItems} onAdd={() => setModal({ type: 'items', row: {} })}
-              cols={['Code', 'Name', 'UOM', 'Specialty', 'Department', 'Stock', 'Active']} rows={d.items}
-              render={(r) => [r.code, r.name, r.uom, r.specialtyName, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
+              cols={['Code', 'Name', 'UOM', 'Department', 'Stock', 'Active']} rows={d.items}
+              render={(r) => [r.code, r.name, r.uom, r.departmentName, r.currentStock, r.active ? 'Yes' : 'No']}
               onEdit={canItems ? (r) => setModal({ type: 'items', row: r }) : null}
               extra={canStock ? (r) => <button className="btn btn-b" onClick={() => setModal({ type: 'stock', row: r })}>Stock</button> : null} />
           </div>
@@ -394,12 +462,13 @@ export default function MasterData() {
             {alerts.length === 0 ? <div className="al al-g">No open shortages.</div> : (
               <div className="tw sy">
                 <table>
-                  <thead><tr><th>Sale Order</th><th>Item</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
+                  <thead><tr><th>Sale Order</th><th>Item</th><th>Needed by</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
                   <tbody>
                     {alerts.map((a) => (
                       <tr key={a.id} className="nr">
                         <td><span className="so-pill">{a.so}</span></td>
                         <td>{a.itemCode}{a.itemName ? ' — ' + a.itemName : ''}</td>
+                        <td>{a.departmentName || '—'}</td>
                         <td>{a.requiredQty}</td>
                         <td>{a.availableQty}</td>
                         <td><b>{a.shortageQty}</b></td>
@@ -444,16 +513,6 @@ export default function MasterData() {
           ]} />
       </Modal>
 
-      <Modal open={modal?.type === 'specialties'} title={modal?.row?.id ? 'Edit Specialty' : 'Add Specialty'} onClose={close}>
-        <EntityForm submitting={busy} onCancel={close} initial={modal?.row}
-          onSubmit={(b) => save('specialties', modal.row, b)}
-          fields={[
-            { key: 'name', label: 'Name', required: true },
-            { key: 'code', label: 'Code' },
-            { key: 'active', label: 'Active', type: 'checkbox' },
-          ]} />
-      </Modal>
-
       <Modal open={modal?.type === 'machines'} title={modal?.row?.id ? 'Edit Machine' : 'Add Machine'} onClose={close}>
         <EntityForm submitting={busy} onCancel={close} initial={modal?.row}
           onSubmit={(b) => save('machines', modal.row, b)}
@@ -463,14 +522,14 @@ export default function MasterData() {
             { key: 'departmentId', label: 'Department', type: 'select', options: d.departments },
             { key: 'machineType', label: 'Machine type' },
             { key: 'defaultSpeed', label: 'Default speed (per min)', type: 'number' },
-            { key: 'speedUom', label: 'Speed UOM', placeholder: 'm/min, pouches/min' },
+            { key: 'speedUom', label: 'Speed unit', type: 'select', options: SPEED_UOMS },
             { key: 'functionalHoursPerDay', label: 'Functional hrs/day', type: 'number' },
             { key: 'active', label: 'Active', type: 'checkbox' },
           ]} />
       </Modal>
 
       <Modal open={modal?.type === 'routes'} wide title={modal?.row?.id ? 'Edit Route' : 'Add Route'} onClose={close}>
-        <RouteForm initial={modal?.row} departments={d.departments} onCancel={close}
+        <RouteForm initial={modal?.row} departments={d.departments} dispatchTypes={d.dispatch} onCancel={close}
           onSubmit={(b) => save('routes', modal.row, b)} />
       </Modal>
 
@@ -492,7 +551,6 @@ export default function MasterData() {
             { key: 'code', label: 'Item code', required: true },
             { key: 'name', label: 'Item name', required: true },
             { key: 'uom', label: 'UOM' },
-            { key: 'specialtyId', label: 'Specialty', type: 'select', options: d.specialties },
             { key: 'departmentId', label: 'Department', type: 'select', options: d.departments },
             { key: 'itemType', label: 'Item type' },
             { key: 'materialType', label: 'Material type' },

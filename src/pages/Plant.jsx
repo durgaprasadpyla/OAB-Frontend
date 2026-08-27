@@ -6,6 +6,7 @@ import { dash, today } from '../lib/format.js';
 import { STAGES, PROD_STATUSES } from '../lib/constants.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
+import PlanDownloads from '../components/PlanDownloads.jsx';
 
 /**
  * Production Floor — native port of the legacy plant view (showPlantView /
@@ -150,7 +151,9 @@ export default function Plant() {
 
   return (
     <div id="app">
-      <div className="fbar">
+      {/* §63: the Plant login downloads the PPC's weekly / daily plans too. */}
+      <PlanDownloads />
+      <div className="fbar" style={{ marginTop: 12 }}>
         <select value={sheet} aria-label="Sheet" onChange={(e) => setSheet(e.target.value)}>
           <option value="SF">Stay Fresh OAB</option><option value="OT">Others OAB</option>
         </select>

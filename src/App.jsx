@@ -27,6 +27,9 @@ import Production from './pages/Production.jsx';
 import WeeklyPlanner from './pages/WeeklyPlanner.jsx';
 import DailyBoard from './pages/DailyBoard.jsx';
 import Reports from './pages/Reports.jsx';
+import PpcDashboard from './pages/PpcDashboard.jsx';
+import MisStatus from './pages/MisStatus.jsx';
+import PlanReadiness from './pages/PlanReadiness.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -72,6 +75,10 @@ export default function App() {
         <Route path="/planner" element={<RoleRoute path="/planner"><WeeklyPlanner /></RoleRoute>} />
         <Route path="/board" element={<RoleRoute path="/board"><DailyBoard /></RoleRoute>} />
         <Route path="/reports" element={<RoleRoute path="/reports"><Reports /></RoleRoute>} />
+        {/* Enhancements 2.0 — the three planning-module login landing pages. */}
+        <Route path="/ppc" element={<RoleRoute path="/ppc"><PpcDashboard /></RoleRoute>} />
+        <Route path="/mis" element={<RoleRoute path="/mis"><MisStatus /></RoleRoute>} />
+        <Route path="/plan" element={<RoleRoute path="/plan"><PlanReadiness /></RoleRoute>} />
         <Route path="*" element={<Landing />} />
       </Route>
     </Routes>

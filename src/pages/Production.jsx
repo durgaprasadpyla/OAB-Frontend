@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { productionApi, masterApi, planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
+import { useAuth } from '../auth.jsx';
 
 // Production execution (Stage 5): Plant / Plant Manager record actual production +
 // wastage against an SO's route stages. Good output automatically becomes available
@@ -16,6 +17,8 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
   const [wastage, setWastage] = useState('');
   const [machineId, setMachineId] = useState('');
   const [prodDate, setProdDate] = useState(today());
+  const [startTime, setStartTime] = useState('');   // §59: actual start (HH:mm)
+  const [endTime, setEndTime] = useState('');       // §59: actual end (HH:mm)
   const [err, setErr] = useState('');
 
   async function submit(e) {
@@ -24,7 +27,8 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
     if (p + w <= 0) { setErr('Enter a produced and/or wastage quantity'); return; }
     if (p + w > Number(stage.remaining) + 1e-9) { setErr(`Only ${stage.remaining} remain at this stage`); return; }
     try {
-      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, machineId: machineId ? Number(machineId) : undefined, prodDate });
+      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, machineId: machineId ? Number(machineId) : undefined, prodDate,
+        startTime: startTime || undefined, endTime: endTime || undefined });
     } catch (e2) { setErr(e2.message || 'Save failed'); }
   }
 
@@ -38,6 +42,12 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
         <div className="fg"><label>Actual produced (good)</label><input type="number" step="any" value={produced} onChange={(e) => setProduced(e.target.value)} /></div>
         <div className="fg"><label>Wastage</label><input type="number" step="any" value={wastage} onChange={(e) => setWastage(e.target.value)} /></div>
         <div className="fg"><label>Date</label><input type="date" value={prodDate} onChange={(e) => setProdDate(e.target.value)} /></div>
+      </div>
+      {/* §59: actual start/end → the server computes duration and start-delay vs plan. */}
+      <div className="g3">
+        <div className="fg"><label>Start time (actual)</label><input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div>
+        <div className="fg"><label>End time (actual)</label><input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div>
+        <div className="fg"><label>&nbsp;</label><div className="pg-sub" style={{ paddingTop: 8, margin: 0 }}>Duration and any delayed start vs the plan are computed automatically.</div></div>
       </div>
       <div className="fg">
         <label>Machine (optional)</label>
@@ -70,6 +80,11 @@ export default function Production() {
   const [readyMode, setReadyMode] = useState('');     // dropdown selection: '' | 'COMPLETE' | 'PARTIAL'
   const [readyMeters, setReadyMeters] = useState(''); // PARTIAL metres input
   const [savingReady, setSavingReady] = useState(false);
+  // Ready-to-Plan is the readiness gatekeeper's action (Plant / Plant Manager / PLAN /
+  // Super Admin). Other roles that reach this screen to read or record actuals (e.g. MIS,
+  // Planner) don't see the control at all — the write is also refused server-side.
+  const auth = useAuth();
+  const canMarkReady = ['plant', 'pm', 'plan', 'superadmin'].includes(auth?.role);
 
   const loadPending = useCallback(async () => {
     try {
@@ -209,7 +224,9 @@ export default function Production() {
           </div>
 
           {/* Ready to Plan — the Plant is the source of truth for material readiness.
-              Complete = whole job ready; Partial = the Plant enters the metres ready. */}
+              Complete = whole job ready; Partial = the Plant enters the metres ready.
+              Only readiness-gatekeeper roles see this control (§18). */}
+          {canMarkReady && (
           <div className="fbar" style={{ marginTop: 8, alignItems: 'flex-end' }}>
             <div className="fg" style={{ margin: 0, minWidth: 230 }}>
               <label>Ready to Plan
@@ -231,6 +248,7 @@ export default function Production() {
             <button className="btn btn-g" onClick={saveReady} disabled={savingReady || !readyMode}>{savedReady ? 'Update readiness' : 'Mark Ready'}</button>
             {savedReady && <button className="btn btn-s" onClick={clearReady}>Remove from pool</button>}
           </div>
+          )}
           {!prod.hasRoute ? (
             <div>
               <div className="al al-y">No route stages yet for this SO.</div>
@@ -262,15 +280,20 @@ export default function Production() {
               <div className="ctitle" style={{ marginTop: 14 }}>Production log</div>
               <div className="tw">
                 <table>
-                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>By</th></tr></thead>
+                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>Start–End</th><th>Duration</th><th>Delay</th><th>By</th></tr></thead>
                   <tbody>
                     {prod.runs.map((r) => (
-                      <tr key={r.id}>
+                      <tr key={r.id} className={Number(r.delayMin) > 0 ? 'nr' : undefined}>
                         <td>{r.prodDate || ''}</td>
                         <td>{r.departmentName}</td>
                         <td>{r.machineName || '—'}</td>
                         <td>{r.producedQty}</td>
                         <td>{r.wastageQty}</td>
+                        <td>{r.startTime ? `${r.startTime}–${r.endTime || '…'}` : '—'}</td>
+                        <td>{r.durationMin != null ? `${r.durationMin} min` : '—'}</td>
+                        <td>{r.delayMin != null && Number(r.delayMin) > 0
+                          ? <span className="tag tr">late {r.delayMin} min</span>
+                          : r.delayMin != null ? <span className="tag tg">on time</span> : '—'}</td>
                         <td>{r.actor}</td>
                       </tr>
                     ))}

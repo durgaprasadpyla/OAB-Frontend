@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../data.jsx';
+import { masterApi } from '../api.js';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
@@ -570,12 +571,17 @@ function ASLEditor() {
 }
 
 /* ─────────────────────────── 3 · Item Master ─────────────────────────── */
+// Enhancements 2.0 §1 + §11: Specialty is a per-item field on THIS Padmin Item Master
+// (positioned right after Sub Group), and Department is a dropdown at the END (after
+// UOM) sourced from the production Department master. (Not a separate Super Admin tab.)
 const IM_FIELDS = [
   { k: 'specificMaterial', label: 'Description' },
   { k: 'materialType', label: 'Material Type' },
   { k: 'subGroup', label: 'Sub Group' },
+  { k: 'specialty', label: 'Specialty' },                 // §11: after Sub Group
   { k: 'microns', label: 'Microns' },
   { k: 'uom', label: 'UOM' },
+  { k: 'department', label: 'Department', dept: true },   // §11: at the end, after UOM (dropdown)
 ];
 
 // Header-key matcher for Excel import: case/space/punctuation-insensitive. (imImportExcel pick 12261)
@@ -586,7 +592,7 @@ function pickCol(o, names) {
   }
   return '';
 }
-const IM_IDENT = ['specificMaterial', 'materialType', 'subGroup', 'microns', 'uom'];
+const IM_IDENT = ['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'uom', 'department'];
 
 function ItemMaster() {
   const { mods, save } = useData();
@@ -600,6 +606,16 @@ function ItemMaster() {
   const [msg, setMsg] = useState(null);
 
   const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
+
+  // Department master (Enhancements 2.0 §5/§11) — the item's Department dropdown lists
+  // the production departments configured in Master Data. Best-effort: if the master is
+  // empty/unreachable, the field falls back to a free-text entry so items still save.
+  const [depts, setDepts] = useState([]);
+  useEffect(() => {
+    let live = true;
+    masterApi.listDepartments().then((d) => { if (live) setDepts((d || []).filter((x) => x.active !== false)); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   // Distinct items owned by the ASL (identity managed there → read-only reference here). (imMasterList 6795)
   const aslItems = useMemo(() => {
@@ -620,7 +636,7 @@ function ItemMaster() {
   );
 
   const setCell = (i, f, v) => setExtra((rs) => rs.map((r, j) => (j === i ? { ...r, [f]: v } : r)));
-  function addItem() { setExtra((rs) => [...rs, { itemCode: nextItemCode(asl, rs), specificMaterial: '', materialType: '', subGroup: '', microns: '', uom: '' }]); }
+  function addItem() { setExtra((rs) => [...rs, { itemCode: nextItemCode(asl, rs), specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' }]); }
   function delItem(i) { setExtra((rs) => rs.filter((_, j) => j !== i)); }
 
   async function saveAll() {
@@ -633,13 +649,13 @@ function ItemMaster() {
   function exportXlsx() {
     const list = [...aslItems.map((m) => ({ code: m.code, ...m.ref })), ...extra];
     if (!list.length) { flash('r', 'Item Master is empty — nothing to export.'); return; }
-    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Supplied By'];
+    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Specialty', 'Item Description', 'Microns', 'UOM', 'Department', 'Supplied By'];
     const seen = new Set();
     const body = [];
     list.forEach((r) => {
       const code = r.itemCode || r.code;
       if (!code || seen.has(code)) return; seen.add(code);
-      body.push([code, r.materialType || '', r.subGroup || '', r.specificMaterial || '', r.microns || '', r.uom || '', suppliersFor(code).join(', ')]);
+      body.push([code, r.materialType || '', r.subGroup || '', r.specialty || '', r.specificMaterial || '', r.microns || '', r.uom || '', r.department || '', suppliersFor(code).join(', ')]);
     });
     exportAOA([header, ...body], 'Bloomflex_Item_Master_' + today());
   }
@@ -655,15 +671,17 @@ function ItemMaster() {
         specificMaterial: pickCol(o, ['itemdescription', 'description', 'specificmaterial']),
         materialType: pickCol(o, ['materialtype', 'material']),
         subGroup: pickCol(o, ['subgroup', 'group']),
+        specialty: pickCol(o, ['specialty', 'speciality']),
         microns: pickCol(o, ['microns', 'micron']),
         uom: pickCol(o, ['uom', 'unit']),
+        department: pickCol(o, ['department', 'dept']),
       })).filter((r) => r.code);
       if (!parsed.length) { flash('r', 'No rows with an Item Code were found in the file.'); return; }
 
       const existing = new Set([...aslItems.map((m) => m.code), ...extra.map((r) => r.itemCode)]);
       const nUpd = parsed.filter((r) => existing.has(r.code)).length;
       const nNew = parsed.length - nUpd;
-      const ok = window.confirm('Import ' + parsed.length + ' row(s) from Excel?\n\n• ' + nUpd + ' existing item code(s) will be OVERWRITTEN (description, material type, sub-group, microns, UOM).\n• ' + nNew + ' new item code(s) will be added.\n\nProceed and overwrite?');
+      const ok = window.confirm('Import ' + parsed.length + ' row(s) from Excel?\n\n• ' + nUpd + ' existing item code(s) will be OVERWRITTEN (description, material type, sub-group, specialty, microns, UOM, department).\n• ' + nNew + ' new item code(s) will be added.\n\nProceed and overwrite?');
       if (!ok) return;
 
       const byCode = {}; parsed.forEach((r) => { byCode[r.code] = r; });
@@ -671,7 +689,7 @@ function ItemMaster() {
       const newAsl = asl.map((a) => (byCode[a.itemCode] ? { ...a, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[a.itemCode][f]; return o; }, {}) } : a));
       // Catalog-only rows: overwrite matches; append brand-new codes.
       const newExtra = extra.map((r) => (byCode[r.itemCode] ? { ...r, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[r.itemCode][f]; return o; }, {}) } : r));
-      parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, microns: r.microns, uom: r.uom }); });
+      parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, specialty: r.specialty, microns: r.microns, uom: r.uom, department: r.department }); });
 
       await save('purchase', { ...purchase, asl: newAsl, itemsExtra: newExtra });
       setExtra(newExtra);
@@ -681,8 +699,8 @@ function ItemMaster() {
 
   const match = (vals) => !q || vals.some((v) => String(v || '').toLowerCase().includes(q.toLowerCase()));
   const typeMatch = (r) => (!matF || String(r.materialType || '').trim() === matF) && (!subF || String(r.subGroup || '').trim() === subF);
-  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => typeMatch(r) && match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.microns]));
-  const aslRows = aslItems.filter((m) => typeMatch(m.ref) && match([m.code, m.ref.specificMaterial, m.ref.materialType, m.ref.subGroup, m.ref.microns]));
+  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => typeMatch(r) && match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.specialty, r.department, r.microns]));
+  const aslRows = aslItems.filter((m) => typeMatch(m.ref) && match([m.code, m.ref.specificMaterial, m.ref.materialType, m.ref.subGroup, m.ref.specialty, m.ref.department, m.ref.microns]));
 
   return (
     <>
@@ -717,7 +735,18 @@ function ItemMaster() {
                 <tr key={i}>
                   <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{r.itemCode}</td>
                   {IM_FIELDS.map((f) => (
-                    <td key={f.k}><input value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)} /></td>
+                    <td key={f.k}>
+                      {f.dept
+                        ? (depts.length
+                            ? (
+                              <select value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)}>
+                                <option value="">— department —</option>
+                                {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                              </select>
+                            )
+                            : <input value={r[f.k] ?? ''} placeholder="department" onChange={(e) => setCell(i, f.k, e.target.value)} />)
+                        : <input value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)} />}
+                    </td>
                   ))}
                   <td style={{ textAlign: 'center' }}>
                     <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => delItem(i)} title="Delete item code">✕</button>

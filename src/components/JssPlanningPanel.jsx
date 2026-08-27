@@ -23,7 +23,8 @@ export default function JssPlanningPanel() {
   const [mSel, setMSel] = useState({});    // { [machineId]: { eligible, speed, changeover } }
   const [baseQty, setBaseQty] = useState('1');
   const [baseUom, setBaseUom] = useState('');
-  const [lines, setLines] = useState([]);  // [{ departmentId, itemId, qtyPerBase, uom }]
+  const [lines, setLines] = useState([]);  // [{ departmentId, itemId, qtyPerBase, uom, search }]
+  const [setupMin, setSetupMin] = useState('');   // §22: QC-communicated job setup time
 
   useEffect(() => {
     (async () => {
@@ -49,6 +50,7 @@ export default function JssPlanningPanel() {
       setBaseQty(String(b.baseQty ?? 1));
       setBaseUom(b.baseUom || '');
       setLines((b.items || []).map((it) => ({ departmentId: it.departmentId, itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '' })));
+      setSetupMin(j.config?.setupMin != null ? String(j.config.setupMin) : '');
     } catch (e) { setErr(e.message || 'Failed to load JSS'); }
     finally { setLoading(false); }
   }, []);
@@ -62,15 +64,26 @@ export default function JssPlanningPanel() {
     (master.machines || []).forEach((mc) => { if (mc.departmentId != null) (m[mc.departmentId] = m[mc.departmentId] || []).push(mc); });
     return m;
   }, [master.machines]);
+  // §15: the routes that belong to the JSS's selected Dispatch Form — the QC picks one by radio.
+  const formRoutes = useMemo(
+    () => (master.routes || []).filter((r) => jss?.config?.dispatchTypeId != null && String(r.dispatchTypeId) === String(jss.config.dispatchTypeId)),
+    [master.routes, jss?.config?.dispatchTypeId],
+  );
 
   async function setDispatch(dispatchTypeId) {
     setErr('');
-    try { await jssApi.setConfig(spec, { dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null }); flash('Dispatch type saved — route auto-selected'); await loadSpec(spec); }
+    try { await jssApi.setConfig(spec, { dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null }); flash('Dispatch Form saved - now choose one of its routes below'); await loadSpec(spec); }
     catch (e) { setErr(e.message); }
   }
   async function setRoute(routeId) {
     setErr('');
     try { await jssApi.setConfig(spec, { dispatchTypeId: jss?.config?.dispatchTypeId ?? null, routeId: routeId ? Number(routeId) : null }); flash('Route updated'); await loadSpec(spec); }
+    catch (e) { setErr(e.message); }
+  }
+  // §22-23: the job setup time — taken into account when the PPC plans this job on a machine.
+  async function saveSetup() {
+    setErr('');
+    try { await jssApi.setConfig(spec, { setupMin: setupMin === '' ? null : Number(setupMin) }); flash('Setup time saved'); await loadSpec(spec); }
     catch (e) { setErr(e.message); }
   }
 
@@ -100,10 +113,23 @@ export default function JssPlanningPanel() {
   }
 
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
+  // §24-30: under each route department, only the items TAGGED to that department in
+  // the item master (plus untagged "others") are offered.
+  const itemsForDept = (departmentId) => (master.items || []).filter(
+    (it) => it.departmentId == null || String(it.departmentId) === String(departmentId));
+  const itemById = (id) => (master.items || []).find((it) => String(it.id) === String(id));
+  // §31: type-and-search — an exact code or "CODE — name" match pulls the item in.
+  function pickItem(i, departmentId, text) {
+    const t = String(text || '').trim();
+    const pool = itemsForDept(departmentId);
+    const found = pool.find((it) => itemLabel(it) === t) || pool.find((it) => String(it.code) === t);
+    if (found) setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: found.id, uom: x.uom || found.uom || '', search: undefined } : x)));
+    else setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: '', search: text } : x)));
+  }
 
   return (
     <div>
-      <div className="pg-sub">Configure the route, eligible machines (speed &amp; changeover) and the department-wise BOM for a JSS. The route is chosen automatically from the Dispatch Type.</div>
+      <div className="pg-sub">Configure the route, eligible machines (speed &amp; changeover) and the department-wise BOM for a JSS. Pick the Dispatch Form, then choose one of its routes.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
 
@@ -133,11 +159,22 @@ export default function JssPlanningPanel() {
                 </select>
               </div>
               <div className="fg">
-                <label>Route {jss.config?.dispatchTypeId ? '(auto — editable)' : ''}</label>
-                <select value={jss.config?.routeId ?? ''} onChange={(e) => setRoute(e.target.value)}>
-                  <option value="">— none —</option>
-                  {master.routes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
+                <label>Route — select one for this JSS</label>
+                {!jss.config?.dispatchTypeId ? (
+                  <div className="al al-b" style={{ marginTop: 4 }}>Pick a Dispatch Form first — its routes appear here to choose from.</div>
+                ) : formRoutes.length === 0 ? (
+                  <div className="al al-y" style={{ marginTop: 4 }}>No routes are configured for this Dispatch Form yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4 }}>
+                    {formRoutes.map((r) => (
+                      <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                        <input type="radio" name="jss-route" checked={String(jss.config?.routeId ?? '') === String(r.id)}
+                          onChange={() => setRoute(r.id)} />
+                        <span>{r.name}{(r.stages && r.stages.length) ? ' — ' + r.stages.map((s) => s.departmentName).join(' → ') : ''}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="fg">
                 <label>Departments (in order)</label>
@@ -146,6 +183,16 @@ export default function JssPlanningPanel() {
                     : <span className="tag ty">Pick a dispatch type or route</span>}
                 </div>
               </div>
+            </div>
+            {/* §22-23: setup time communicated by the QC; counted against machine availability when planning. */}
+            <div className="fbar" style={{ alignItems: 'flex-end', marginTop: 8 }}>
+              <div className="fg" style={{ margin: 0, maxWidth: 220 }}>
+                <label>Job setup time (minutes)</label>
+                <input type="number" min="0" step="1" value={setupMin} placeholder="e.g. 30"
+                  onChange={(e) => setSetupMin(e.target.value)} aria-label="Job setup time (minutes)" />
+              </div>
+              <button className="btn btn-s" onClick={saveSetup}>Save setup time</button>
+              <span className="pg-sub" style={{ margin: 0 }}>Added to every planned run of this job when computing machine availability.</span>
             </div>
           </div>
 
@@ -205,30 +252,42 @@ export default function JssPlanningPanel() {
               <div className="al al-y">Set the route first.</div>
             ) : routeDepts.map((d) => {
               const deptLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => String(l.departmentId) === String(d.departmentId));
+              const deptItems = itemsForDept(d.departmentId);
+              const listId = `jss-bom-items-${d.departmentId}`;
               return (
                 <div key={d.departmentId} style={{ marginBottom: 12 }}>
                   <div className="fbar" style={{ justifyContent: 'space-between' }}>
-                    <div className="ctitle" style={{ margin: 0, fontSize: 12 }}>{d.seq}. {d.departmentName}</div>
+                    <div className="ctitle" style={{ margin: 0, fontSize: 12 }}>{d.seq}. {d.departmentName}
+                      <span className="tag tgr" style={{ marginLeft: 6 }}>{deptItems.length} item(s) tagged</span></div>
                     <button className="btn btn-s" onClick={() => addLine(d.departmentId)}>＋ Add item</button>
                   </div>
+                  {/* §31: exhaustive list → type-and-search, limited to this department's items + others. */}
+                  <datalist id={listId}>
+                    {deptItems.map((it) => <option key={it.id} value={itemLabel(it)} />)}
+                  </datalist>
                   {deptLines.length === 0 ? <div className="al al-y">No items for this department.</div> : (
                     <div className="tw">
                       <table>
-                        <thead><tr><th>Item</th><th style={{ width: 160 }}>Qty / base</th><th style={{ width: 120 }}>UOM</th><th style={{ width: 60 }}></th></tr></thead>
+                        <thead><tr><th>Item (type to search)</th><th style={{ width: 120 }}>Item code</th><th style={{ width: 160 }}>Qty / base</th><th style={{ width: 120 }}>UOM</th><th style={{ width: 60 }}></th></tr></thead>
                         <tbody>
-                          {deptLines.map(({ l, i }) => (
-                            <tr key={i}>
-                              <td>
-                                <select value={l.itemId} onChange={(e) => setLine(i, 'itemId', e.target.value)}>
-                                  <option value="">— select item —</option>
-                                  {master.items.map((it) => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
-                                </select>
-                              </td>
-                              <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
-                              <td><input value={l.uom} onChange={(e) => setLine(i, 'uom', e.target.value)} /></td>
-                              <td><button className="btn btn-r" onClick={() => rmLine(i)}>✕</button></td>
-                            </tr>
-                          ))}
+                          {deptLines.map(({ l, i }) => {
+                            const sel = itemById(l.itemId);
+                            return (
+                              <tr key={i}>
+                                <td>
+                                  <input list={listId} style={{ width: '100%' }} placeholder="type item name / code…"
+                                    aria-label={`BOM item for ${d.departmentName}`}
+                                    value={l.search != null ? l.search : (sel ? itemLabel(sel) : '')}
+                                    onChange={(e) => pickItem(i, d.departmentId, e.target.value)} />
+                                </td>
+                                {/* §31: the code pulls in automatically from the item master. */}
+                                <td>{sel ? sel.code : '—'}</td>
+                                <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
+                                <td><input value={l.uom} onChange={(e) => setLine(i, 'uom', e.target.value)} /></td>
+                                <td><button className="btn btn-r" onClick={() => rmLine(i)}>✕</button></td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>

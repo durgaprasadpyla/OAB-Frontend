@@ -49,6 +49,10 @@ async function loadSlot(id) {
 
 beforeAll(async () => {
   try {
+    // The suite runs single-fork, so a fetch mock installed by an EARLIER test file
+    // can still be on globalThis here — it happily answers /api/health and makes this
+    // file "live" against a fake. Only a native fetch can reach a real backend.
+    if (!String(globalThis.fetch).includes('[native code]')) return;
     const h = await fetch(BASE + '/api/health', { signal: AbortSignal.timeout(3000) });
     if (!h.ok) return;
     const lr = await fetch(BASE + '/api/auth/login', {
@@ -235,7 +239,9 @@ describe('LIVE — sales system (module 12)', () => {
 
 describe('LIVE — dropdown overrides actually stored in this database', () => {
   t('resolves every list, using the stored override where present', () => {
-    DROPDOWN_DEFS.forEach((d) => {
+    // Master-backed defs (Departments §5, Dispatch Forms §16) live in the normalized
+    // tables, not the sales blob — ddList never resolves them, so they are excluded.
+    DROPDOWN_DEFS.filter((d) => !d.master).forEach((d) => {
       const list = ddList(mod.sales, d.key);
       expect(Array.isArray(list), d.key).toBe(true);
       expect(list.length, `${d.key} resolved empty`).toBeGreaterThan(0);

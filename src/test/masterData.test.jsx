@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth.jsx';
 import MasterData from '../pages/MasterData.jsx';
@@ -29,13 +29,16 @@ describe('planning roles wiring', () => {
     ['user', 'qc', 'pm', 'plant', 'purchase', 'scrap', 'hr', 'sales'].forEach((r) => expect(canAccess(r, '/master')).toBe(false));
   });
 
-  it('adds a Master Data tab for superadmin and padmin, not other ops or panel roles', () => {
-    expect(navTabs('superadmin').some((t) => t.to === '/master')).toBe(true);
-    expect(navTabs('padmin').some((t) => t.to === '/master')).toBe(true);
-    expect(navTabs('user').some((t) => t.to === '/master')).toBe(false);
+  it('does NOT put Master Data in the main header — §6 moves it into the Dashboard', () => {
+    // Enhancements 2.0 §6: no separate main-header Master Data tab.
+    expect(navTabs('superadmin').some((t) => t.to === '/master')).toBe(false);
+    expect(navTabs('padmin').some((t) => t.to === '/master')).toBe(false);
     expect(navTabs('planner')).toEqual([]);   // panel role — no ops tabs
     // the existing ops tabs are still present
     expect(navTabs('superadmin').some((t) => t.to === '/po')).toBe(true);
+    // but the /master route is still reachable for the roles that use it directly
+    expect(canAccess('superadmin', '/master')).toBe(true);
+    expect(canAccess('stores', '/master')).toBe(true);
   });
 });
 
@@ -89,6 +92,25 @@ describe('MasterData page', () => {
     expect(screen.getByRole('button', { name: 'Routes' })).toBeInTheDocument();
     // superadmin gets an Add button for the config section
     expect(screen.getByRole('button', { name: /Add/ })).toBeInTheDocument();
+  });
+
+  it('routes belong to a Dispatch Form — shows the column and the form dropdown (§4/§13)', async () => {
+    renderMaster('superadmin', {
+      departments: [{ id: 1, name: 'Printing', active: true }],
+      dispatch: [{ id: 9, name: 'Pouch', active: true }, { id: 10, name: 'Roll', active: true }],
+      routes: [{ id: 5, name: 'Pouch-A', code: 'PA', active: true, dispatchTypeId: 9, dispatchTypeName: 'Pouch',
+        stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] }],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Routes' }));
+    // the route list carries a Dispatch Form column with the route's form
+    expect(await screen.findByText('Dispatch Form')).toBeInTheDocument();
+    expect(screen.getByText('Pouch')).toBeInTheDocument();
+    // Add Route → the form offers a Dispatch Form dropdown listing every form
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    const dlg = await screen.findByRole('dialog');
+    expect(within(dlg).getByText(/Dispatch Form/)).toBeInTheDocument();
+    expect(within(dlg).getByRole('option', { name: 'Pouch' })).toBeInTheDocument();
+    expect(within(dlg).getByRole('option', { name: 'Roll' })).toBeInTheDocument();
   });
 
   it('shows a read-only view for planner (no Add controls)', async () => {

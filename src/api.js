@@ -251,7 +251,11 @@ export const productionApi = {
 export const planningApi = {
   // Plant is the source of truth for material readiness: mode = 'COMPLETE' (whole job)
   // or 'PARTIAL' (readyQty meters). readyQty is ignored for COMPLETE / unmarking.
-  setReady: (so, ready, mode, readyQty) => api('/api/planning/ready', { method: 'POST', body: { so, ready, mode, readyQty } }),
+  // Not ready (§47-54): extra = { notReadyReason: 'PLATES'|'MATERIAL'|'OTHERS',
+  // expectedReadyDate: 'yyyy-MM-dd' (mandatory with a reason), notReadyNote (OTHERS) }.
+  setReady: (so, ready, mode, readyQty, extra) => api('/api/planning/ready', { method: 'POST', body: { so, ready, mode, readyQty, ...(extra || {}) } }),
+  // Every SO's readiness row incl. the not-ready reason/date/note — the PLAN board.
+  readiness: () => api('/api/planning/readiness'),
   pool: () => api('/api/planning/pool'),
   soPlan: (so) => api('/api/planning/so?so=' + encodeURIComponent(so)),
   machineHours: (from, to) => api('/api/planning/machine-hours?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
@@ -263,10 +267,13 @@ export const planningApi = {
   reorder: (body) => api('/api/planning/reorder', { method: 'POST', body }),
 };
 
-// ── Reports (Stage 8: /api/reports/**) — planned-vs-actual, wastage, utilization.
+// ── Reports (Stage 8: /api/reports/**) — planned-vs-actual, wastage, utilization,
+// and delayed job starts (§59/§82).
 export const reportsApi = {
   production: (from, to, groupBy = 'department') =>
     api('/api/reports/production?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&groupBy=' + encodeURIComponent(groupBy)),
   utilization: (from, to) =>
     api('/api/reports/utilization?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  delays: (from, to) =>
+    api('/api/reports/delays?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
 };

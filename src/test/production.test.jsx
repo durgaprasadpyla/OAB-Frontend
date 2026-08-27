@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
+import { AuthProvider } from '../auth.jsx';
 import Production from '../pages/Production.jsx';
 
 // Stateful fetch mock: recording 20,000 at Printing (stage 1) makes it Partially
@@ -50,5 +51,29 @@ describe('Production page', () => {
     await waitFor(() => expect(screen.getByText('Partially Completed')).toBeInTheDocument());
     expect(screen.getByText('30000')).toBeInTheDocument();          // Printing remaining
     expect(screen.getAllByText('20000').length).toBeGreaterThan(0); // moved to Slitting (+ completed + log)
+  });
+
+  // The Ready-to-Plan control is a readiness-gatekeeper action, not an actuals action.
+  // A role that only records actuals here (MIS) must not see it; Plant does.
+  async function openSoAs(role) {
+    localStorage.clear();
+    localStorage.setItem('blm_token', 't');
+    localStorage.setItem('blm_role', role);
+    render(<AuthProvider><Production /></AuthProvider>);
+    await waitFor(() => expect(screen.getAllByText('26/500').length).toBeGreaterThan(0));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '26/500' } });
+    await waitFor(() => expect(screen.getByText('Printing')).toBeInTheDocument());
+  }
+
+  it('shows the Ready-to-Plan control to Plant', async () => {
+    await openSoAs('plant');
+    expect(screen.getByRole('button', { name: 'Mark Ready' })).toBeInTheDocument();
+  });
+
+  it('hides the Ready-to-Plan control from MIS (records actuals only)', async () => {
+    await openSoAs('mis');
+    expect(screen.queryByRole('button', { name: 'Mark Ready' })).not.toBeInTheDocument();
+    // …but MIS still has the actuals control it came for.
+    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument();
   });
 });
