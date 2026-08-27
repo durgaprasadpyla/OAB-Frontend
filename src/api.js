@@ -33,7 +33,16 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
   }
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    const err = new Error('HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : ''));
+    // Prefer the human reason the backend puts in the error body (Spring's
+    // {"message": "..."} / our {"error": "..."} shapes) over a raw JSON dump, so a
+    // banner reads "A department named 'printing' already exists", not "HTTP 409".
+    let reason = '';
+    try {
+      const j = JSON.parse(t);
+      if (j && typeof j === 'object') reason = j.message || j.error || '';
+    } catch { /* not JSON — fall through to the raw text */ }
+    const err = new Error(reason ? String(reason).slice(0, 300)
+      : 'HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : ''));
     err.status = res.status;
     if (res.status === 409) err.code = 'conflict';       // stale save — recoverable
     else if (res.status === 403) err.code = 'forbidden'; // wrong role — not a logout

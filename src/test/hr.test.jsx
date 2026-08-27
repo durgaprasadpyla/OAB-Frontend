@@ -16,7 +16,12 @@ const hrFixture = () => ({
     { id: 1, empCode: 'E-001', fullName: 'Asha Rao', firstName: 'Asha', lastName: 'Rao', departmentId: 10, departmentName: 'Production', designationName: 'Supervisor', joiningDate: '2024-04-01', mobile: '9000000001', status: 'Active' },
     { id: 2, empCode: 'E-002', fullName: 'Bala K', firstName: 'Bala', lastName: 'K', departmentId: 11, departmentName: 'QC', designationName: 'Analyst', joiningDate: '2025-01-15', mobile: '9000000002', status: 'On Notice' },
   ],
-  departments: [{ id: 10, name: 'Production', active: true }, { id: 11, name: 'QC', active: true }],
+  departments: [
+    { id: 10, name: 'Production', active: true },
+    { id: 11, name: 'QC', active: true },
+    // Deactivated — must still appear on the management panel (it owns its name).
+    { id: 12, name: 'PRINTING', active: false },
+  ],
   designations: [{ id: 20, title: 'Supervisor', active: true }],
   leaveTypes: [{ id: 30, name: 'Casual Leave', defaultDays: 12, active: true }],
   leaveRequests: [
@@ -175,6 +180,22 @@ describe('HR — Departments, designations and leave types', () => {
     await userEvent.click(within(screen.getByText('Departments').closest('.card')).getByText(/Add/));
     await waitFor(() => expect(saved.some((s) => s.hrPath === 'departments' && s.method === 'POST')).toBe(true));
     expect(saved.find((s) => s.hrPath === 'departments' && s.method === 'POST').body).toEqual({ name: 'Stores' });
+  });
+
+  // Regression (prod 2026-08-27): PRINTING was deactivated, vanished from the panel,
+  // and re-adding "printing" 409'd against the invisible row with a bare "HTTP 409".
+  it('shows deactivated departments and a human reason on a duplicate name', async () => {
+    await openHR();
+    await tab('Departments & Roles');
+    await waitFor(() => expect(screen.getByText('Departments')).toBeInTheDocument());
+    // the deactivated row is still listed (includeInactive) with its box unticked,
+    // so the user can simply re-enable it…
+    const row = await screen.findByDisplayValue('PRINTING');
+    expect(within(row.closest('tr')).getByRole('checkbox')).not.toBeChecked();
+    // …and a case-insensitive duplicate add explains itself instead of "HTTP 409".
+    await userEvent.type(screen.getByLabelText('New Departments'), 'printing');
+    await userEvent.click(within(screen.getByText('Departments').closest('.card')).getByText(/Add/));
+    await waitFor(() => expect(screen.getByText(/A department named 'printing' already exists/i)).toBeInTheDocument());
   });
 
   it('sends the default-days figure when adding a leave type', async () => {

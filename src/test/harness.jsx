@@ -288,9 +288,14 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
           if (query.departmentId) list = list.filter((e) => String(e.departmentId) === String(query.departmentId));
           return res(200, list);
         }
-        if (path === 'departments') return res(200, hr.departments || []);
-        if (path === 'designations') return res(200, hr.designations || []);
-        if (path === 'leave-types') return res(200, hr.leaveTypes || []);
+        // Mirror HrController: default = active-only; includeInactive=1 lists all.
+        // The Org management panels rely on includeInactive so a DEACTIVATED row
+        // (which still owns its unique name) stays visible and re-enableable.
+        const activeOnly = (list) => (query.includeInactive === '1' || query.includeInactive === 'true'
+          ? list : list.filter((r) => r.active !== false));
+        if (path === 'departments') return res(200, activeOnly(hr.departments || []));
+        if (path === 'designations') return res(200, activeOnly(hr.designations || []));
+        if (path === 'leave-types') return res(200, activeOnly(hr.leaveTypes || []));
         if (path === 'leave-requests') {
           let list = hr.leaveRequests || [];
           if (query.status) list = list.filter((r) => r.status === query.status);
@@ -303,6 +308,17 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       // Writes are recorded so tests can assert the request, then applied to the
       // fixture so a follow-up reload reflects them.
       saved.push({ hrPath: path, method, body });
+      if (path === 'departments' && method === 'POST') {
+        // Mirror HrService.createDepartment: the UNIQUE name is case-insensitive on
+        // MySQL and held by INACTIVE rows too; Spring renders the reason as
+        // {"message": "..."} (server.error.include-message=always).
+        if ((hr.departments || []).some((d) => String(d.name).toLowerCase() === String(body.name || '').toLowerCase())) {
+          return res(409, { message: `A department named '${body.name}' already exists` });
+        }
+        const row = { id: (hr.departments || []).length + 700, active: true, ...body };
+        hr.departments = [...(hr.departments || []), row];
+        return res(201, row);
+      }
       if (path === 'employees' && method === 'POST') {
         // Mirror HrService.createEmployee's two rejections so the UI's error
         // handling is exercised against the real contract, not a permissive stub.
