@@ -285,4 +285,7 @@ export const reportsApi = {
     api('/api/reports/utilization?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
   delays: (from, to) =>
     api('/api/reports/delays?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  // P6: planned/actual/wastage per SALE ORDER per department (PLAN + PPC dashboards).
+  soProduction: (from, to) =>
+    api('/api/reports/so-production?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
 };

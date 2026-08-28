@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { planningApi, reportsApi } from '../api.js';
 import { today } from '../lib/format.js';
+import SoWastagePanel from '../components/SoWastagePanel.jsx';
+import MachineHoursPanel from '../components/MachineHoursPanel.jsx';
+import WeeklyPlanner from './WeeklyPlanner.jsx';
+import DailyBoard from './DailyBoard.jsx';
 
 // PPC (Production Planning & Control) landing page — Enhancements 2.0 §62: "Dashboard
 // where planned vs actual will be displayed including the wastages — this will be the
@@ -14,8 +18,20 @@ function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.ge
 const n1 = (v) => (v == null ? 0 : Math.round(Number(v)));
 const sum = (arr, k) => (arr || []).reduce((s, r) => s + Number(r[k] || 0), 0);
 
+// §62: the PPC workspace is ONE page with the five tabs the document names —
+// Dashboard (landing, planned-vs-actual + wastage), Machine Availability, Weekly
+// plan, Daily planning and Machine-wise planning.
+const PPC_TABS = [
+  { k: 'dash', label: '📊 Dashboard' },
+  { k: 'avail', label: '🕐 Machine Availability' },
+  { k: 'weekly', label: '🗓 Weekly Plan' },
+  { k: 'daily', label: '📋 Daily Planning' },
+  { k: 'machinewise', label: '🏭 Machine-wise Planning' },
+];
+
 export default function PpcDashboard() {
   const nav = useNavigate();
+  const [tab, setTab] = useState('dash');
   const [from, setFrom] = useState(addDays(today(), -6));
   const [to, setTo] = useState(today());
   const [pool, setPool] = useState([]);
@@ -51,9 +67,22 @@ export default function PpcDashboard() {
   return (
     <div id="app">
       <div className="pg-ttl">📊 PPC — Production Planning Dashboard</div>
-      <div className="pg-sub">Your at-a-glance view of planned vs actual and wastage. Plan and re-sequence machine jobs from the Weekly Planner and Daily Board.</div>
+      <div className="pg-sub">Your at-a-glance view of planned vs actual and wastage. Plan and re-sequence machine jobs from the Weekly Plan and Daily Planning tabs.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
 
+      {/* C1: the five PPC tabs from the requirements doc */}
+      <div className="step-bar" style={{ marginBottom: 10 }}>
+        {PPC_TABS.map((t) => (
+          <button key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} onClick={() => setTab(t.k)}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === 'avail' && <MachineHoursPanel withWeekPicker />}
+      {tab === 'weekly' && <WeeklyPlanner embedded />}
+      {tab === 'daily' && <DailyBoard embedded />}
+      {tab === 'machinewise' && <MachineWisePanel />}
+
+      {tab === 'dash' && (<>
       <div className="card">
         <div className="fbar">
           <div className="fg"><label>From</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
@@ -138,6 +167,9 @@ export default function PpcDashboard() {
         </div>
       )}
 
+      {/* P6: department-wise wastage listed against each sale order */}
+      <SoWastagePanel from={from} to={to} />
+
       {/* Machine load / availability for the period */}
       <div className="card" style={{ marginTop: 12 }}>
         <div className="ctitle">Machine Load</div>
@@ -151,6 +183,72 @@ export default function PpcDashboard() {
           </table></div>
         )}
       </div>
+      </>)}
+    </div>
+  );
+}
+
+/**
+ * Machine-wise Planning (§65 tab): every machine's queue for the coming week —
+ * which sale orders sit under which machine, in order, with start–end times.
+ * Read-only overview; the actual drag-and-drop happens on the Daily Planning tab.
+ */
+function MachineWisePanel() {
+  const [from, setFrom] = useState(today());
+  const to = useMemo(() => addDays(from, 6), [from]);
+  const [week, setWeek] = useState({ jobs: [], capacity: [] });
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    setErr('');
+    try { setWeek((await planningApi.week(from, to)) || { jobs: [], capacity: [] }); }
+    catch (e) { setErr(e.message || 'Failed to load the machine-wise plan'); }
+  }, [from, to]);
+  useEffect(() => { load(); }, [load]);
+
+  const byMachine = useMemo(() => {
+    const g = {};
+    (week.jobs || []).forEach((j) => {
+      const k = j.machineName || ('#' + j.machineId);
+      (g[k] = g[k] || []).push(j);
+    });
+    Object.values(g).forEach((list) => list.sort((a, b) =>
+      String(a.planDate).localeCompare(String(b.planDate))
+      || String(a.shift || 'A').localeCompare(String(b.shift || 'A'))
+      || (a.seqOrder || 0) - (b.seqOrder || 0)));
+    return g;
+  }, [week.jobs]);
+
+  return (
+    <div>
+      <div className="card">
+        <div className="fbar">
+          <div className="fg"><label>Week from</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+          <button className="btn btn-s" onClick={() => setFrom(addDays(from, -7))}>← Prev week</button>
+          <button className="btn btn-s" onClick={() => setFrom(addDays(from, 7))}>Next week →</button>
+          <button className="btn btn-s" onClick={load}>↻ Refresh</button>
+        </div>
+      </div>
+      {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
+      {Object.keys(byMachine).length === 0 ? (
+        <div className="card" style={{ marginTop: 12 }}><div className="al al-b">Nothing planned for this week yet — plan on the Weekly Plan or Daily Planning tab.</div></div>
+      ) : Object.entries(byMachine).map(([machine, jobs]) => (
+        <div className="card" key={machine} style={{ marginTop: 12 }}>
+          <div className="ctitle">🏭 {machine} <span className="tag tgr">{jobs.length} job(s)</span></div>
+          <div className="tw sy"><table>
+            <thead><tr><th>Date</th><th>Shift</th><th>Sale Order</th><th>Department</th><th>Qty</th><th>Start–End</th><th>Est min</th><th>Changed</th></tr></thead>
+            <tbody>{jobs.map((j) => (
+              <tr key={j.id} className={j.changed ? 'hi' : undefined}>
+                <td>{j.planDate}</td><td>{j.shift || 'A'}</td>
+                <td><span className="so-pill">{j.so}</span></td>
+                <td>{j.departmentName}</td><td>{j.plannedQty}</td>
+                <td>{j.startTime ? `${j.startTime}–${j.endTime}` : '—'}</td>
+                <td>{n1(j.estMinutes)}</td>
+                <td>{j.changed ? <span className="tag ty">⚠ changed</span> : '—'}</td>
+              </tr>))}</tbody>
+          </table></div>
+        </div>
+      ))}
     </div>
   );
 }

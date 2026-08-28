@@ -83,7 +83,7 @@ describe('Daily Update — manual dispatch breakdown', () => {
 });
 
 describe('Invoice flow', () => {
-  it('generates a tax invoice and confirms it into OAB + register', async () => {
+  it('generates a tax invoice — Generate saves it into OAB + register directly', async () => {
     const user = userEvent.setup();
     const oab = oabModule({ SF: [{ so: '26/1', spec: 'A1', customer: 'Acme', jobName: 'Pouch A', jobType: 'StayFresh', dispLoc: 'Hyderabad', poNum: 'PO1', poDate: '2026-07-01', poQty: 1000, invDisp: 0, manDisp: 0, fg: 0, dispatchForm: 'pouch', width: 100 }], lastInvNo: 222 });
     const { saved } = renderApp(<Invoice />, { modules: { jss, prices, customers, oab } });
@@ -93,13 +93,16 @@ describe('Invoice flow', () => {
     await user.type(fieldByLabel(/Transporter Name/), 'TransCo');
     await user.click(screen.getByRole('checkbox'));               // the single SKU
     await user.type(inputAfterText(/Invoice Qty/), '200');        // rate pre-fills to 75
+    // Generate now validates AND saves in one step (no separate Confirm button).
     await user.click(screen.getByRole('button', { name: /Generate Invoice/ }));
 
     // A4 doc: 200 × 75 = 15000 taxable, +18% GST = 17,700 total.
     expect(await screen.findByText('TAX INVOICE')).toBeInTheDocument();
     expect(screen.getAllByText(/17,700/).length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole('button', { name: /Confirm & Update OAB/ }));
+    // only the output actions remain on the saved-invoice view
+    expect(screen.queryByRole('button', { name: /Confirm & Update OAB/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Back to Edit/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Packing List/ })).toBeNull();
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
     expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/invoices'); // server-authoritative invoice endpoint

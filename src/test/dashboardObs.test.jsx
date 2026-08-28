@@ -22,11 +22,20 @@ describe('Dashboard — newly integrated superadmin APIs', () => {
     expect(screen.getByText(/who did what/i)).toBeTruthy();
   });
 
-  it('Master Data is a tab inside the Super Admin Dashboard (§6)', async () => {
+  it('Machines (né Master Data) is a tab inside the Super Admin Dashboard (§6)', async () => {
     renderApp(<Dashboard />, { modules: seed, role: 'superadmin' });
-    fireEvent.click(await screen.findByText('🗂 Master Data'));
-    // the MasterData page content renders inside the Dashboard tab
-    await screen.findByText(/Production configuration/);
+    fireEvent.click(await screen.findByText('🗂 Machines'));
+    // the MasterData page content renders inside the Dashboard tab, narrowed to
+    // Departments + Machines
+    await screen.findByText(/Departments and the machines/);
+  });
+
+  it('Routes and Stock Alerts are their own top-level Dashboard tabs', async () => {
+    renderApp(<Dashboard />, { modules: seed, role: 'superadmin' });
+    fireEvent.click(await screen.findByText('🛣 Routes'));
+    await screen.findByText(/ordered department stages per Dispatch Form/);
+    fireEvent.click(await screen.findByText('🔔 Stock Alerts'));
+    await screen.findByText(/Open low-stock shortages/);
   });
 
   it('System tab shows /api/summary rollups and runs a resync', async () => {

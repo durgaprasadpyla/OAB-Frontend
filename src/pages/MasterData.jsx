@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth.jsx';
+import { useDataOptional } from '../data.jsx';
 import { masterApi, stockApi, notificationsApi } from '../api.js';
+import { ddList } from '../lib/dropdowns.js';
 import { exportObjects, readSheet } from '../lib/xlsx.js';
 import Modal from '../components/Modal.jsx';
 
@@ -107,11 +109,21 @@ function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
 }
 
 /** Route form with an ordered-stage (department) editor. */
-function RouteForm({ initial, departments, dispatchTypes, onSubmit, onCancel }) {
+function RouteForm({ initial, departments, dispatchTypes, skuForms, onSubmit, onCancel }) {
   const [name, setName] = useState(initial?.name || '');
   const [code, setCode] = useState(initial?.code || '');
-  // §4/§13: the Dispatch Form this route belongs to (a form owns many routes).
-  const [dispatchTypeId, setDispatchTypeId] = useState(initial?.dispatchTypeId != null ? String(initial.dispatchTypeId) : '');
+  // The Dispatch Form this route belongs to (a form owns many routes). The options
+  // come from the "Dispatch Forms — Sales SKUs" dropdown list; the backing
+  // dispatch_type row is found-or-created by name when the route is saved.
+  const initialFormName = initial?.dispatchTypeName
+    || (initial?.dispatchTypeId != null
+      ? ((dispatchTypes || []).find((t) => String(t.id) === String(initial.dispatchTypeId)) || {}).name || ''
+      : '');
+  const [dispatchFormName, setDispatchFormName] = useState(initialFormName);
+  const formOptions = (skuForms || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (initialFormName && !formOptions.some((o) => o.toLowerCase() === initialFormName.toLowerCase())) {
+    formOptions.unshift(initialFormName);   // keep an older route's stored form visible
+  }
   const [description, setDescription] = useState(initial?.description || '');
   const [active, setActive] = useState(initial ? initial.active !== false : true);
   const [stages, setStages] = useState((initial?.stages || []).map((s) => String(s.departmentId)));
@@ -131,7 +143,7 @@ function RouteForm({ initial, departments, dispatchTypes, onSubmit, onCancel }) 
     if (!name.trim()) { setErr('Route name is required'); return; }
     const body = {
       name: name.trim(), code: code.trim() || undefined,
-      dispatchTypeId: dispatchTypeId ? Number(dispatchTypeId) : null,
+      dispatchFormName: dispatchFormName.trim() || null,
       description: description.trim() || undefined, active,
       stages: stages.map((id) => ({ departmentId: Number(id) })),
     };
@@ -143,9 +155,9 @@ function RouteForm({ initial, departments, dispatchTypes, onSubmit, onCancel }) 
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
       <div className="fg">
         <label>Dispatch Form (a form can have many routes)</label>
-        <select value={dispatchTypeId} onChange={(e) => setDispatchTypeId(e.target.value)}>
+        <select value={dispatchFormName} onChange={(e) => setDispatchFormName(e.target.value)}>
           <option value="">— unassigned —</option>
-          {opt(dispatchTypes).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {formOptions.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
       <div className="g3">
@@ -230,8 +242,16 @@ function StockForm({ item, onSubmit, onCancel }) {
   );
 }
 
-export default function MasterData() {
+/**
+ * Master-data hub. With no props it renders every section (the standalone /master
+ * route used by stores / padmin / planner). The Super Admin Dashboard embeds it
+ * three times with `only`: Machines (departments+machines), Routes, Stock Alerts.
+ */
+export default function MasterData({ only, title, subtitle }) {
   const { role } = useAuth();
+  // Optional: the sales blob feeds the Route form's Dispatch Form options; without a
+  // DataProvider (tests) ddList falls back to the built-in defaults.
+  const mods = useDataOptional()?.mods || {};
   const isSuper = role === 'superadmin';
   const canConfig = isSuper;                              // depts/specs/machines/routes/dispatch
   const canItems = role === 'padmin' || isSuper;         // item master
@@ -239,7 +259,7 @@ export default function MasterData() {
   const canAlerts = ['superadmin', 'stores', 'pm', 'padmin'].includes(role);   // view stock alerts
   const canResolve = role === 'superadmin' || role === 'stores';               // resolve alerts
 
-  const [tab, setTab] = useState('departments');
+  const [tab, setTab] = useState(only && only.length ? only[0] : 'departments');
   const [allocDept, setAllocDept] = useState('');   // §7: department picked on the allocation tab
   const [alerts, setAlerts] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -310,6 +330,22 @@ export default function MasterData() {
     try {
       const id = row && row.id;
       const api = masterApi;
+      // Routes carry a Dispatch Form NAME (from the Dispatch Forms — Sales SKUs list);
+      // resolve it to a dispatch_type id, creating the backing row on first use.
+      if (type === 'routes' && 'dispatchFormName' in body) {
+        const { dispatchFormName, ...rest } = body;
+        let dispatchTypeId = null;
+        if (dispatchFormName) {
+          const wanted = String(dispatchFormName).trim().toLowerCase();
+          const existing = (d.dispatch || []).find((t) => String(t.name || '').trim().toLowerCase() === wanted);
+          if (existing) dispatchTypeId = existing.id;
+          else {
+            const created = await api.createDispatchType({ name: String(dispatchFormName).trim() });
+            dispatchTypeId = created && created.id;
+          }
+        }
+        body = { ...rest, dispatchTypeId };
+      }
       const call = {
         departments: id ? () => api.updateDepartment(id, body) : () => api.createDepartment(body),
         machines: id ? () => api.updateMachine(id, body) : () => api.createMachine(body),
@@ -327,10 +363,16 @@ export default function MasterData() {
 
   if (loading) return <div className="card"><div className="spin" /> Loading master data…</div>;
 
+  // Which sections this instance shows (`only` narrows; default = everything).
+  const visibleTabs = [
+    ...TABS,
+    ...(canAlerts ? [{ key: 'alerts', label: '🔔 Stock Alerts' + (alerts.length ? ` (${alerts.length})` : '') }] : []),
+  ].filter((t) => !only || only.includes(t.key));
+
   return (
     <div>
-      <div className="pg-ttl">⚙️ Master Data</div>
-      <div className="pg-sub">Production configuration — routes, machines, departments, dispatch types and the item master.</div>
+      <div className="pg-ttl">{title || '⚙️ Master Data'}</div>
+      <div className="pg-sub">{subtitle || 'Production configuration — routes, machines, departments, dispatch types and the item master.'}</div>
 
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
@@ -342,11 +384,13 @@ export default function MasterData() {
         </div>
       )}
 
-      <div className="step-bar" style={{ marginTop: 10 }}>
-        {[...TABS, ...(canAlerts ? [{ key: 'alerts', label: '🔔 Stock Alerts' + (alerts.length ? ` (${alerts.length})` : '') }] : [])].map((t) => (
-          <button key={t.key} className={'step-tab' + (tab === t.key ? ' on' : '')} onClick={() => setTab(t.key)}>{t.label}</button>
-        ))}
-      </div>
+      {visibleTabs.length > 1 && (
+        <div className="step-bar" style={{ marginTop: 10 }}>
+          {visibleTabs.map((t) => (
+            <button key={t.key} className={'step-tab' + (tab === t.key ? ' on' : '')} onClick={() => setTab(t.key)}>{t.label}</button>
+          ))}
+        </div>
+      )}
 
       <div className="card" style={{ marginTop: 12 }}>
         {tab === 'departments' && (
@@ -360,7 +404,16 @@ export default function MasterData() {
             cols={['Code', 'Name', 'Department', 'Type', 'Speed', 'Hrs/day', 'Active']} rows={d.machines}
             render={(r) => [r.code, r.name, r.departmentName, r.machineType,
               r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
-            onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null} />
+            onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null}
+            // One toggle after Edit: shows Disable while the machine is enabled and
+            // Enable while disabled. A disabled machine drops out of the PPC board
+            // and route/JSS machine selection.
+            extra={canConfig ? (r) => (
+              <button className={'btn ' + (r.active === false ? 'btn-g' : 'btn-r')}
+                onClick={() => save('machines', r, { active: r.active === false })}>
+                {r.active === false ? 'Enable' : 'Disable'}
+              </button>
+            ) : null} />
         )}
         {tab === 'allocation' && (
           <div>
@@ -529,7 +582,8 @@ export default function MasterData() {
       </Modal>
 
       <Modal open={modal?.type === 'routes'} wide title={modal?.row?.id ? 'Edit Route' : 'Add Route'} onClose={close}>
-        <RouteForm initial={modal?.row} departments={d.departments} dispatchTypes={d.dispatch} onCancel={close}
+        <RouteForm initial={modal?.row} departments={d.departments} dispatchTypes={d.dispatch}
+          skuForms={ddList(mods.sales || {}, 'despatch')} onCancel={close}
           onSubmit={(b) => save('routes', modal.row, b)} />
       </Modal>
 

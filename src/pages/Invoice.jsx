@@ -8,7 +8,6 @@ import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
-import PackingListModal from '../components/PackingListModal.jsx';
 import PortalEntry from '../components/PortalEntry.jsx';
 import ProformaModal from '../components/ProformaModal.jsx';
 import { CertificateDoc } from '../components/CertificatePanel.jsx';
@@ -16,7 +15,6 @@ import { printElement, elementToPDF } from '../lib/pdf.js';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
 import { getCert } from '../lib/cert.js';
 
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 const emptyHeader = (lastInvNo) => ({
@@ -32,8 +30,7 @@ export default function Invoice() {
   const [lines, setLines] = useState({});   // { [so]: {checked, qty, rate} }
   const [posOptions, setPosOptions] = useState([]);   // Place-of-Supply choices for the picked PO
   const [pendInv, setPendInv] = useState(null);
-  const [plItems, setPlItems] = useState([]);
-  const [showPL, setShowPL] = useState(false);
+  const [savedLastN, setSavedLastN] = useState(null);   // numeric tail of the last saved invoice no.
   const [showProforma, setShowProforma] = useState(false);
   const [autoPdf, setAutoPdf] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -93,7 +90,15 @@ export default function Invoice() {
 
   const setLine = (so, patch) => setLines((l) => ({ ...l, [so]: { ...l[so], ...patch } }));
 
-  function generate() {
+  /**
+   * Generate = validate + SAVE in one step. The server recomputes total/GST/margin,
+   * bumps invDisp and consumes FG in one transaction (client amounts are ignored),
+   * honours a manually-entered number when it's ahead of the counter and jumps the
+   * counter past it. On success the saved invoice is shown with only Save as PDF /
+   * Print / Close — there is no separate Confirm step any more.
+   */
+  async function generate() {
+    if (busy) return;
     if (!h.ivNo.trim()) return alert('Enter Invoice Number');
     if (register.some((inv) => inv.no === h.ivNo.trim())) return alert('Invoice number ' + h.ivNo + ' already exists.');
     if (!h.ivDt) return alert('Enter Invoice Date');
@@ -119,19 +124,8 @@ export default function Invoice() {
         poDate: r.poDate || '', dispLoc: r.dispLoc || '',
       });
     }
-    setPendInv(out);
-    window.scrollTo({ top: docRef.current ? docRef.current.offsetTop : 0, behavior: 'smooth' });
-  }
-
-  async function confirm() {
-    if (!pendInv) return;
     setBusy(true);
     try {
-      // The server recomputes total/GST/margin, bumps invDisp and consumes FG in one
-      // transaction (client amounts are ignored). The invoice NUMBER is now sent: the
-      // server keeps its atomic counter but honours a manually-entered number when it's
-      // ahead of the counter (to correct a series that fell behind manual invoicing) and
-      // jumps the counter past it, so the next number continues forward, never back.
       const header = {
         invNo: h.ivNo.trim(),
         po: h.po, date: h.ivDt, customer: h.customer, placeOfSupply: h.placeOfSupply,
@@ -140,24 +134,33 @@ export default function Invoice() {
         transporter: h.transporter, dcNo: h.dcNo, vehicle: h.vehicle, driver: h.driver,
         paymentTerms: h.paymentTerms, freight: num(h.freight), gstType: h.gstType,
       };
-      const lines = pendInv.map((p) => ({
+      const lineItems = out.map((p) => ({
         so: p.so, spec: p.spec, jobName: p.jobName, qty: p.qty, rate: p.rate,
         fgToUse: p.fgToUse, dispatchForm: p.dispatchForm,
       }));
-      const resp = await ordersApi.createInvoice({ header, lines, packingList: plItems.length ? clone(plItems) : [] });
+      const resp = await ordersApi.createInvoice({ header, lines: lineItems, packingList: [] });
       await reloadModule('oab');       // refresh SO balances (invDisp/fg) on the picker
       await refetchRegister();          // pull the new invoice into the register
-      const newNo = (resp && resp.no) || '';
+      const newNo = (resp && resp.no) || h.ivNo.trim();
       const m = /(\d+)$/.exec(newNo);
-      const lastN = m ? parseInt(m[1], 10) : 0;
-      flash('✅ Invoice ' + newNo + ' confirmed — dispatched qty updated. Next invoice: ' + nextInvNo(lastN).no);
-      setPendInv(null); setPlItems([]); setLines({});
-      setH(emptyHeader(lastN));
+      setSavedLastN(m ? parseInt(m[1], 10) : null);
+      if (newNo !== h.ivNo) set({ ivNo: newNo });   // the sheet shows the number that was actually saved
+      flash('✅ Invoice ' + newNo + ' saved — dispatched qty updated.');
+      setPendInv(out);
+      window.scrollTo({ top: docRef.current ? docRef.current.offsetTop : 0, behavior: 'smooth' });
     } catch (e) {
-      flash('Confirm failed: ' + e.message, 'r');
+      flash('Save failed: ' + e.message, 'r');
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Close the invoice view and reset the builder for the next invoice. */
+  function closePreview() {
+    setPendInv(null);
+    setLines({});
+    setH(emptyHeader(savedLastN != null ? savedLastN : (mods.oab && mods.oab.lastInvNo)));
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
   }
 
   // Capture the rendered #inv-doc — the same document the screen and the printer
@@ -179,7 +182,6 @@ export default function Invoice() {
     const lns = (entry.items || []).map((it) => ({ spec: it.spec, jobName: it.jobName || it.spec, qty: it.qty, rate: it.rate, dispatchForm: it.dispatchForm, lineTotal: num(it.qty) * num(it.rate) }));
     setPendInv(lns.length ? lns : null);
     setH((x) => ({ ...x, ...hdr }));
-    setPlItems(entry.packingList || []);
     setAutoPdf(pdf);
     // Bring the preview into view. Without this the invoice renders above the
     // register but below the current scroll position, so it looks like nothing
@@ -197,7 +199,7 @@ export default function Invoice() {
   return (
     <div id="app">
       <div className="pg-ttl">Invoice</div>
-      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; enter prices → generate → print PDF → confirm updates OAB.
+      <div className="pg-sub">Select PO → fill details → pick SKUs &amp; enter prices → Generate saves the invoice and updates OAB → print / PDF.
         &nbsp;·&nbsp;
         <a href="#" onClick={(e) => { e.preventDefault(); setShowProforma(true); }} style={{ color: 'var(--g)', fontWeight: 600 }}>🧾 Create Proforma Invoice</a>
       </div>
@@ -309,18 +311,11 @@ export default function Invoice() {
 
       {pendInv && (
         <div style={{ marginTop: 8 }}>
+          {/* The invoice is already saved by Generate — only output actions remain. */}
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-            {/* §39: an explicit exit from the invoice/PDF view back to the invoices
-                screen — no refresh needed. */}
-            <button className="btn btn-r" onClick={() => { setPendInv(null); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }}>
-              ✕ Close — back to Invoices
-            </button>
-            <button className="btn btn-s" onClick={() => setPendInv(null)}>← Back to Edit</button>
             <button className="btn btn-g" onClick={savePDF} disabled={pdfBusy}>{pdfBusy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
-            <button className="btn btn-b" onClick={confirm} disabled={busy}>{busy ? 'Saving…' : '✓ Confirm & Update OAB'}</button>
-            <button className="btn btn-s" style={{ background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--g)' }}
-              onClick={() => { if (!plItems.length) setPlItems(pendInv.map((p) => ({ spec: p.spec, jobName: p.jobName, totalQty: p.qty, dispatchForm: p.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] }))); setShowPL(true); }}>📦 Create Packing List</button>
+            <button className="btn btn-r" onClick={closePreview}>✕ Close — back to Invoices</button>
           </div>
           <PortalEntry header={h} lines={pendInv} />
           <InvoiceDoc ref={docRef} header={h} lines={pendInv} />
@@ -332,18 +327,8 @@ export default function Invoice() {
         register={register}
         onView={(e) => loadRegister(e, false)}
         onPdf={(e) => loadRegister(e, true)}
-        // Load the invoice, then open its packing list — the register's PL button
-        // must work on an invoice that is not currently in the builder.
-        onPackingList={(e) => { loadRegister(e, false); setShowPL(true); }}
       />
 
-      {showPL && (
-        <PackingListModal
-          items={plItems} setItems={setPlItems} invNo={h.ivNo}
-          header={h} lines={pendInv || []}
-          onClose={() => setShowPL(false)}
-        />
-      )}
       {showProforma && <ProformaModal onClose={() => setShowProforma(false)} />}
     </div>
   );
@@ -404,7 +389,7 @@ function CertBadge({ inv, type, label, onDownload }) {
   );
 }
 
-function Register({ po, register, onView, onPdf, onPackingList }) {
+function Register({ po, register, onView, onPdf }) {
   const [period, setPeriod] = useState('thismonth');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -524,8 +509,7 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
                       <CertBadge inv={e} type="fg" label="FG" onDownload={downloadCert} />
                     </td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>{' '}
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`Packing list for ${e.no}`} onClick={() => onPackingList(e)}>📦 PL</button>
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>
                     </td>
                   </tr>
                 ))}
