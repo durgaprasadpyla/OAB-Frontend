@@ -101,6 +101,8 @@ export const usersApi = {
   list: () => api('/api/admin/users'),
   create: (body) => api('/api/admin/users', { method: 'POST', body }),
   update: (id, body) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'PUT', body }),
+  // Click-to-reveal for the superadmin Password column (audited server-side).
+  revealPassword: (id) => api('/api/admin/users/' + encodeURIComponent(id) + '/password'),
 };
 
 // Superadmin observability & maintenance: server-computed rollups (/api/summary),
