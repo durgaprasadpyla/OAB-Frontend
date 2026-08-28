@@ -340,6 +340,35 @@ function ASLEditor() {
     return seen.map((c) => ({ company: c, idxs: map[c] }));
   }, [rows]);
 
+  // Type-to-search on Item Code: every known code (current ASL rows + the
+  // catalogue-only itemsExtra), first occurrence per code defining the item's
+  // identity — the same rule the Item Master tab uses. Typing a known code offers
+  // it in a dropdown and, on a match, auto-fills the row's identity fields.
+  const itemCatalog = useMemo(() => {
+    const seen = new Map();
+    const put = (r) => {
+      const c = String(r.itemCode || '').trim();
+      if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), r);
+    };
+    rows.forEach(put);
+    arr(purchase.itemsExtra).forEach(put);
+    return seen;
+  }, [rows, purchase.itemsExtra]);
+
+  // Identity travels with the code; commercials (price, MOQ, lead time, status)
+  // stay per-supplier and are never auto-filled.
+  const ASL_IDENTITY_AUTOFILL = ['materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'specialty', 'department'];
+  function setItemCode(idx, v) {
+    const hit = itemCatalog.get(String(v).trim().toLowerCase());
+    setRows((rs) => rs.map((r, j) => {
+      if (j !== idx) return r;
+      if (!hit) return { ...r, itemCode: v };
+      const filled = { ...r, itemCode: hit.itemCode };   // canonical casing
+      ASL_IDENTITY_AUTOFILL.forEach((f) => { filled[f] = hit[f] ?? ''; });
+      return filled;
+    }));
+  }
+
   const rowMatches = (r) => {
     if (statFil && (r.status || 'Active') !== statFil) return false;
     if (!q) return true;
@@ -469,8 +498,16 @@ function ASLEditor() {
   }
 
   const itemInp = (idx, c, r) => (
-    <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
-      onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+    c.k === 'itemCode' ? (
+      // Dropdown of known codes; picking (or typing) an existing one pulls the
+      // item's identity into the row automatically.
+      <input list="asl-item-codes" value={r.itemCode ?? ''} placeholder="type to search…"
+        aria-label={`Item code row ${idx + 1}`}
+        onChange={(e) => setItemCode(idx, e.target.value)} style={{ minWidth: c.w }} />
+    ) : (
+      <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
+        onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+    )
   );
 
   return (
@@ -490,6 +527,13 @@ function ASLEditor() {
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save ASL'}</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+
+      {/* Shared options list for every Item Code input in the ASL. */}
+      <datalist id="asl-item-codes">
+        {[...itemCatalog.entries()].map(([key, it]) => (
+          <option key={key} value={it.itemCode}>{[it.specificMaterial, it.materialType].filter(Boolean).join(' · ')}</option>
+        ))}
+      </datalist>
 
       {newOpen && (
         <div style={{ background: 'var(--bg)', border: '1.5px solid var(--bd)', borderRadius: 8, padding: '12px 14px', marginBottom: 10 }}>
@@ -603,7 +647,7 @@ function ASLEditor() {
                     })}
                     <tr><td colSpan={ASL_ITEM_COLS.length + 2} style={{ padding: 6 }}>
                       <button className="btn btn-s" onClick={() => addItemToGroup(g.company)}>＋ Add Item</button>
-                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Item identity is also editable in the Item Master tab.</span>
+                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Type a known Item Code to pick it from the dropdown — the row fills itself. Identity is also editable in the Item Master tab.</span>
                     </td></tr>
                   </tbody>
                 </table>
@@ -817,7 +861,7 @@ function ItemMaster() {
                 return (
                   <tr key={m.code}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{m.code}</td>
-                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11 }}>{m.ref[f.k] || '-'}</td>)}
+                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || '-'}</td>)}
                     <td style={{ fontSize: 11, color: 'var(--i2)' }}>{sups.length ? sups.join(', ') : <span style={{ color: '#c99a2e', fontStyle: 'italic' }}>Not linked</span>}</td>
                   </tr>
                 );
