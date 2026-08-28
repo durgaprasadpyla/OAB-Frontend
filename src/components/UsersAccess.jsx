@@ -5,8 +5,9 @@ import SalesUsersPanel from './SalesUsersPanel.jsx';
 
 // Users & Access (superadmin) — manage the real app_user accounts via the
 // backend admin endpoints. Add users, change roles, set a contact/WhatsApp
-// phone, enable/disable, reset passwords. STAFF passwords are write-only; the
-// server never returns hashes (so they cannot be displayed — reset only).
+// phone, enable/disable, reset passwords. The Password column is masked and
+// click-to-reveal: the server stores an AES-GCM copy of each password as it is
+// set and decrypts it only for this superadmin endpoint (every reveal audited).
 //
 // §36: sales-user creation is MERGED into this page — the same SalesUsersPanel
 // the S-Dashboard uses, over the separate sales_users table (module 12), with
@@ -49,6 +50,7 @@ export default function UsersAccess() {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [nu, setNu] = useState({ username: '', password: '', role: 'user', phone: '' });
+  const [shown, setShown] = useState({});   // { [userId]: revealed password } — Password column click-to-reveal
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
 
@@ -90,6 +92,16 @@ export default function UsersAccess() {
     catch (e) { flash('r', e.message); await load(); } finally { setBusy(false); }
   }
 
+  // Password column: masked by default; one click reveals (fetched on demand and
+  // audited server-side), the next click hides it again.
+  async function togglePassword(u) {
+    if (shown[u.id] != null) { setShown((s) => { const n = { ...s }; delete n[u.id]; return n; }); return; }
+    try {
+      const r = await usersApi.revealPassword(u.id);
+      setShown((s) => ({ ...s, [u.id]: r.password }));
+    } catch (e) { flash('r', e.message || 'Could not fetch the password'); }
+  }
+
   async function resetPw(u) {
     const pw = window.prompt(`New password for ${u.username} (min 4 characters):`);
     if (pw == null) return;
@@ -119,10 +131,10 @@ export default function UsersAccess() {
         {loading ? <div className="pg-sub" style={{ margin: 0 }}>Loading users…</div> : (
           <div className="tw sy">
             <table>
-              <thead><tr><th>Username</th><th style={{ width: 140 }}>Phone</th><th style={{ width: 160 }}>Role</th><th style={{ width: 100 }}>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+              <thead><tr><th>Username</th><th style={{ width: 140 }}>Phone</th><th style={{ width: 160 }}>Role</th><th style={{ width: 100 }}>Status</th><th style={{ width: 150 }}>Password</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
               <tbody>
                 {users.length === 0 ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No users</td></tr>
+                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No users</td></tr>
                 ) : users.map((u) => (
                   <tr key={u.id}>
                     <td style={{ fontWeight: 600 }}>{u.username}</td>
@@ -140,6 +152,20 @@ export default function UsersAccess() {
                       </select>
                     </td>
                     <td>{u.disabled ? <span className="tag tr" style={{ fontSize: 9 }}>Disabled</span> : <span className="tag tg" style={{ fontSize: 9 }}>Active</span>}</td>
+                    <td>
+                      {/* Masked until clicked; click again to hide. "—" = the password was
+                          set before the Password column existed (reset it to make it visible). */}
+                      {u.hasPassword ? (
+                        <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', fontFamily: shown[u.id] != null ? 'monospace' : undefined }}
+                          title={shown[u.id] != null ? 'Click to hide' : 'Click to reveal'}
+                          aria-label={`${shown[u.id] != null ? 'Hide' : 'Show'} password for ${u.username}`}
+                          onClick={() => togglePassword(u)}>
+                          {shown[u.id] != null ? shown[u.id] : '••••••••'}
+                        </button>
+                      ) : (
+                        <span title="Set before the Password column existed — reset it to make it visible" style={{ color: 'var(--i3)' }}>—</span>
+                      )}
+                    </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px' }} onClick={() => resetPw(u)} disabled={busy}>Reset PW</button>{' '}
                       <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px', color: u.disabled ? 'var(--g)' : 'var(--red)', borderColor: u.disabled ? undefined : '#F5A8A0' }} onClick={() => toggleDisabled(u)} disabled={busy}>
@@ -152,7 +178,7 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Staff passwords are reset-only (never shown).</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Click a masked password to reveal it (every reveal is audit-logged); "—" means the password was set before this feature — reset it to make it visible.</p>
       </div>
 
       {/* §36: the merged sales-user management — separate table, module-wise

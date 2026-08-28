@@ -18,6 +18,12 @@ function installUsersFetch(initial) {
     const u = String(url); const method = (opts.method || 'GET').toUpperCase();
     const body = opts.body ? JSON.parse(opts.body) : {};
     if (u.includes('/api/admin/users')) {
+      // Password column click-to-reveal endpoint.
+      if (method === 'GET' && u.endsWith('/password')) {
+        const id = Number(u.split('/').at(-2));
+        const usr = users.find((x) => x.id === id);
+        return usr && usr._pw ? res(200, { username: usr.username, password: usr._pw }) : res(404, 'no stored password');
+      }
       if (method === 'GET') return res(200, users);
       if (method === 'POST') {
         if (users.some((x) => x.username === body.username)) return res(409, 'exists');
@@ -76,6 +82,29 @@ describe('Users & Access', () => {
     await user.click(within(row).getByRole('button', { name: /Disable/ }));
 
     await waitFor(() => expect(store.find((u) => u.id === 2).disabled).toBe(true));
+  });
+
+  // The staff Password column: masked, click reveals (fetched on demand), click hides.
+  it('reveals and hides a stored staff password on click', async () => {
+    const user = userEvent.setup();
+    installUsersFetch([
+      { id: 1, username: 'superadmin', role: 'superadmin', disabled: false, hasPassword: false },
+      { id: 2, username: 'qcguy', role: 'qc', disabled: false, hasPassword: true, _pw: 'secret@99' },
+    ]);
+    render(<DataProvider><UsersAccess /></DataProvider>);
+    await screen.findByText('qcguy');
+
+    // no stored copy → an em-dash, no reveal button
+    const saRow = screen.getByText('superadmin').closest('tr');
+    expect(within(saRow).queryByRole('button', { name: /password/i })).toBeNull();
+
+    const row = screen.getByText('qcguy').closest('tr');
+    const btn = within(row).getByRole('button', { name: /Show password for qcguy/ });
+    expect(btn.textContent).toContain('••');
+    await user.click(btn);
+    await waitFor(() => expect(within(row).getByRole('button', { name: /Hide password for qcguy/ }).textContent).toBe('secret@99'));
+    await user.click(within(row).getByRole('button', { name: /Hide password for qcguy/ }));
+    expect(within(row).getByRole('button', { name: /Show password for qcguy/ }).textContent).toContain('••');
   });
 
   // §36: sales-user management is merged into this Super Admin page — separate

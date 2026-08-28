@@ -525,6 +525,13 @@ input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) { 
 :focus-visible { outline: 2px solid var(--g); outline-offset: 1px; }
 ::selection { background: rgba(14,111,184,.18); }
 
+/* — Alignment: a select inside a table cell must never be narrower than its
+ *   selected text. width:100% alone let narrow columns clip the value
+ *   ("Activ…" on the ASL status column, truncated role names in Users &
+ *   Access). min-width:max-content makes the column grow to fit instead;
+ *   the surrounding .tw wrapper scrolls if a table genuinely runs out of room. — */
+td select { min-width: max-content; }
+
 /* — PROTECT the formal invoice / packing-list documents (business output). The
  *   theme must never bleed into what customers/auditors see. — */
 #inv-doc *, #pl-doc * { transition: none !important; }

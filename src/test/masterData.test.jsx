@@ -105,12 +105,32 @@ describe('MasterData page', () => {
     // the route list carries a Dispatch Form column with the route's form
     expect(await screen.findByText('Dispatch Form')).toBeInTheDocument();
     expect(screen.getByText('Pouch')).toBeInTheDocument();
-    // Add Route → the form offers a Dispatch Form dropdown listing every form
+    // Add Route → the form's Dispatch Form dropdown offers the "Dispatch Forms —
+    // Sales SKUs" list (change 8), not the raw dispatch_type master.
     fireEvent.click(screen.getByRole('button', { name: /Add/ }));
     const dlg = await screen.findByRole('dialog');
     expect(within(dlg).getByText(/Dispatch Form/)).toBeInTheDocument();
     expect(within(dlg).getByRole('option', { name: 'Pouch' })).toBeInTheDocument();
     expect(within(dlg).getByRole('option', { name: 'Roll' })).toBeInTheDocument();
+    expect(within(dlg).getByRole('option', { name: 'Bulk Bags' })).toBeInTheDocument();  // from the SKU list defaults
+  });
+
+  it('machines get an Enable/Disable toggle after Edit (change 7)', async () => {
+    renderMaster('superadmin', {
+      ...seed,
+      machines: [{ id: 3, code: 'CI', name: 'SOMA', departmentId: 1, departmentName: 'Printing', defaultSpeed: 250, speedUom: 'm/min', functionalHoursPerDay: 8, active: true }],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Machines' }));
+    await waitFor(() => expect(screen.getByText('SOMA')).toBeInTheDocument());
+    const row = screen.getByText('SOMA').closest('tr');
+    expect(within(row).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    // enabled machine shows Disable; clicking it PUTs active:false
+    fireEvent.click(within(row).getByRole('button', { name: 'Disable' }));
+    await waitFor(() => {
+      const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).includes('/api/master/machines/3') && (o?.method || '') === 'PUT');
+      expect(puts.length).toBe(1);
+      expect(JSON.parse(puts[0][1].body)).toMatchObject({ active: false });
+    });
   });
 
   it('shows a read-only view for planner (no Add controls)', async () => {

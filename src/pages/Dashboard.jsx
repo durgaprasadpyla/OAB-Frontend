@@ -34,7 +34,9 @@ const TABS = [
   { k: 'kam', label: '🎯 Customer KAM & Targets' },
   { k: 'users', label: '👤 Users & Access' },
   { k: 'dropdowns', label: '🧩 Drop-down selections' },
-  { k: 'master', label: '🗂 Master Data' },
+  { k: 'master', label: '🗂 Machines' },
+  { k: 'routes', label: '🛣 Routes' },
+  { k: 'alerts', label: '🔔 Stock Alerts' },
   { k: 'bom', label: '🧱 BOM' },
   { k: 'material', label: '🧮 Raw Material' },
   { k: 'costing', label: '🧮 SO Costing' },
@@ -69,7 +71,11 @@ export default function Dashboard() {
       {tab === 'material' && <RawMaterialPanel />}
       {tab === 'fgval' && <FgValuePanel />}
       {tab === 'dropdowns' && <DropdownAdmin />}
-      {tab === 'master' && <MasterData />}
+      {/* Machines (né Master Data) keeps only Departments + Machines; Routes and
+          Stock Alerts are their own top-level tabs now. */}
+      {tab === 'master' && <MasterData only={['departments', 'machines']} title="🗂 Machines" subtitle="Departments and the machines that run under them." />}
+      {tab === 'routes' && <MasterData only={['routes']} title="🛣 Routes" subtitle="Production routes — ordered department stages per Dispatch Form." />}
+      {tab === 'alerts' && <MasterData only={['alerts']} title="🔔 Stock Alerts" subtitle="Open low-stock shortages and notifications." />}
       {tab === 'users' && <UsersAccess />}
       {tab === 'audit' && <AuditLog />}
       {tab === 'system' && <SystemPanel />}

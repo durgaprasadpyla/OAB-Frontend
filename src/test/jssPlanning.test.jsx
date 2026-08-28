@@ -107,4 +107,55 @@ describe('JssPlanningPanel', () => {
       expect(puts.some(([, o]) => JSON.parse(o.body).routeId === 201)).toBe(true);
     });
   });
+
+  // Req #16/#17: ideal speed shows read-only, ticking a machine pre-fills the job
+  // speed with it, and a per-machine setup-time field is offered and saved.
+  it('pre-fills job speed with the ideal speed and saves per-machine setup time', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText(/CI Flexo/)).toBeInTheDocument());
+
+    // the ideal (Super Admin) speed is displayed (one header per department table)
+    expect(screen.getAllByText('Ideal speed').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^300\b/).length).toBeGreaterThan(0);
+
+    // tick CI Flexo → its job-speed input pre-fills with the ideal 300
+    const row = screen.getByText(/CI Flexo/).closest('tr');
+    fireEvent.click(within(row).getByRole('checkbox'));
+    const speedInput = within(row).getByLabelText('Job speed for CI Flexo');
+    expect(speedInput.value).toBe('300');
+
+    // QC overrides the job speed and enters a setup time for this machine
+    fireEvent.change(speedInput, { target: { value: '285' } });
+    fireEvent.change(within(row).getByLabelText('Setup time for CI Flexo'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+
+    await waitFor(() => {
+      const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).endsWith('/api/jss/A1/machines') && (o?.method || '').toUpperCase() === 'PUT');
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts.at(-1)[1].body);
+      expect(body.machines).toEqual([expect.objectContaining({ machineId: 10, speed: 285, setupMin: 30 })]);
+    });
+  });
+
+  // Change 11: BOM items are picked from a plain dropdown (no type-and-search).
+  it('offers the department BOM items as a dropdown', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
+    const itemSelect = await screen.findByLabelText('BOM item for Printing');
+    expect(itemSelect.tagName).toBe('SELECT');
+    fireEvent.change(itemSelect, { target: { value: '1000' } });
+    await waitFor(() => expect(screen.getByText('FILM')).toBeInTheDocument());   // code auto-fills
+  });
 });

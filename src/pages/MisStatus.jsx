@@ -14,6 +14,75 @@ const n1 = (v) => (v == null ? 0 : Math.round(Number(v)));
 const sum = (arr, k) => (arr || []).reduce((s, r) => s + Number(r[k] || 0), 0);
 const statusTag = (s) => ({ Completed: 'tg', 'Partially Completed': 'tb', 'In Progress': 'ty', 'Not Started': 'tgr' }[s] || 'ty');
 
+/**
+ * One pending-stage row on the MIS status board (§50-52): shows what the PPC planned
+ * (machines + metres), takes the ACTUAL metres + wastage inline, and lets MIS mark
+ * the department "Completed — Partial" / "Completed — Whole" once entered.
+ */
+function StatusRow({ p, onSaved, onFull }) {
+  const [actual, setActual] = useState('');
+  const [waste, setWaste] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function record() {
+    setErr('');
+    const a = Number(actual || 0), w = Number(waste || 0);
+    if (!(a > 0) && !(w > 0)) { setErr('Enter actual metres and/or wastage'); return; }
+    setBusy(true);
+    try {
+      await productionApi.record({ so: p.so, stageSeq: p.stageSeq, producedQty: a || 0, wastageQty: w || 0, prodDate: today() });
+      setActual(''); setWaste('');
+      await onSaved();
+    } catch (e) { setErr(e.message || 'Save failed'); }
+    finally { setBusy(false); }
+  }
+  async function mark(status) {
+    if (!status) return;
+    setErr(''); setBusy(true);
+    try { await productionApi.setStatus(p.so, p.stageSeq, status); await onSaved(); }
+    catch (e) { setErr(e.message || 'Update failed'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <tr className={Number(p.delayDays) > 0 ? 'nr' : 'hi'}>
+      <td><span className="so-pill">{p.so}</span></td>
+      <td>{p.stageSeq}</td>
+      <td>{p.departmentName}</td>
+      <td style={{ fontSize: 11 }}>{p.machines || '—'}</td>
+      <td>{p.plannedQty != null ? n1(p.plannedQty) : '—'}</td>
+      <td><b>{p.remaining}</b></td>
+      <td>{p.plannedDate || '—'}</td>
+      <td>{p.actualDate || '—'}</td>
+      <td>{p.delayDays != null
+        ? (Number(p.delayDays) > 0
+          ? <span className="tag tr">{p.delayDays} day(s) late</span>
+          : <span className="tag tg">on time</span>)
+        : '—'}</td>
+      <td>
+        <span className={'tag ' + statusTag(p.status)}>{p.status}</span>{' '}
+        {/* §52: explicit completed-partial / completed-whole selection by MIS */}
+        <select aria-label={`Mark ${p.so} stage ${p.stageSeq}`} value="" disabled={busy}
+          onChange={(e) => mark(e.target.value)} style={{ height: 24, fontSize: 10 }}>
+          <option value="">mark…</option>
+          <option value="Partially Completed">Completed — Partial</option>
+          <option value="Completed">Completed — Whole</option>
+        </select>
+      </td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        <input type="number" min="0" step="any" placeholder="actual" value={actual} aria-label={`Actual metres ${p.so} stage ${p.stageSeq}`}
+          onChange={(e) => setActual(e.target.value)} style={{ width: 70, height: 26 }} />{' '}
+        <input type="number" min="0" step="any" placeholder="waste" value={waste} aria-label={`Wastage ${p.so} stage ${p.stageSeq}`}
+          onChange={(e) => setWaste(e.target.value)} style={{ width: 60, height: 26 }} />{' '}
+        <button className="btn btn-g" style={{ height: 26, fontSize: 10, padding: '0 8px' }} disabled={busy} onClick={record}>{busy ? '…' : 'Save'}</button>
+        {err && <div style={{ color: 'var(--red)', fontSize: 10 }}>{err}</div>}
+      </td>
+      <td><button className="btn btn-s" style={{ height: 26, fontSize: 10 }} onClick={onFull} title="Full form with start/end times">Full form</button></td>
+    </tr>
+  );
+}
+
 export default function MisStatus() {
   const nav = useNavigate();
   const [from, setFrom] = useState(addDays(today(), -6));
@@ -86,25 +155,13 @@ export default function MisStatus() {
       {!loading && tab === 'status' && (
         <div className="card" style={{ marginTop: 12 }}>
           <div className="ctitle">Pending stages <span className="tag ty">{pending.length}</span></div>
+          <div className="pg-sub" style={{ marginTop: 0 }}>Planned machine(s) and metres come from the PPC plan. Enter the actual metres (and wastage) right here, or open the full form for start/end times.</div>
           {pending.length === 0 ? <div className="al al-g">Nothing pending — every planned stage is complete.</div> : (
             <div className="tw sy"><table>
-              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Remaining</th><th>Planned date</th><th>Actual date</th><th>Delay</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Machine(s)</th><th>Planned</th><th>Remaining</th><th>Planned date</th><th>Actual date</th><th>Delay</th><th>Status</th><th>Actual / Wastage</th><th></th></tr></thead>
               <tbody>{pending.map((p, i) => (
-                <tr key={i} className={Number(p.delayDays) > 0 ? 'nr' : 'hi'}>
-                  <td><span className="so-pill">{p.so}</span></td>
-                  <td>{p.stageSeq}</td>
-                  <td>{p.departmentName}</td>
-                  <td><b>{p.remaining}</b></td>
-                  <td>{p.plannedDate || '—'}</td>
-                  <td>{p.actualDate || '—'}</td>
-                  <td>{p.delayDays != null
-                    ? (Number(p.delayDays) > 0
-                      ? <span className="tag tr">{p.delayDays} day(s) late</span>
-                      : <span className="tag tg">on time</span>)
-                    : '—'}</td>
-                  <td><span className={'tag ' + statusTag(p.status)}>{p.status}</span></td>
-                  <td><button className="btn btn-s" onClick={() => nav('/production')}>Record</button></td>
-                </tr>))}</tbody>
+                <StatusRow key={p.so + '|' + p.stageSeq} p={p} onSaved={load} onFull={() => nav('/production')} />
+              ))}</tbody>
             </table></div>
           )}
         </div>

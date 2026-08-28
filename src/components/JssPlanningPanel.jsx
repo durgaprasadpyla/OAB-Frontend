@@ -45,7 +45,7 @@ export default function JssPlanningPanel() {
       const [j, b] = await Promise.all([jssApi.get(s), bomApi.get(s)]);
       setJss(j);
       const sel = {};
-      (j.machines || []).forEach((m) => { sel[m.machineId] = { eligible: m.eligible !== false, speed: m.speed ?? '', changeover: m.changeoverMin ?? '' }; });
+      (j.machines || []).forEach((m) => { sel[m.machineId] = { eligible: m.eligible !== false, speed: m.speed ?? '', changeover: m.changeoverMin ?? '', setup: m.setupMin ?? '' }; });
       setMSel(sel);
       setBaseQty(String(b.baseQty ?? 1));
       setBaseUom(b.baseUom || '');
@@ -87,14 +87,24 @@ export default function JssPlanningPanel() {
     catch (e) { setErr(e.message); }
   }
 
-  const toggleMachine = (mid) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { speed: '', changeover: '' }), eligible: !(s[mid]?.eligible) } }));
-  const setMField = (mid, k, v) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { eligible: true, speed: '', changeover: '' }), [k]: v } }));
+  // Req #16: ticking a machine pre-fills the job speed with the Super Admin's ideal
+  // speed — QC then overrides it per job without ever touching the machine default.
+  const toggleMachine = (mid) => setMSel((s) => {
+    const cur = s[mid] || { speed: '', changeover: '', setup: '' };
+    const turningOn = !cur.eligible;
+    const mc = master.machines.find((x) => String(x.id) === String(mid));
+    const speed = turningOn && (cur.speed === '' || cur.speed == null) && mc?.defaultSpeed != null
+      ? String(mc.defaultSpeed) : cur.speed;
+    return { ...s, [mid]: { ...cur, eligible: turningOn, speed } };
+  });
+  const setMField = (mid, k, v) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { eligible: true, speed: '', changeover: '', setup: '' }), [k]: v } }));
   async function saveMachines() {
     setErr('');
     const payload = Object.entries(mSel).filter(([, v]) => v.eligible).map(([mid, v]) => {
       const mc = master.machines.find((x) => String(x.id) === String(mid));
       return { departmentId: mc?.departmentId, machineId: Number(mid), eligible: true,
         speed: v.speed === '' ? undefined : Number(v.speed),
+        setupMin: v.setup === '' || v.setup == null ? undefined : Number(v.setup),
         changeoverMin: v.changeover === '' ? undefined : Number(v.changeover) };
     });
     try { await jssApi.setMachines(spec, payload); flash('Machines saved'); await loadSpec(spec); }
@@ -118,13 +128,11 @@ export default function JssPlanningPanel() {
   const itemsForDept = (departmentId) => (master.items || []).filter(
     (it) => it.departmentId == null || String(it.departmentId) === String(departmentId));
   const itemById = (id) => (master.items || []).find((it) => String(it.id) === String(id));
-  // §31: type-and-search — an exact code or "CODE — name" match pulls the item in.
-  function pickItem(i, departmentId, text) {
-    const t = String(text || '').trim();
-    const pool = itemsForDept(departmentId);
-    const found = pool.find((it) => itemLabel(it) === t) || pool.find((it) => String(it.code) === t);
-    if (found) setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: found.id, uom: x.uom || found.uom || '', search: undefined } : x)));
-    else setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: '', search: text } : x)));
+  // Change 11: a plain dropdown (no type-and-search) — picking an item also pulls
+  // its UOM in from the item master when the line has none yet.
+  function pickItem(i, id) {
+    const found = itemById(id);
+    setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: found ? found.id : '', uom: x.uom || (found && found.uom) || '' } : x)));
   }
 
   return (
@@ -187,12 +195,12 @@ export default function JssPlanningPanel() {
             {/* §22-23: setup time communicated by the QC; counted against machine availability when planning. */}
             <div className="fbar" style={{ alignItems: 'flex-end', marginTop: 8 }}>
               <div className="fg" style={{ margin: 0, maxWidth: 220 }}>
-                <label>Job setup time (minutes)</label>
+                <label>Default job setup time (minutes)</label>
                 <input type="number" min="0" step="1" value={setupMin} placeholder="e.g. 30"
                   onChange={(e) => setSetupMin(e.target.value)} aria-label="Job setup time (minutes)" />
               </div>
               <button className="btn btn-s" onClick={saveSetup}>Save setup time</button>
-              <span className="pg-sub" style={{ margin: 0 }}>Added to every planned run of this job when computing machine availability.</span>
+              <span className="pg-sub" style={{ margin: 0 }}>Fallback when a machine below has no setup time of its own; counted against machine availability when planning.</span>
             </div>
           </div>
 
@@ -214,7 +222,7 @@ export default function JssPlanningPanel() {
                   ) : (
                     <div className="tw">
                       <table>
-                        <thead><tr><th style={{ width: 44 }}>Use</th><th>Machine</th><th style={{ width: 160 }}>Speed / min</th><th style={{ width: 170 }}>Changeover (min)</th></tr></thead>
+                        <thead><tr><th style={{ width: 44 }}>Use</th><th>Machine</th><th style={{ width: 140 }}>Ideal speed</th><th style={{ width: 150 }}>Job speed / min</th><th style={{ width: 150 }}>Setup time (min)</th><th style={{ width: 150 }}>Changeover (min)</th></tr></thead>
                         <tbody>
                           {list.map((mc) => {
                             const sel = mSel[mc.id] || {};
@@ -222,9 +230,16 @@ export default function JssPlanningPanel() {
                             return (
                               <tr key={mc.id} className={on ? 'hi' : undefined}>
                                 <td><input type="checkbox" checked={on} onChange={() => toggleMachine(mc.id)} /></td>
-                                <td>{mc.code} — {mc.name}{mc.defaultSpeed != null ? <span className="tag tgr" style={{ marginLeft: 6 }}>default {mc.defaultSpeed}</span> : null}</td>
-                                <td><input type="number" step="any" disabled={!on} placeholder={mc.defaultSpeed ?? ''} value={sel.speed ?? ''} onChange={(e) => setMField(mc.id, 'speed', e.target.value)} /></td>
-                                <td><input type="number" step="1" disabled={!on} value={sel.changeover ?? ''} onChange={(e) => setMField(mc.id, 'changeover', e.target.value)} /></td>
+                                <td>{mc.code} — {mc.name}</td>
+                                {/* Req #16: the Super Admin's ideal speed — read-only for QC. */}
+                                <td style={{ fontWeight: 600, color: 'var(--i2)' }}>{mc.defaultSpeed != null ? `${mc.defaultSpeed} ${mc.speedUom || ''}` : '—'}</td>
+                                <td><input type="number" min="0" step="any" disabled={!on} placeholder={mc.defaultSpeed ?? ''} value={sel.speed ?? ''}
+                                  aria-label={`Job speed for ${mc.name}`} onChange={(e) => setMField(mc.id, 'speed', e.target.value)} /></td>
+                                {/* Req #17: QC's job setup time for THIS job on THIS machine. */}
+                                <td><input type="number" min="0" step="1" disabled={!on} value={sel.setup ?? ''} placeholder={setupMin || ''}
+                                  aria-label={`Setup time for ${mc.name}`} onChange={(e) => setMField(mc.id, 'setup', e.target.value)} /></td>
+                                <td><input type="number" min="0" step="1" disabled={!on} value={sel.changeover ?? ''}
+                                  aria-label={`Changeover for ${mc.name}`} onChange={(e) => setMField(mc.id, 'changeover', e.target.value)} /></td>
                               </tr>
                             );
                           })}
@@ -253,7 +268,6 @@ export default function JssPlanningPanel() {
             ) : routeDepts.map((d) => {
               const deptLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => String(l.departmentId) === String(d.departmentId));
               const deptItems = itemsForDept(d.departmentId);
-              const listId = `jss-bom-items-${d.departmentId}`;
               return (
                 <div key={d.departmentId} style={{ marginBottom: 12 }}>
                   <div className="fbar" style={{ justifyContent: 'space-between' }}>
@@ -261,26 +275,26 @@ export default function JssPlanningPanel() {
                       <span className="tag tgr" style={{ marginLeft: 6 }}>{deptItems.length} item(s) tagged</span></div>
                     <button className="btn btn-s" onClick={() => addLine(d.departmentId)}>＋ Add item</button>
                   </div>
-                  {/* §31: exhaustive list → type-and-search, limited to this department's items + others. */}
-                  <datalist id={listId}>
-                    {deptItems.map((it) => <option key={it.id} value={itemLabel(it)} />)}
-                  </datalist>
                   {deptLines.length === 0 ? <div className="al al-y">No items for this department.</div> : (
                     <div className="tw">
                       <table>
-                        <thead><tr><th>Item (type to search)</th><th style={{ width: 120 }}>Item code</th><th style={{ width: 160 }}>Qty / base</th><th style={{ width: 120 }}>UOM</th><th style={{ width: 60 }}></th></tr></thead>
+                        <thead><tr><th>Item</th><th style={{ width: 120 }}>Item code</th><th style={{ width: 160 }}>Qty / base</th><th style={{ width: 120 }}>UOM</th><th style={{ width: 60 }}></th></tr></thead>
                         <tbody>
                           {deptLines.map(({ l, i }) => {
                             const sel = itemById(l.itemId);
                             return (
                               <tr key={i}>
                                 <td>
-                                  <input list={listId} style={{ width: '100%' }} placeholder="type item name / code…"
-                                    aria-label={`BOM item for ${d.departmentName}`}
-                                    value={l.search != null ? l.search : (sel ? itemLabel(sel) : '')}
-                                    onChange={(e) => pickItem(i, d.departmentId, e.target.value)} />
+                                  {/* Change 11: dropdown of this department's items — no search. */}
+                                  <select style={{ width: '100%' }} aria-label={`BOM item for ${d.departmentName}`}
+                                    value={l.itemId || ''} onChange={(e) => pickItem(i, e.target.value)}>
+                                    <option value="">— select an item —</option>
+                                    {sel && !deptItems.some((it) => String(it.id) === String(sel.id)) && (
+                                      <option value={sel.id}>{itemLabel(sel)}</option>
+                                    )}
+                                    {deptItems.map((it) => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
+                                  </select>
                                 </td>
-                                {/* §31: the code pulls in automatically from the item master. */}
                                 <td>{sel ? sel.code : '—'}</td>
                                 <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
                                 <td><input value={l.uom} onChange={(e) => setLine(i, 'uom', e.target.value)} /></td>

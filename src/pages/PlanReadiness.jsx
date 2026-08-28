@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
+import SoWastagePanel from '../components/SoWastagePanel.jsx';
 
 // PLAN landing page — Enhancements 2.0 §46-56. Against each open sale order the
 // readiness gatekeeper picks: Ready to plan (entire / partial SO with metres), or
@@ -128,6 +129,9 @@ export default function PlanReadiness() {
 
       {/* Plan downloads (§55) — shared with the planner and the Plant login (§63) */}
       <PlanDownloads compact />
+
+      {/* P6: department-wise wastage against each sale order, on the PLAN dashboard too */}
+      <SoWastagePanel from={addDays(today(), -6)} to={today()} />
 
       {/* §56: changes to an already-saved plan, clearly visible */}
       {changes.length > 0 && (

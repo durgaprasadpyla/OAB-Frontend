@@ -252,3 +252,9 @@ export function useData() {
   if (!ctx) throw new Error('useData must be used within <DataProvider>');
   return ctx;
 }
+
+/** Like useData, but returns null outside a <DataProvider> instead of throwing —
+ *  for components that only OPTIONALLY enrich themselves from the blobs. */
+export function useDataOptional() {
+  return useContext(DataCtx);
+}

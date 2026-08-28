@@ -12,7 +12,7 @@ function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.ge
 const dow = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' });
 const mins = (v) => (v == null ? 0 : Math.round(Number(v)));
 
-export default function WeeklyPlanner() {
+export default function WeeklyPlanner({ embedded = false }) {
   const [from, setFrom] = useState(today());
   const days = useMemo(() => Array.from({ length: 6 }, (_, i) => addDays(from, i)), [from]);
   const to = days[days.length - 1];
@@ -78,8 +78,8 @@ export default function WeeklyPlanner() {
   }
 
   return (
-    <div id="app">
-      <div className="pg-ttl">🗓 Weekly Planner</div>
+    <div id={embedded ? undefined : 'app'}>
+      {!embedded && <div className="pg-ttl">🗓 Weekly Planner</div>}
       <div className="pg-sub">Assign Ready-to-Plan sale orders to eligible machines by date. Capacity = quantity ÷ speed + changeover; over-booked machine-days are flagged.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className={'al ' + (lastCap?.overbooked ? 'al-y' : 'al-g')} style={{ margin: '8px 0' }}>{msg}</div>}

@@ -295,6 +295,11 @@ const ASL_ITEM_COLS = [
   { k: 'basicPrice', label: 'Basic Price', w: 90, numeric: true }, { k: 'moq', label: 'MOQ', w: 80 }, { k: 'leadTime', label: 'Lead Time', w: 90 },
 ];
 const GKEY = (r) => r.company || '(unnamed supplier)';
+// Item-level fields on an ASL row (identity + commercials). Blanking these — instead of
+// dropping the row — is how a supplier survives losing its last item: the group, its
+// details and its certifications all live on the rows themselves.
+const ASL_ITEM_FIELDS = ['itemCode', 'materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'basicPrice', 'moq', 'leadTime', 'specialty', 'department'];
+const blankItemFields = (r) => { const n = { ...r }; ASL_ITEM_FIELDS.forEach((f) => { n[f] = ''; }); n.status = 'Active'; return n; };
 const blankSupplier = () => ({ company: '', contact: '', phone: '', contact2: '', phone2: '', email: '', address: '', pincode: '', gstn: '', speciality: '', transportCharges: '', paymentTerms: '', materialType: '', subGroup: '', microns: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', moq: '', leadTime: '', status: 'Active' });
 const supLabel = { fontSize: 9.5, color: 'var(--i3)', fontWeight: 700, display: 'block' };
 
@@ -335,6 +340,35 @@ function ASLEditor() {
     return seen.map((c) => ({ company: c, idxs: map[c] }));
   }, [rows]);
 
+  // Type-to-search on Item Code: every known code (current ASL rows + the
+  // catalogue-only itemsExtra), first occurrence per code defining the item's
+  // identity — the same rule the Item Master tab uses. Typing a known code offers
+  // it in a dropdown and, on a match, auto-fills the row's identity fields.
+  const itemCatalog = useMemo(() => {
+    const seen = new Map();
+    const put = (r) => {
+      const c = String(r.itemCode || '').trim();
+      if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), r);
+    };
+    rows.forEach(put);
+    arr(purchase.itemsExtra).forEach(put);
+    return seen;
+  }, [rows, purchase.itemsExtra]);
+
+  // Identity travels with the code; commercials (price, MOQ, lead time, status)
+  // stay per-supplier and are never auto-filled.
+  const ASL_IDENTITY_AUTOFILL = ['materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'specialty', 'department'];
+  function setItemCode(idx, v) {
+    const hit = itemCatalog.get(String(v).trim().toLowerCase());
+    setRows((rs) => rs.map((r, j) => {
+      if (j !== idx) return r;
+      if (!hit) return { ...r, itemCode: v };
+      const filled = { ...r, itemCode: hit.itemCode };   // canonical casing
+      ASL_IDENTITY_AUTOFILL.forEach((f) => { filled[f] = hit[f] ?? ''; });
+      return filled;
+    }));
+  }
+
   const rowMatches = (r) => {
     if (statFil && (r.status || 'Active') !== statFil) return false;
     if (!q) return true;
@@ -353,8 +387,48 @@ function ASLEditor() {
     });
   }
   function removeRow(idx) {
-    if (!window.confirm('Delete this item from the Approved Supplier List?')) return;
-    setRows((rs) => rs.filter((_, j) => j !== idx));
+    if (!window.confirm('Delete this item from the Approved Supplier List?\n\nThe supplier (details & certifications) will be kept.')) return;
+    setRows((rs) => {
+      const gone = rs[idx];
+      const company = GKEY(gone);
+      const hasSibling = rs.some((r, j) => j !== idx && GKEY(r) === company);
+      // Last item of the group → keep the supplier as an item-less row.
+      if (!hasSibling) return rs.map((r, j) => (j === idx ? blankItemFields(r) : r));
+      let next = rs.filter((_, j) => j !== idx);
+      // Certifications live on the group's first row — re-home them if that row is the one deleted.
+      if (Array.isArray(gone.certs) && gone.certs.length) {
+        const k = next.findIndex((r) => GKEY(r) === company);
+        next = next.map((r, j) => (j === k ? { ...r, certs: [...gone.certs, ...arr(r.certs)] } : r));
+      }
+      return next;
+    });
+  }
+
+  // Delete a whole supplier group — every row, details and certifications included.
+  function removeSupplier(company) {
+    const n = rows.filter((r) => GKEY(r) === company).length;
+    if (!window.confirm(`Delete supplier “${company}” from the Approved Supplier List?\n\nThis removes the supplier, its ${n} item row(s), details and certifications.\n\nNothing is persisted until you click “Save ASL”.`)) return;
+    setRows((rs) => rs.filter((r) => GKEY(r) !== company));
+    flash('g', `✓ ${company} removed. Click “Save ASL” to persist.`);
+  }
+
+  // Bulk: delete every item row but keep one item-less row per supplier (details + certs).
+  function clearAllItems() {
+    if (!rows.length) return;
+    if (!window.confirm(`Delete ALL ${rows.length} item row(s) from the Approved Supplier List?\n\nAll ${groups.length} supplier(s) — details and certifications — will be kept.\n\nNothing is persisted until you click “Save ASL”.`)) return;
+    setRows((rs) => {
+      const keptAt = {}; const out = [];
+      rs.forEach((r) => {
+        const c = GKEY(r);
+        if (c in keptAt) {
+          if (Array.isArray(r.certs) && r.certs.length) { const k = keptAt[c]; out[k] = { ...out[k], certs: [...arr(out[k].certs), ...r.certs] }; }
+          return;
+        }
+        keptAt[c] = out.length; out.push(blankItemFields(r));
+      });
+      return out;
+    });
+    flash('g', '✓ All items removed — suppliers kept. Click “Save ASL” to persist.');
   }
 
   async function saveAll() {
@@ -424,8 +498,16 @@ function ASLEditor() {
   }
 
   const itemInp = (idx, c, r) => (
-    <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
-      onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+    c.k === 'itemCode' ? (
+      // Dropdown of known codes; picking (or typing) an existing one pulls the
+      // item's identity into the row automatically.
+      <input list="asl-item-codes" value={r.itemCode ?? ''} placeholder="type to search…"
+        aria-label={`Item code row ${idx + 1}`}
+        onChange={(e) => setItemCode(idx, e.target.value)} style={{ minWidth: c.w }} />
+    ) : (
+      <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
+        onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+    )
   );
 
   return (
@@ -440,10 +522,18 @@ function ASLEditor() {
         </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={() => setNewOpen((o) => !o)}>{newOpen ? '✕ Cancel' : '＋ Add Supplier'}</button>
+        <button className="btn btn-s" style={{ color: 'var(--red)' }} onClick={clearAllItems} disabled={!rows.some((r) => String(r.itemCode || '').trim() || String(r.specificMaterial || '').trim())} title="Delete every item row but keep all suppliers">🗑 Clear All Items</button>
         <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save ASL'}</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+
+      {/* Shared options list for every Item Code input in the ASL. */}
+      <datalist id="asl-item-codes">
+        {[...itemCatalog.entries()].map(([key, it]) => (
+          <option key={key} value={it.itemCode}>{[it.specificMaterial, it.materialType].filter(Boolean).join(' · ')}</option>
+        ))}
+      </datalist>
 
       {newOpen && (
         <div style={{ background: 'var(--bg)', border: '1.5px solid var(--bd)', borderRadius: 8, padding: '12px 14px', marginBottom: 10 }}>
@@ -492,6 +582,7 @@ function ASLEditor() {
               <span style={{ fontWeight: 700, fontSize: 12.5 }}>{g.company}</span>
               <span style={{ fontSize: 10.5, color: 'var(--i3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
               <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} title="Edit supplier details" onClick={(e) => { e.stopPropagation(); toggleDetails(g.company); }}>✎ Details</button>
+              <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} title={`Delete supplier ${g.company}`} onClick={(e) => { e.stopPropagation(); removeSupplier(g.company); }}>🗑 Delete</button>
               {certs.length > 0 && <span className="tag tg" title="Certifications on file">📎 {certs.length}</span>}
               <span className="tag tgr">{g.idxs.length} item{g.idxs.length !== 1 ? 's' : ''}{activeN < g.idxs.length ? ' · ' + activeN + ' active' : ''}</span>
             </div>
@@ -556,7 +647,7 @@ function ASLEditor() {
                     })}
                     <tr><td colSpan={ASL_ITEM_COLS.length + 2} style={{ padding: 6 }}>
                       <button className="btn btn-s" onClick={() => addItemToGroup(g.company)}>＋ Add Item</button>
-                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Item identity is also editable in the Item Master tab.</span>
+                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Type a known Item Code to pick it from the dropdown — the row fills itself. Identity is also editable in the Item Master tab.</span>
                     </td></tr>
                   </tbody>
                 </table>
@@ -770,7 +861,7 @@ function ItemMaster() {
                 return (
                   <tr key={m.code}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{m.code}</td>
-                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11 }}>{m.ref[f.k] || '-'}</td>)}
+                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || '-'}</td>)}
                     <td style={{ fontSize: 11, color: 'var(--i2)' }}>{sups.length ? sups.join(', ') : <span style={{ color: '#c99a2e', fontStyle: 'italic' }}>Not linked</span>}</td>
                   </tr>
                 );

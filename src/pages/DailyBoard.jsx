@@ -13,7 +13,7 @@ import Modal from '../components/Modal.jsx';
 const mins = (v) => (v == null ? 0 : Math.round(Number(v)));
 const SHIFTS = [{ k: 'A', label: 'Shift A · day' }, { k: 'B', label: 'Shift B · night' }];
 
-export default function DailyBoard() {
+export default function DailyBoard({ embedded = false }) {
   const [date, setDate] = useState(today());
   const [pool, setPool] = useState([]);
   const [machines, setMachines] = useState([]);
@@ -98,9 +98,22 @@ export default function DailyBoard() {
 
   const deptName = (id) => (departments.find((d) => String(d.id) === String(id)) || {}).name || 'Unassigned';
 
+  // C4: the SOs waiting for THIS machine — its department is one the SO's material is
+  // currently at (C5: a completed-partial/whole stage feeds the next one), the machine
+  // is eligible on the JSS, and the SO hasn't already been dropped on a sibling
+  // machine of the same department.
+  const waitingFor = (mc) => (pool || []).filter((p) => {
+    if (p.fullyPlanned) return false;
+    const w = (p.waiting || []).find((x) => String(x.departmentId) === String(mc.departmentId));
+    if (!w) return false;
+    if (!(w.eligibleMachineIds || []).some((id) => String(id) === String(mc.id))) return false;
+    const assigned = w.assignedMachineIds || [];
+    return assigned.length === 0 || assigned.some((id) => String(id) === String(mc.id));
+  });
+
   return (
-    <div id="app">
-      <div className="pg-ttl">📋 Daily Machine Board</div>
+    <div id={embedded ? undefined : 'app'}>
+      {!embedded && <div className="pg-ttl">📋 Daily Machine Board</div>}
       <div className="pg-sub">Drag a Ready-to-Plan SO onto a machine to plan it; drag a job card to another machine to move it. Capacity = quantity ÷ speed + changeover.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
@@ -169,6 +182,23 @@ export default function DailyBoard() {
                         <div style={{ width: pct + '%', height: '100%', background: over ? 'var(--red)' : 'var(--g)' }} />
                       </div>
                       <div className="pg-sub" style={{ marginBottom: 6 }}>{used}/{capM} min{over ? ' · OVER-BOOKED' : ''}</div>
+                      {/* C4: SOs whose material is waiting at this machine's department and
+                          may run on THIS machine — gone from siblings once dropped on one. */}
+                      {(() => {
+                        const w = waitingFor(mc);
+                        return w.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div className="pg-sub" style={{ margin: '0 0 3px', fontWeight: 600 }}>⏳ Waiting here</div>
+                            {w.map((p) => (
+                              <span key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
+                                title={`${p.spec} · ${p.jobName || ''} — drag onto a shift to plan`}
+                                className="tag ty" style={{ display: 'inline-block', margin: '0 4px 4px 0', cursor: 'grab', padding: '3px 7px' }}>
+                                {p.so}
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       {/* §77-78: one drop zone per shift; drag between them to re-shift a job. */}
                       {SHIFTS.map((sh) => {
                         const jobs = jobsFor(mc.id, sh.k);
