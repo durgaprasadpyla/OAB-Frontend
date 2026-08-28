@@ -8,7 +8,6 @@ import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
-import PortalEntry from '../components/PortalEntry.jsx';
 import ProformaModal from '../components/ProformaModal.jsx';
 import { CertificateDoc } from '../components/CertificatePanel.jsx';
 import { printElement, elementToPDF } from '../lib/pdf.js';
@@ -317,7 +316,6 @@ export default function Invoice() {
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
             <button className="btn btn-r" onClick={closePreview}>✕ Close — back to Invoices</button>
           </div>
-          <PortalEntry header={h} lines={pendInv} />
           <InvoiceDoc ref={docRef} header={h} lines={pendInv} />
         </div>
       )}

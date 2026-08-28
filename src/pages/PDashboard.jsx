@@ -295,6 +295,11 @@ const ASL_ITEM_COLS = [
   { k: 'basicPrice', label: 'Basic Price', w: 90, numeric: true }, { k: 'moq', label: 'MOQ', w: 80 }, { k: 'leadTime', label: 'Lead Time', w: 90 },
 ];
 const GKEY = (r) => r.company || '(unnamed supplier)';
+// Item-level fields on an ASL row (identity + commercials). Blanking these — instead of
+// dropping the row — is how a supplier survives losing its last item: the group, its
+// details and its certifications all live on the rows themselves.
+const ASL_ITEM_FIELDS = ['itemCode', 'materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'basicPrice', 'moq', 'leadTime', 'specialty', 'department'];
+const blankItemFields = (r) => { const n = { ...r }; ASL_ITEM_FIELDS.forEach((f) => { n[f] = ''; }); n.status = 'Active'; return n; };
 const blankSupplier = () => ({ company: '', contact: '', phone: '', contact2: '', phone2: '', email: '', address: '', pincode: '', gstn: '', speciality: '', transportCharges: '', paymentTerms: '', materialType: '', subGroup: '', microns: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', moq: '', leadTime: '', status: 'Active' });
 const supLabel = { fontSize: 9.5, color: 'var(--i3)', fontWeight: 700, display: 'block' };
 
@@ -353,8 +358,48 @@ function ASLEditor() {
     });
   }
   function removeRow(idx) {
-    if (!window.confirm('Delete this item from the Approved Supplier List?')) return;
-    setRows((rs) => rs.filter((_, j) => j !== idx));
+    if (!window.confirm('Delete this item from the Approved Supplier List?\n\nThe supplier (details & certifications) will be kept.')) return;
+    setRows((rs) => {
+      const gone = rs[idx];
+      const company = GKEY(gone);
+      const hasSibling = rs.some((r, j) => j !== idx && GKEY(r) === company);
+      // Last item of the group → keep the supplier as an item-less row.
+      if (!hasSibling) return rs.map((r, j) => (j === idx ? blankItemFields(r) : r));
+      let next = rs.filter((_, j) => j !== idx);
+      // Certifications live on the group's first row — re-home them if that row is the one deleted.
+      if (Array.isArray(gone.certs) && gone.certs.length) {
+        const k = next.findIndex((r) => GKEY(r) === company);
+        next = next.map((r, j) => (j === k ? { ...r, certs: [...gone.certs, ...arr(r.certs)] } : r));
+      }
+      return next;
+    });
+  }
+
+  // Delete a whole supplier group — every row, details and certifications included.
+  function removeSupplier(company) {
+    const n = rows.filter((r) => GKEY(r) === company).length;
+    if (!window.confirm(`Delete supplier “${company}” from the Approved Supplier List?\n\nThis removes the supplier, its ${n} item row(s), details and certifications.\n\nNothing is persisted until you click “Save ASL”.`)) return;
+    setRows((rs) => rs.filter((r) => GKEY(r) !== company));
+    flash('g', `✓ ${company} removed. Click “Save ASL” to persist.`);
+  }
+
+  // Bulk: delete every item row but keep one item-less row per supplier (details + certs).
+  function clearAllItems() {
+    if (!rows.length) return;
+    if (!window.confirm(`Delete ALL ${rows.length} item row(s) from the Approved Supplier List?\n\nAll ${groups.length} supplier(s) — details and certifications — will be kept.\n\nNothing is persisted until you click “Save ASL”.`)) return;
+    setRows((rs) => {
+      const keptAt = {}; const out = [];
+      rs.forEach((r) => {
+        const c = GKEY(r);
+        if (c in keptAt) {
+          if (Array.isArray(r.certs) && r.certs.length) { const k = keptAt[c]; out[k] = { ...out[k], certs: [...arr(out[k].certs), ...r.certs] }; }
+          return;
+        }
+        keptAt[c] = out.length; out.push(blankItemFields(r));
+      });
+      return out;
+    });
+    flash('g', '✓ All items removed — suppliers kept. Click “Save ASL” to persist.');
   }
 
   async function saveAll() {
@@ -440,6 +485,7 @@ function ASLEditor() {
         </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={() => setNewOpen((o) => !o)}>{newOpen ? '✕ Cancel' : '＋ Add Supplier'}</button>
+        <button className="btn btn-s" style={{ color: 'var(--red)' }} onClick={clearAllItems} disabled={!rows.some((r) => String(r.itemCode || '').trim() || String(r.specificMaterial || '').trim())} title="Delete every item row but keep all suppliers">🗑 Clear All Items</button>
         <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save ASL'}</button>
       </div>
@@ -492,6 +538,7 @@ function ASLEditor() {
               <span style={{ fontWeight: 700, fontSize: 12.5 }}>{g.company}</span>
               <span style={{ fontSize: 10.5, color: 'var(--i3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
               <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} title="Edit supplier details" onClick={(e) => { e.stopPropagation(); toggleDetails(g.company); }}>✎ Details</button>
+              <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} title={`Delete supplier ${g.company}`} onClick={(e) => { e.stopPropagation(); removeSupplier(g.company); }}>🗑 Delete</button>
               {certs.length > 0 && <span className="tag tg" title="Certifications on file">📎 {certs.length}</span>}
               <span className="tag tgr">{g.idxs.length} item{g.idxs.length !== 1 ? 's' : ''}{activeN < g.idxs.length ? ' · ' + activeN + ' active' : ''}</span>
             </div>
