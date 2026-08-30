@@ -27,7 +27,7 @@ describe('Dashboard — newly integrated superadmin APIs', () => {
     fireEvent.click(await screen.findByText('🗂 Machines'));
     // the MasterData page content renders inside the Dashboard tab, narrowed to
     // Departments + Machines
-    await screen.findByText(/Departments and the machines/);
+    await screen.findByText(/Machines and the department each one runs under/);
   });
 
   it('Routes and Stock Alerts are their own top-level Dashboard tabs', async () => {

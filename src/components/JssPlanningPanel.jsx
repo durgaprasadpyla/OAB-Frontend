@@ -51,6 +51,11 @@ export default function JssPlanningPanel() {
     })();
   }, []);
 
+  // The spec list, readable inside stable callbacks without re-creating them
+  // (a changing `specs` identity in the deps would re-fire the load effect forever).
+  const specsRef = useRef(specs);
+  specsRef.current = specs;
+
   const loadSpec = useCallback(async (s) => {
     if (!s) { setJss(null); return; }
     setLoading(true); setErr('');
@@ -62,13 +67,13 @@ export default function JssPlanningPanel() {
       setMSel(sel);
       setBaseQty(String(b.baseQty ?? 1));
       // Issues 1.0 #2: no stored base UOM yet → auto-pick it from the JSS's dispatch form.
-      const row = (Array.isArray(specs) ? specs : []).find((x) => String(x.spec || '').trim() === s);
+      const row = (specsRef.current || []).find((x) => String(x.spec || '').trim() === s);
       setBaseUom(b.baseUom || (row && row.dispatchForm ? bomUOM(row.dispatchForm) : ''));
       setLines((b.items || []).map((it) => ({ departmentId: it.departmentId, itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '' })));
       setSetupMin(j.config?.setupMin != null ? String(j.config.setupMin) : '');
     } catch (e) { setErr(e.message || 'Failed to load JSS'); }
     finally { setLoading(false); }
-  }, [specs]);
+  }, []);
 
   useEffect(() => { loadSpec(spec); }, [spec, loadSpec]);
 
@@ -138,10 +143,11 @@ export default function JssPlanningPanel() {
     setErr('');
     const payload = Object.entries(mSel).filter(([, v]) => v.eligible).map(([mid, v]) => {
       const mc = master.machines.find((x) => String(x.id) === String(mid));
+      const dep = master.departments.find((x) => String(x.id) === String(mc?.departmentId));
       return { departmentId: mc?.departmentId, machineId: Number(mid), eligible: true,
         speed: v.speed === '' ? undefined : Number(v.speed),
         // Issues 1.0 #3: the chosen unit; department default when QC left it alone.
-        speedUom: v.uom || deptSpeedUnit(mc?.departmentName),
+        speedUom: v.uom || deptSpeedUnit(mc?.departmentName || dep?.name),
         setupMin: v.setup === '' || v.setup == null ? undefined : Number(v.setup),
         changeoverMin: v.changeover === '' ? undefined : Number(v.changeover) };
     });
