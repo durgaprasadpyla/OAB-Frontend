@@ -24,6 +24,7 @@ export default function JssPlanningPanel() {
 
   const [master, setMaster] = useState({ departments: [], machines: [], dispatchTypes: [], routes: [], items: [] });
   const [spec, setSpec] = useState('');
+  const [specText, setSpecText] = useState('');   // what the QC typed in the picker
   const [jss, setJss] = useState(null);   // { config, routeDepartments, machines }
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
@@ -76,6 +77,27 @@ export default function JssPlanningPanel() {
   }, []);
 
   useEffect(() => { loadSpec(spec); }, [spec, loadSpec]);
+
+  // Type-and-search spec picker: 386 specs are unusable as a plain dropdown. The
+  // QC types any part of the code / job name; an exact code or a picked suggestion
+  // ("A1005 — Nandi Hills…") opens that spec. (Same loose matching as FG Entry.)
+  const normSpec = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const specLookup = useMemo(() => {
+    const m = {};
+    (Array.isArray(specs) ? specs : []).forEach((s) => {
+      const sp = String(s.spec || '').trim();
+      if (!sp) return;
+      m[normSpec(sp)] = sp;
+      m[normSpec(`${sp} — ${s.jobName || s.customer || ''}`)] = sp;
+    });
+    return m;
+  }, [specs]);
+  function onSpecText(v) {
+    setSpecText(v);
+    const sp = specLookup[normSpec(v)];
+    if (sp) { setSpec(sp); return; }
+    if (spec) setSpec('');   // typed away from the open spec — close it
+  }
 
   // ── Issues 1.0 #1: the Dispatch Form comes FROM the JSS, not a manual pick ──
   const specRow = useMemo(() => (Array.isArray(specs) ? specs : []).find((x) => String(x.spec || '').trim() === spec) || null, [specs, spec]);
@@ -187,11 +209,13 @@ export default function JssPlanningPanel() {
 
       <div className="card">
         <div className="fg" style={{ maxWidth: 460 }}>
-          <label>JSS Spec</label>
-          <select value={spec} onChange={(e) => setSpec(e.target.value)}>
-            <option value="">— select a JSS spec —</option>
-            {specs.map((s) => <option key={s.spec} value={s.spec}>{s.spec}{s.jobName ? ' — ' + s.jobName : (s.customer ? ' — ' + s.customer : '')}</option>)}
-          </select>
+          <label>JSS Spec {spec && <span className="tag tb" style={{ marginLeft: 6 }}>{spec} open</span>}</label>
+          <input list="jss-spec-search" value={specText} aria-label="JSS Spec"
+            placeholder="— type a spec no. or job name to search —"
+            onChange={(e) => onSpecText(e.target.value)} />
+          <datalist id="jss-spec-search">
+            {specs.map((s) => <option key={s.spec} value={`${s.spec} — ${s.jobName || s.customer || ''}`} />)}
+          </datalist>
         </div>
       </div>
 

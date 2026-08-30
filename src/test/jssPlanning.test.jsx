@@ -190,6 +190,21 @@ describe('JssPlanningPanel', () => {
     });
   });
 
+  // QC ask (30-08): the spec picker is type-and-search — typing a code or picking
+  // the "CODE — job name" suggestion opens that spec; matching is loose.
+  it('opens a spec by typing into the search picker', async () => {
+    render(<JssPlanningPanel />);
+    const box = await screen.findByLabelText('JSS Spec');
+    expect(box.tagName).toBe('INPUT');
+    // the suggestion format (case-insensitive) resolves to the spec
+    fireEvent.change(box, { target: { value: 'a2 — map pouch 500g' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    expect(screen.getByText(/Read from this spec/)).toBeInTheDocument();   // A2 carries 'Pouch'
+    // typing away from the open spec closes it
+    fireEvent.change(box, { target: { value: 'zzz' } });
+    await waitFor(() => expect(screen.queryByText('Dispatch Type & Route')).not.toBeInTheDocument());
+  });
+
   // Issues 1.0 #4: opening the panel refreshes the normalized items from the
   // Padmin catalogue so department-tagged items reach the BOM picker.
   it('syncs the item master from the purchase catalogue on open', async () => {
