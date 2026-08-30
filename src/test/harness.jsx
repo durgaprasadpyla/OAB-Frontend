@@ -303,6 +303,18 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
         }
         if (path === 'audit') return res(200, hr.audit || []);
         if (/^employees\/\d+\/documents$/.test(path)) return res(200, hr.documents || []);
+        // Mirror HrService.getEmployeeProfile: the list row + documents + leave data.
+        if (/^employees\/\d+$/.test(path)) {
+          const id = Number(path.split('/')[1]);
+          const emp = (hr.employees || []).find((e) => e.id === id);
+          if (!emp) return res(404, { error: 'No employee ' + id });
+          return res(200, {
+            ...emp,
+            documents: hr.documents || [],
+            leaveRequests: (hr.leaveRequests || []).filter((r) => r.employeeId === id),
+            leaveBalance: hr.leaveBalance || [],
+          });
+        }
       }
 
       // Writes are recorded so tests can assert the request, then applied to the

@@ -176,6 +176,8 @@ export const masterApi = {
   listDepartments: (p) => api('/api/master/departments' + qs(p)),
   createDepartment: (body) => api('/api/master/departments', { method: 'POST', body }),
   updateDepartment: (id, body) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
+  // Hard delete (Issues 1.0 #5) — the server refuses with the blockers when still referenced.
+  deleteDepartment: (id) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'DELETE' }),
 
   listSpecialties: (p) => api('/api/master/specialties' + qs(p)),
   createSpecialty: (body) => api('/api/master/specialties', { method: 'POST', body }),

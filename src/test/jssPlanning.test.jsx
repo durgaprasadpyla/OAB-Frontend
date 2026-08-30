@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 
 // JssPlanningPanel reads the spec list from useData(); mock it so the test doesn't
-// need the whole DataProvider + blob fetch machinery.
+// need the whole DataProvider + blob fetch machinery. A1 is a legacy spec with no
+// dispatch form (manual fallback); A2 carries dispatchForm 'Pouch' (Issues 1.0 #1).
 vi.mock('../data.jsx', () => ({
-  useData: () => ({ mods: { jss: [{ spec: 'A1', jobName: 'Stay Fresh 100g' }] } }),
+  useData: () => ({ mods: { jss: [
+    { spec: 'A1', jobName: 'Stay Fresh 100g' },
+    { spec: 'A2', jobName: 'MAP Pouch 500g', dispatchForm: 'Pouch' },
+  ] } }),
 }));
 
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
@@ -34,21 +38,23 @@ function installFetch() {
     ]);
     if (u.includes('/api/master/items')) return res([{ id: 1000, code: 'FILM', name: 'Film XYZ' }]);
 
-    if (u.match(/\/api\/jss\/A1\/config$/) && method === 'PUT') {
+    if (u.includes('/api/master/items/sync-from-purchase')) return res({ created: 0, updated: 0, skipped: 0 });
+
+    if (u.match(/\/api\/jss\/A\d\/config$/) && method === 'PUT') {
       cfg = {
         dispatchTypeId: body.dispatchTypeId ?? null,
         routeId: body.routeId !== undefined ? body.routeId : (body.dispatchTypeId === 100 ? 200 : null),
       };
       return res({ specCode: 'A1', ...cfg });
     }
-    if (u.match(/\/api\/jss\/A1\/route-departments$/)) return res(routeDeps(cfg.routeId));
-    if (u.match(/\/api\/jss\/A1$/)) return res({
+    if (u.match(/\/api\/jss\/A\d\/route-departments$/)) return res(routeDeps(cfg.routeId));
+    if (u.match(/\/api\/jss\/A\d$/)) return res({
       specCode: 'A1',
       config: { specCode: 'A1', dispatchTypeId: cfg.dispatchTypeId, dispatchTypeName: cfg.dispatchTypeId ? 'Pouch' : null, routeId: cfg.routeId, routeName: cfg.routeId ? 'Print-Pouch' : null },
       routeDepartments: routeDeps(cfg.routeId),
       machines: [],
     });
-    if (u.match(/\/api\/bom\/A1$/)) return res({ specCode: 'A1', baseQty: 1, baseUom: null, items: [] });
+    if (u.match(/\/api\/bom\/A\d$/)) return res({ specCode: 'A1', baseQty: 1, baseUom: null, items: [] });
     return res({});
   });
 }
@@ -139,6 +145,58 @@ describe('JssPlanningPanel', () => {
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts.at(-1)[1].body);
       expect(body.machines).toEqual([expect.objectContaining({ machineId: 10, speed: 285, setupMin: 30 })]);
+    });
+  });
+
+  // Issues 1.0 #1 + #2 + #3: a spec that carries a dispatch form gets it READ-ONLY
+  // from the JSS (auto-aligned to the matching form, no manual dropdown), the BOM
+  // base UOM auto-picks from that form as a dropdown, and every machine row offers
+  // a speed-unit choice defaulting by department (pcs/min for pouching).
+  it('reads the dispatch form from the JSS, auto-picks the base UOM and offers speed units', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A2' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+
+    // #1: shown read-only from the JSS — and the config auto-aligns via PUT.
+    expect(await screen.findByText(/Read from this spec/)).toBeInTheDocument();
+    await waitFor(() => {
+      const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).endsWith('/api/jss/A2/config') && (o?.method || '').toUpperCase() === 'PUT');
+      expect(puts.some(([, o]) => JSON.parse(o.body).dispatchTypeId === 100)).toBe(true);
+    });
+    // no manual dispatch dropdown in this mode
+    expect(screen.queryAllByRole('combobox').some((c) => within(c).queryByRole('option', { name: 'Pouch' }))).toBe(false);
+
+    // #2: the base UOM is a dropdown, auto-picked from the Pouch dispatch form.
+    const uom = await screen.findByLabelText('Base UOM');
+    expect(uom.tagName).toBe('SELECT');
+    await waitFor(() => expect(uom).toHaveValue('Pouches'));
+
+    // #3: each machine row has a unit select BEFORE the ideal speed; departments
+    // default correctly — Printing → m/min, Pouching → pcs/min.
+    await waitFor(() => expect(screen.getByText(/CI Flexo/)).toBeInTheDocument());
+    expect(screen.getByLabelText('Speed unit for CI Flexo')).toHaveValue('m/min');
+    expect(screen.getByLabelText('Speed unit for Pouching 1')).toHaveValue('pcs/min');
+
+    // ticking + saving carries the unit to the server
+    const row = screen.getByText(/Pouching 1/).closest('tr');
+    fireEvent.click(within(row).getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+    await waitFor(() => {
+      const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).endsWith('/api/jss/A2/machines') && (o?.method || '').toUpperCase() === 'PUT');
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts.at(-1)[1].body);
+      expect(body.machines).toEqual([expect.objectContaining({ machineId: 12, speedUom: 'pcs/min' })]);
+    });
+  });
+
+  // Issues 1.0 #4: opening the panel refreshes the normalized items from the
+  // Padmin catalogue so department-tagged items reach the BOM picker.
+  it('syncs the item master from the purchase catalogue on open', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => {
+      const syncs = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).includes('/api/master/items/sync-from-purchase') && (o?.method || '').toUpperCase() === 'POST');
+      expect(syncs.length).toBe(1);
     });
   });
 

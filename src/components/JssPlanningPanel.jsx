@@ -1,13 +1,22 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi, jssApi, bomApi } from '../api.js';
+import { bomUOM } from '../lib/bom.js';
 
-// QC JSS planning (Stage 3): pick a JSS spec, choose a Dispatch Type (which
-// auto-selects the Route and reveals its ordered departments), assign eligible
-// machines per department (multiple, with per-JSS speed + changeover), and build
-// the department-wise BOM. All server-backed via /api/jss/** and /api/bom/**.
+// QC JSS planning (Stage 3): pick a JSS spec — its Dispatch Form comes FROM the
+// JSS itself (Issues 1.0 #1, no manual dropdown), which reveals the form's routes
+// to pick by radio; assign eligible machines per department (multiple, with a
+// per-machine speed UNIT + speed + setup + changeover, Issues 1.0 #3) and build
+// the department-wise BOM whose base UOM is auto-picked from the dispatch form
+// (Issues 1.0 #2). All server-backed via /api/jss/** and /api/bom/**.
 
 const numOr = (v, d) => (v === '' || v == null || Number.isNaN(Number(v)) ? d : Number(v));
+
+// Issues 1.0 #2: the base UOM choices; auto-picked via bomUOM(dispatchForm).
+const BASE_UOMS = ['Pouches', 'Pieces', 'Kgs', 'Mtrs', 'Pcs'];
+// Issues 1.0 #3: default speed unit by department — pouching, shrink sleeves,
+// die punching and packing count pieces; every other operation runs in metres.
+const deptSpeedUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || '')) ? 'pcs/min' : 'm/min');
 
 export default function JssPlanningPanel() {
   const { mods } = useData();
@@ -28,6 +37,10 @@ export default function JssPlanningPanel() {
 
   useEffect(() => {
     (async () => {
+      // Issues 1.0 #4: refresh the normalized items from the Padmin catalogue first,
+      // so the departments tagged on the P Dashboard item master reach the BOM picker.
+      // Best-effort — a role without the sync grant still gets the current list.
+      try { await masterApi.syncItemsFromPurchase(); } catch { /* read-only fallback */ }
       try {
         const [departments, machines, dispatchTypes, routes, items] = await Promise.all([
           masterApi.listDepartments(), masterApi.listMachines(), masterApi.listDispatchTypes(),
@@ -38,6 +51,11 @@ export default function JssPlanningPanel() {
     })();
   }, []);
 
+  // The spec list, readable inside stable callbacks without re-creating them
+  // (a changing `specs` identity in the deps would re-fire the load effect forever).
+  const specsRef = useRef(specs);
+  specsRef.current = specs;
+
   const loadSpec = useCallback(async (s) => {
     if (!s) { setJss(null); return; }
     setLoading(true); setErr('');
@@ -45,10 +63,12 @@ export default function JssPlanningPanel() {
       const [j, b] = await Promise.all([jssApi.get(s), bomApi.get(s)]);
       setJss(j);
       const sel = {};
-      (j.machines || []).forEach((m) => { sel[m.machineId] = { eligible: m.eligible !== false, speed: m.speed ?? '', changeover: m.changeoverMin ?? '', setup: m.setupMin ?? '' }; });
+      (j.machines || []).forEach((m) => { sel[m.machineId] = { eligible: m.eligible !== false, speed: m.speed ?? '', uom: m.speedUom ?? '', changeover: m.changeoverMin ?? '', setup: m.setupMin ?? '' }; });
       setMSel(sel);
       setBaseQty(String(b.baseQty ?? 1));
-      setBaseUom(b.baseUom || '');
+      // Issues 1.0 #2: no stored base UOM yet → auto-pick it from the JSS's dispatch form.
+      const row = (specsRef.current || []).find((x) => String(x.spec || '').trim() === s);
+      setBaseUom(b.baseUom || (row && row.dispatchForm ? bomUOM(row.dispatchForm) : ''));
       setLines((b.items || []).map((it) => ({ departmentId: it.departmentId, itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '' })));
       setSetupMin(j.config?.setupMin != null ? String(j.config.setupMin) : '');
     } catch (e) { setErr(e.message || 'Failed to load JSS'); }
@@ -56,6 +76,27 @@ export default function JssPlanningPanel() {
   }, []);
 
   useEffect(() => { loadSpec(spec); }, [spec, loadSpec]);
+
+  // ── Issues 1.0 #1: the Dispatch Form comes FROM the JSS, not a manual pick ──
+  const specRow = useMemo(() => (Array.isArray(specs) ? specs : []).find((x) => String(x.spec || '').trim() === spec) || null, [specs, spec]);
+  const jssFormName = String(specRow?.dispatchForm || '').trim();
+  const matchedForm = useMemo(
+    () => (master.dispatchTypes || []).find((t) => String(t.name || '').trim().toLowerCase() === jssFormName.toLowerCase()) || null,
+    [master.dispatchTypes, jssFormName],
+  );
+  // Auto-align the stored config to the JSS's form once per spec (never loops:
+  // the guard remembers which spec it already aligned).
+  const alignedRef = useRef('');
+  useEffect(() => {
+    if (!spec || !jss || loading || !matchedForm) return;
+    if (String(jss.config?.dispatchTypeId ?? '') === String(matchedForm.id)) return;
+    if (alignedRef.current === spec) return;
+    alignedRef.current = spec;
+    (async () => {
+      try { await jssApi.setConfig(spec, { dispatchTypeId: Number(matchedForm.id) }); await loadSpec(spec); }
+      catch (e) { setErr(e.message); }
+    })();
+  }, [spec, jss, loading, matchedForm, loadSpec]);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
   const routeDepts = jss?.routeDepartments || [];
@@ -90,20 +131,23 @@ export default function JssPlanningPanel() {
   // Req #16: ticking a machine pre-fills the job speed with the Super Admin's ideal
   // speed — QC then overrides it per job without ever touching the machine default.
   const toggleMachine = (mid) => setMSel((s) => {
-    const cur = s[mid] || { speed: '', changeover: '', setup: '' };
+    const cur = s[mid] || { speed: '', uom: '', changeover: '', setup: '' };
     const turningOn = !cur.eligible;
     const mc = master.machines.find((x) => String(x.id) === String(mid));
     const speed = turningOn && (cur.speed === '' || cur.speed == null) && mc?.defaultSpeed != null
       ? String(mc.defaultSpeed) : cur.speed;
     return { ...s, [mid]: { ...cur, eligible: turningOn, speed } };
   });
-  const setMField = (mid, k, v) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { eligible: true, speed: '', changeover: '', setup: '' }), [k]: v } }));
+  const setMField = (mid, k, v) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { eligible: true, speed: '', uom: '', changeover: '', setup: '' }), [k]: v } }));
   async function saveMachines() {
     setErr('');
     const payload = Object.entries(mSel).filter(([, v]) => v.eligible).map(([mid, v]) => {
       const mc = master.machines.find((x) => String(x.id) === String(mid));
+      const dep = master.departments.find((x) => String(x.id) === String(mc?.departmentId));
       return { departmentId: mc?.departmentId, machineId: Number(mid), eligible: true,
         speed: v.speed === '' ? undefined : Number(v.speed),
+        // Issues 1.0 #3: the chosen unit; department default when QC left it alone.
+        speedUom: v.uom || deptSpeedUnit(mc?.departmentName || dep?.name),
         setupMin: v.setup === '' || v.setup == null ? undefined : Number(v.setup),
         changeoverMin: v.changeover === '' ? undefined : Number(v.changeover) };
     });
@@ -160,11 +204,27 @@ export default function JssPlanningPanel() {
             <div className="ctitle">Dispatch Type &amp; Route</div>
             <div className="g3">
               <div className="fg">
-                <label>Dispatch Type</label>
-                <select value={jss.config?.dispatchTypeId ?? ''} onChange={(e) => setDispatch(e.target.value)}>
-                  <option value="">— none —</option>
-                  {master.dispatchTypes.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
+                <label>Dispatch Form (from the JSS)</label>
+                {jssFormName ? (
+                  // Issues 1.0 #1: picked from the JSS itself — never a manual dropdown.
+                  <div style={{ paddingTop: 6 }}>
+                    <span className="tag tb" style={{ fontSize: 12 }}>{jssFormName}</span>
+                    {matchedForm
+                      ? <span className="pg-sub" style={{ display: 'block', marginTop: 4 }}>Read from this spec — its routes appear on the right.</span>
+                      : <span className="al al-y" style={{ display: 'block', marginTop: 6, padding: '6px 8px' }}>
+                          No routes exist for “{jssFormName}” yet — Super Admin adds them under Dashboard → Routes.
+                        </span>}
+                  </div>
+                ) : (
+                  // Legacy spec without a dispatch form — fall back to a manual pick.
+                  <>
+                    <select value={jss.config?.dispatchTypeId ?? ''} onChange={(e) => setDispatch(e.target.value)}>
+                      <option value="">— none —</option>
+                      {master.dispatchTypes.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    <span className="pg-sub" style={{ display: 'block', marginTop: 4 }}>This spec has no dispatch form — set it on the spec (QC → Add Spec) to auto-pick.</span>
+                  </>
+                )}
               </div>
               <div className="fg">
                 <label>Route — select one for this JSS</label>
@@ -222,17 +282,27 @@ export default function JssPlanningPanel() {
                   ) : (
                     <div className="tw">
                       <table>
-                        <thead><tr><th style={{ width: 44 }}>Use</th><th>Machine</th><th style={{ width: 140 }}>Ideal speed</th><th style={{ width: 150 }}>Job speed / min</th><th style={{ width: 150 }}>Setup time (min)</th><th style={{ width: 150 }}>Changeover (min)</th></tr></thead>
+                        <thead><tr><th style={{ width: 44 }}>Use</th><th>Machine</th><th style={{ width: 110 }}>Speed unit</th><th style={{ width: 140 }}>Ideal speed</th><th style={{ width: 150 }}>Job speed / min</th><th style={{ width: 150 }}>Setup time (min)</th><th style={{ width: 150 }}>Changeover (min)</th></tr></thead>
                         <tbody>
                           {list.map((mc) => {
                             const sel = mSel[mc.id] || {};
                             const on = !!sel.eligible;
+                            const unit = sel.uom || deptSpeedUnit(d.departmentName);
                             return (
                               <tr key={mc.id} className={on ? 'hi' : undefined}>
                                 <td><input type="checkbox" checked={on} onChange={() => toggleMachine(mc.id)} /></td>
                                 <td>{mc.code} — {mc.name}</td>
+                                {/* Issues 1.0 #3: unit BEFORE the ideal speed — pcs/min for
+                                    pouching / sleeving / die punching / packing by default. */}
+                                <td>
+                                  <select disabled={!on} value={unit} aria-label={`Speed unit for ${mc.name}`}
+                                    onChange={(e) => setMField(mc.id, 'uom', e.target.value)}>
+                                    <option value="m/min">m/min</option>
+                                    <option value="pcs/min">pcs/min</option>
+                                  </select>
+                                </td>
                                 {/* Req #16: the Super Admin's ideal speed — read-only for QC. */}
-                                <td style={{ fontWeight: 600, color: 'var(--i2)' }}>{mc.defaultSpeed != null ? `${mc.defaultSpeed} ${mc.speedUom || ''}` : '—'}</td>
+                                <td style={{ fontWeight: 600, color: 'var(--i2)' }}>{mc.defaultSpeed != null ? `${mc.defaultSpeed} ${unit}` : '—'}</td>
                                 <td><input type="number" min="0" step="any" disabled={!on} placeholder={mc.defaultSpeed ?? ''} value={sel.speed ?? ''}
                                   aria-label={`Job speed for ${mc.name}`} onChange={(e) => setMField(mc.id, 'speed', e.target.value)} /></td>
                                 {/* Req #17: QC's job setup time for THIS job on THIS machine. */}
@@ -260,7 +330,15 @@ export default function JssPlanningPanel() {
             </div>
             <div className="g3">
               <div className="fg"><label>Base quantity</label><input type="number" step="any" value={baseQty} onChange={(e) => setBaseQty(e.target.value)} /></div>
-              <div className="fg"><label>Base UOM</label><input value={baseUom} placeholder="e.g. m, pouches" onChange={(e) => setBaseUom(e.target.value)} /></div>
+              <div className="fg">
+                <label>Base UOM{jssFormName ? ` (auto from “${jssFormName}”)` : ''}</label>
+                {/* Issues 1.0 #2: a fixed dropdown, auto-picked from the dispatch form —
+                    free text would make the SO-quantity × per-base maths meaningless. */}
+                <select value={baseUom} aria-label="Base UOM" onChange={(e) => setBaseUom(e.target.value)}>
+                  <option value="">— select —</option>
+                  {(baseUom && !BASE_UOMS.includes(baseUom) ? [baseUom, ...BASE_UOMS] : BASE_UOMS).map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
               <div className="fg"><label>&nbsp;</label><div style={{ paddingTop: 8 }} className="pg-sub">Requirement = (SO qty / base) × qty per base.</div></div>
             </div>
             {!routeDepts.length ? (

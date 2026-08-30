@@ -22,6 +22,10 @@ export const DROPDOWN_DEFS = [
   // Department master (/api/master/departments) so the PAdmin Item Master — which cannot
   // read the sales blob — reads the same source. `master: true` flags that backing.
   { key: 'departments', label: 'Departments', where: 'PAdmin — Item Master', type: 'list', master: 'dept' },
+  // Issues 1.0 #6: the Machines master is visible/manageable here too — the same
+  // machines the Machines tab, the JSS and the PPC boards use. Adding one pulls
+  // its department in from the Departments list above.
+  { key: 'machinesMaster', label: 'Machines', where: 'Machines tab · JSS · PPC boards', type: 'list', master: 'machine' },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.

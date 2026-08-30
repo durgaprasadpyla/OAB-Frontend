@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -31,12 +31,25 @@ beforeEach(() => {
     if (u.includes('/api/master/departments')) {
       if (method === 'GET' && deptFail) return res(500, 'boom');   // Department master unreachable
       if (method === 'POST') { const d = { id: depts.length + 1, name: body.name, active: true }; depts.push(d); created.push(body); return res(201, d); }
+      if (method === 'DELETE') {
+        const id = Number(u.split('/').pop());
+        // Printing (id 1) is referenced — mirror the server's guarded 409 + reason.
+        if (id === 1) return res(409, { status: 409, message: "Cannot delete 'Printing' — it is still used by 2 machine(s)." });
+        depts = depts.filter((d) => d.id !== id);
+        return res(200, { deleted: true, id });
+      }
       return res(200, depts);
+    }
+    if (u.includes('/api/master/machines')) {
+      if (method === 'POST') { created.push(body); return res(201, { id: 77, ...body, active: true }); }
+      return res(200, [{ id: 70, code: 'P1', name: 'Poucher 1', departmentId: 2, defaultSpeed: 40, speedUom: 'pcs/min', active: true }]);
     }
     if (u.includes('/rest/v1/oab_data')) { return method === 'GET' ? res(200, []) : res(201, { id: body.id, version: 2 }); }
     return res(200, {});
   };
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 function mount() {
   return render(<MemoryRouter><AuthProvider><DataProvider><DropdownAdmin /></DataProvider></AuthProvider></MemoryRouter>);
@@ -74,5 +87,40 @@ describe('Drop-down selections → Departments', () => {
     depts = [];
     mount();
     expect(await screen.findByText(/No departments yet/)).toBeInTheDocument();
+  });
+});
+
+
+describe('Drop-down selections → Departments — delete (Issues 1.0 #5)', () => {
+  it('deletes an unreferenced department after confirm', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    await screen.findByLabelText('Department Slitting');
+    await userEvent.click(screen.getByLabelText('Delete department Slitting'));
+    await waitFor(() => expect(screen.queryByLabelText('Department Slitting')).not.toBeInTheDocument());
+  });
+
+  it('shows the server reason when a referenced department cannot be deleted', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    await screen.findByLabelText('Department Printing');
+    await userEvent.click(screen.getByLabelText('Delete department Printing'));
+    await waitFor(() => expect(screen.getByText(/still used by 2 machine/)).toBeInTheDocument());
+    expect(screen.getByLabelText('Department Printing')).toBeInTheDocument();   // row kept
+  });
+});
+
+describe('Drop-down selections → Machines (Issues 1.0 #6)', () => {
+  it('lists the machine master and adds one with a department pulled from the list', async () => {
+    mount();
+    // the Machines entry sits in the Lists panel; open it
+    await userEvent.click(await screen.findByText('Machines'));
+    await screen.findByLabelText('Machine Poucher 1');
+    // add: department comes from the Departments master; unit defaults pcs/min for Slitting? no — m/min
+    await userEvent.type(screen.getByLabelText('New machine code'), 'SL2');
+    await userEvent.type(screen.getByLabelText('New machine name'), 'Slitter 2');
+    await userEvent.selectOptions(screen.getByLabelText('New machine department'), '2');
+    await userEvent.click(screen.getByRole('button', { name: '＋ Add' }));
+    await waitFor(() => expect(created.some((c) => c.code === 'SL2' && c.departmentId === 2 && c.speedUom === 'm/min')).toBe(true));
   });
 });
