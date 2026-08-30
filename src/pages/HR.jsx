@@ -159,6 +159,7 @@ function Employees() {
       // Send only what the server accepts; blank strings become nulls there.
       const body = { ...editing };
       delete body.id; delete body.fullName; delete body.departmentName; delete body.designationName;
+      delete body.department; delete body.designation; delete body.reportingManager;
       if (editing.id) await hrApi.updateEmployee(editing.id, body);
       else await hrApi.createEmployee(body);
       setEditing(null);
@@ -211,8 +212,8 @@ function Employees() {
                     <tr key={e.id}>
                       <td><span className="tag tb" style={{ fontSize: 10 }}>{e.empCode}</span></td>
                       <td style={{ fontWeight: 600 }}>{e.fullName}</td>
-                      <td style={{ fontSize: 11 }}>{e.departmentName || '-'}</td>
-                      <td style={{ fontSize: 11 }}>{e.designationName || '-'}</td>
+                      <td style={{ fontSize: 11 }}>{e.department || e.departmentName || '-'}</td>
+                      <td style={{ fontSize: 11 }}>{e.designation || e.designationName || '-'}</td>
                       <td style={{ fontSize: 11 }}>{e.joiningDate ? fmtDate(e.joiningDate) : '-'}</td>
                       <td style={{ fontSize: 11 }}>{e.mobile || '-'}</td>
                       <td>

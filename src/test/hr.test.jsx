@@ -12,9 +12,12 @@ const hrFixture = () => ({
     byDepartment: [{ name: 'Production', count: 20 }, { name: 'QC', count: 10 }, { name: 'Admin', count: 6 }],
     byStatus: [{ status: 'Active', count: 36 }, { status: 'On Leave', count: 3 }],
   },
+  // Employee rows mirror HrService.EMP exactly: the resolved names come back as
+  // `department` / `designation` (NOT `departmentName`), which is what the list
+  // table must read. Bala has no department — the list shows the '-' empty state.
   employees: [
-    { id: 1, empCode: 'E-001', fullName: 'Asha Rao', firstName: 'Asha', lastName: 'Rao', departmentId: 10, departmentName: 'Production', designationName: 'Supervisor', joiningDate: '2024-04-01', mobile: '9000000001', status: 'Active' },
-    { id: 2, empCode: 'E-002', fullName: 'Bala K', firstName: 'Bala', lastName: 'K', departmentId: 11, departmentName: 'QC', designationName: 'Analyst', joiningDate: '2025-01-15', mobile: '9000000002', status: 'On Notice' },
+    { id: 1, empCode: 'E-001', fullName: 'Asha Rao', firstName: 'Asha', lastName: 'Rao', departmentId: 10, department: 'Production', designationId: 20, designation: 'Supervisor', joiningDate: '2024-04-01', mobile: '9000000001', status: 'Active' },
+    { id: 2, empCode: 'E-002', fullName: 'Bala K', firstName: 'Bala', lastName: 'K', departmentId: null, department: null, designationId: null, designation: null, joiningDate: '2025-01-15', mobile: '9000000002', status: 'On Notice' },
   ],
   departments: [
     { id: 10, name: 'Production', active: true },
@@ -99,6 +102,25 @@ describe('HR — Employees', () => {
     await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
     expect(screen.getByText('E-001')).toBeInTheDocument();
     expect(screen.getByText('Bala K')).toBeInTheDocument();
+    // Department/Designation come from the API's `department`/`designation`
+    // fields — assert them in Asha's ROW so the table mapping (not the filter
+    // dropdown, which also says 'Production') is what proves the column works.
+    const ashaRow = screen.getByText('Asha Rao').closest('tr');
+    expect(within(ashaRow).getByText('Production')).toBeInTheDocument();
+    expect(within(ashaRow).getByText('Supervisor')).toBeInTheDocument();
+    // No department assigned -> the existing '-' empty state.
+    const balaRow = screen.getByText('Bala K').closest('tr');
+    expect(within(balaRow).getAllByText('-').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows the same department on the read-only profile as on the list', async () => {
+    await openHR();
+    await tab('Employees');
+    await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
+    await userEvent.click(screen.getByLabelText('View Asha Rao'));
+    const dialog = await screen.findByRole('dialog', { name: 'Employee profile' });
+    await waitFor(() => expect(within(dialog).getByText('Production')).toBeInTheDocument());
+    expect(within(dialog).getByText('Supervisor')).toBeInTheDocument();
   });
 
   it('filters by the search box only once Search is pressed', async () => {
