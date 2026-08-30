@@ -73,7 +73,9 @@ export default function Dashboard() {
       {tab === 'dropdowns' && <DropdownAdmin />}
       {/* Machines (né Master Data) keeps only Departments + Machines; Routes and
           Stock Alerts are their own top-level tabs now. */}
-      {tab === 'master' && <MasterData only={['departments', 'machines']} title="🗂 Machines" subtitle="Departments and the machines that run under them." />}
+      {/* Issues 1.0 #5: no Departments sub-tab here — departments are managed under
+          Drop-down selections; the machine form pulls them in as a dropdown. */}
+      {tab === 'master' && <MasterData only={['machines']} title="🗂 Machines" subtitle="Machines and the department each one runs under (departments are managed in Drop-down selections)." />}
       {tab === 'routes' && <MasterData only={['routes']} title="🛣 Routes" subtitle="Production routes — ordered department stages per Dispatch Form." />}
       {tab === 'alerts' && <MasterData only={['alerts']} title="🔔 Stock Alerts" subtitle="Open low-stock shortages and notifications." />}
       {tab === 'users' && <UsersAccess />}

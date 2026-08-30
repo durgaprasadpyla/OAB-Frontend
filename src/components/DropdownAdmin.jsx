@@ -45,6 +45,18 @@ export default function DropdownAdmin() {
   }, []);
   useEffect(() => { if (role === 'superadmin') loadDepts(); }, [loadDepts, role]);
 
+  // Machines master (Issues 1.0 #6) — same backing as the Machines tab / JSS / PPC.
+  const [machines, setMachines] = useState([]);
+  const [machErr, setMachErr] = useState('');
+  const loadMachines = useCallback(async () => {
+    setMachErr('');
+    try {
+      const r = await masterApi.listMachines({ includeInactive: 1 });
+      setMachines(Array.isArray(r) ? r : []);
+    } catch (e) { setMachErr(e && e.message ? e.message : 'Could not reach the Machine master'); }
+  }, []);
+  useEffect(() => { if (role === 'superadmin') loadMachines(); }, [loadMachines, role]);
+
   const def = DEFS.find((d) => d.key === sel) || DEFS[0];
   const saved = useMemo(() => ddList(sales, sel), [sales, sel]);
   const rows = work ?? saved;
@@ -99,7 +111,7 @@ export default function DropdownAdmin() {
                 >
                   <td>
                     <div style={{ fontWeight: 700, fontSize: 12.5, color: d.key === sel ? 'var(--g)' : 'var(--ink)' }}>
-                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
+                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master === 'machine' ? machines.filter((x) => x.active !== false).length : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
                       {!d.master && ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 1 }}>{d.where}</div>
@@ -111,7 +123,9 @@ export default function DropdownAdmin() {
         </div>
       </div>
 
-      {def.master ? (
+      {def.master === 'machine' ? (
+        <MachinesPanel machines={machines} departments={depts} reload={loadMachines} error={machErr} />
+      ) : def.master ? (
         <DepartmentsPanel depts={depts} reload={loadDepts} error={deptErr} loaded={deptLoaded} />
       ) : (
       <div className="card">
@@ -204,6 +218,13 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
     try { await masterApi.updateDepartment(d.id, { active: d.active === false }); await reload(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
   }
+  // Issues 1.0 #5: hard delete — the server refuses (with the list of blockers)
+  // while machines, routes, items or production history still reference it.
+  async function remove(d) {
+    if (!window.confirm(`Delete department “${d.name}” permanently?\n\nThis only works when nothing references it (machines, routes, items, production history). Otherwise use Disable.`)) return;
+    try { await masterApi.deleteDepartment(d.id); flash('g', `Deleted “${d.name}”.`); await reload(); }
+    catch (e) { flash('r', e.message || 'Delete failed'); }
+  }
 
   return (
     <div className="card">
@@ -223,7 +244,7 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
       </div>
       <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Department</th><th style={{ width: 96 }}>Status</th></tr></thead>
+          <thead><tr><th>Department</th><th style={{ width: 170 }}>Actions</th></tr></thead>
           <tbody>
             {list.length === 0 ? (
               <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
@@ -232,7 +253,115 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
             ) : list.map((d) => (
               <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
                 <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} /></td>
-                <td><button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
+                  <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete department ${d.name}`} onClick={() => remove(d)}>🗑 Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Machines editor (Issues 1.0 #6). The Machines master is visible under Drop-down
+ * selections too — the same rows the Machines tab, the JSS and the PPC boards use
+ * (/api/master/machines). Adding one pulls its Department in from the Departments
+ * list; the speed unit defaults by department (pouching / sleeving / die punching /
+ * packing → pcs/min, everything else → m/min).
+ */
+function MachinesPanel({ machines, departments, reload, error }) {
+  const deptUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || '')) ? 'pcs/min' : 'm/min');
+  const activeDepts = (departments || []).filter((d) => d.active !== false);
+  const [form, setForm] = useState({ code: '', name: '', departmentId: '', defaultSpeed: '', speedUom: '', functionalHoursPerDay: '' });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3500); };
+  const list = Array.isArray(machines) ? machines : [];
+  const active = list.filter((m) => m.active !== false);
+  const deptName = (id) => (activeDepts.find((d) => String(d.id) === String(id)) || {}).name;
+  const formUnit = form.speedUom || deptUnit(deptName(form.departmentId));
+
+  async function add() {
+    if (!form.code.trim() || !form.name.trim()) { flash('r', 'Machine code and name are required.'); return; }
+    setBusy(true);
+    try {
+      await masterApi.createMachine({
+        code: form.code.trim(), name: form.name.trim(),
+        departmentId: form.departmentId ? Number(form.departmentId) : undefined,
+        defaultSpeed: form.defaultSpeed === '' ? undefined : Number(form.defaultSpeed),
+        speedUom: formUnit,
+        functionalHoursPerDay: form.functionalHoursPerDay === '' ? undefined : Number(form.functionalHoursPerDay),
+      });
+      setForm({ code: '', name: '', departmentId: '', defaultSpeed: '', speedUom: '', functionalHoursPerDay: '' });
+      flash('g', `Added “${form.name.trim()}”.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function rename(m, next) {
+    const n = String(next || '').trim();
+    if (!n || n === m.name) return;
+    try { await masterApi.updateMachine(m.id, { name: n }); await reload(); }
+    catch (e) { flash('r', e.message || 'Rename failed'); }
+  }
+  async function setDept(m, id) {
+    try { await masterApi.updateMachine(m.id, { departmentId: id ? Number(id) : null }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+  async function toggle(m) {
+    try { await masterApi.updateMachine(m.id, { active: m.active === false }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+
+  return (
+    <div className="card">
+      <div className="ctitle">Machines <span className="tag tgr">{active.length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>The same machines the Machines tab, the JSS and the PPC boards use. The Department is pulled in from the Departments list.</div>
+      {error && (
+        <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>Couldn’t load the Machine master — {error}.</span>
+          <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={reload}>Retry</button>
+        </div>
+      )}
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 8, marginBottom: 8 }}>
+        <input placeholder="Code *" value={form.code} aria-label="New machine code" onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+        <input placeholder="Machine name *" value={form.name} aria-label="New machine name" onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+        <select value={form.departmentId} aria-label="New machine department" onChange={(e) => setForm((f) => ({ ...f, departmentId: e.target.value, speedUom: '' }))}>
+          <option value="">— Department —</option>
+          {activeDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <select value={formUnit} aria-label="New machine speed unit" onChange={(e) => setForm((f) => ({ ...f, speedUom: e.target.value }))}>
+          <option value="m/min">m/min</option>
+          <option value="pcs/min">pcs/min</option>
+        </select>
+        <input type="number" min="0" step="any" placeholder="Ideal speed" value={form.defaultSpeed} aria-label="New machine ideal speed" onChange={(e) => setForm((f) => ({ ...f, defaultSpeed: e.target.value }))} />
+        <input type="number" min="0" step="any" placeholder="Hrs/day" value={form.functionalHoursPerDay} aria-label="New machine hours per day" onChange={(e) => setForm((f) => ({ ...f, functionalHoursPerDay: e.target.value }))} />
+        <button className="btn btn-g" onClick={add} disabled={busy}>＋ Add</button>
+      </div>
+      <div className="tw sy" style={{ maxHeight: 360 }}>
+        <table>
+          <thead><tr><th style={{ width: 80 }}>Code</th><th>Machine</th><th style={{ width: 150 }}>Department</th><th style={{ width: 120 }}>Ideal speed</th><th style={{ width: 96 }}>Status</th></tr></thead>
+          <tbody>
+            {list.length === 0 ? (
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+                {error ? 'Machines unavailable — see the message above.' : 'No machines yet — add one above.'}
+              </td></tr>
+            ) : list.map((m) => (
+              <tr key={m.id} style={{ opacity: m.active === false ? 0.55 : 1 }}>
+                <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.code}</td>
+                <td><input defaultValue={m.name} aria-label={`Machine ${m.name}`} onBlur={(e) => rename(m, e.target.value)} /></td>
+                <td>
+                  <select value={m.departmentId ?? ''} aria-label={`Department for ${m.name}`} onChange={(e) => setDept(m, e.target.value)}>
+                    <option value="">—</option>
+                    {activeDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </td>
+                <td style={{ fontSize: 12 }}>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>
+                <td><button className="btn btn-s" onClick={() => toggle(m)}>{m.active === false ? 'Enable' : 'Disable'}</button></td>
               </tr>
             ))}
           </tbody>
