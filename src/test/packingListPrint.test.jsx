@@ -1,6 +1,13 @@
+import { useState } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import PackingListModal, { buildAutoPackingList } from '../components/PackingListModal.jsx';
+
+// Stateful wrapper so controlled bag inputs actually update when typed into.
+function Harness({ initial }) {
+  const [its, setIts] = useState(initial);
+  return <PackingListModal items={its} setItems={setIts} invNo="BL/26-27/223" header={header} onClose={() => {}} />;
+}
 
 const header = {
   ivNo: 'BL/26-27/223', ivDt: '2026-08-20', customer: 'Green Agrevolution Pvt Ltd',
@@ -30,7 +37,7 @@ describe('PackingListModal — Print writes the clean sheet for every record', (
   it('opens a print window carrying EVERY record, then prints it (parity with production)', () => {
     vi.useFakeTimers();
     const { win } = stubPrintWindow();
-    render(<PackingListModal items={items} invNo="BL/26-27/223" header={header} onClose={() => {}} />);
+    render(<PackingListModal items={items} setItems={() => {}} invNo="BL/26-27/223" header={header} onClose={() => {}} />);
 
     // All four records are on screen to begin with.
     items.forEach((it) => expect(screen.getByText(it.jobName)).toBeInTheDocument());
@@ -50,36 +57,33 @@ describe('PackingListModal — Print writes the clean sheet for every record', (
     vi.useRealTimers();
   });
 
-  it('is read-only: the on-screen document has no inputs or add buttons', () => {
-    render(<PackingListModal items={items} invNo="BL/26-27/223" header={header} onClose={() => {}} />);
-    expect(document.querySelectorAll('#pl-doc input').length).toBe(0);
-    expect(document.querySelectorAll('#pl-doc button').length).toBe(0);
-    // Computed ranges show as plain text, e.g. rows 51–100 of Pouch A.
-    expect(screen.getByText('51 – 100')).toBeInTheDocument();
+  it('prints the values currently typed into the bag rows', () => {
+    const { win } = stubPrintWindow();
+    render(<Harness initial={items} />);
+
+    // Type a new "Bag To" value on the first row.
+    const firstTo = document.querySelector('#pl-doc tbody tr td:nth-child(2) input');
+    fireEvent.change(firstTo, { target: { value: '999' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /🖨 Print/i }));
+
+    // 1–999 is 999 bags of 50 → the printed sheet shows the live figures.
+    expect(win.written).toContain('1 – 999');
+    expect(win.written).toContain('999 bag(s) = 49,950 pcs');
   });
 });
 
-describe('buildAutoPackingList — bags derive entirely from qty ÷ qtyPerBag', () => {
-  const qpbOf = (spec) => ({ A1: 25, B2: 60 }[spec] || 0);
+describe('buildAutoPackingList — pre-seeds bags from the spec Qty per Bag, stays typable', () => {
+  const qpbOf = (spec) => ({ A1: 25 }[spec] || 0);
 
-  it('computes full bags plus a remainder bag summing exactly to the invoice qty', () => {
+  it('spec with a packing standard opens pre-filled: full bags + remainder', () => {
     const [a] = buildAutoPackingList([{ spec: 'A1', jobName: 'Pouch A', qty: 110 }], qpbOf);
     expect(a.bags).toEqual([{ from: 1, to: 4, qty: 25 }, { from: 5, to: 5, qty: 10 }]);
-    expect(a.bags.reduce((s, b) => s + (b.to - b.from + 1) * b.qty, 0)).toBe(110);
   });
 
-  it('exact multiples get no remainder bag; missing qtyPerBag gets no bags', () => {
-    const [b, c] = buildAutoPackingList([
-      { spec: 'B2', jobName: 'Pouch B', qty: 120 },
-      { spec: 'ZZ', jobName: 'Mystery', qty: 40 },
-    ], qpbOf);
-    expect(b.bags).toEqual([{ from: 1, to: 2, qty: 60 }]);
-    expect(c.bags).toEqual([]);
-  });
-
-  it('a spec without a packing standard renders a fix-it instruction, not blank boxes', () => {
-    const gen = buildAutoPackingList([{ spec: 'ZZ', jobName: 'Mystery', qty: 40 }], qpbOf);
-    render(<PackingListModal items={gen} invNo="BL/26-27/224" header={header} onClose={() => {}} />);
-    expect(screen.getByText(/Qty per Bag is not set on JSS spec/)).toBeInTheDocument();
+  it('spec without one opens with the classic empty range to type into', () => {
+    const [z] = buildAutoPackingList([{ spec: 'ZZ', jobName: 'Mystery', qty: 40 }], qpbOf);
+    expect(z.bags).toEqual([{ from: 1, to: '', qty: '' }]);
+    expect(z.totalQty).toBe(40);
   });
 });
