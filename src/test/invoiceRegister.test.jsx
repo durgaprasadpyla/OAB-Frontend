@@ -40,12 +40,21 @@ describe('Invoice register — served from /api/invoices (normalized)', () => {
     expect((await screen.findAllByText(/PACKING LIST/i)).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Pouch A/).length).toBeGreaterThan(0);
 
-    // closing persists the ranges through the granular endpoint
+    // typing sticks: enter Qty/bag, then ⚡ auto-fill computes Bag-To for the
+    // remaining invoice quantity (100 pcs @ 25/bag → bags 1–4).
+    fireEvent.change(screen.getByLabelText('Qty per bag'), { target: { value: '25' } });
+    fireEvent.click(screen.getByLabelText('Auto-fill bags for Pouch A'));
+    expect(screen.getByLabelText('Bag to')).toHaveValue('4');
+    expect(screen.getAllByText(/4 bags/).length).toBeGreaterThan(0);
+    expect(screen.getByText('✓ Complete')).toBeInTheDocument();
+
+    // closing persists the FILLED ranges through the granular endpoint
     fireEvent.click(screen.getByRole('button', { name: /Save & Close/ }));
     await screen.findByText(/Packing list saved with invoice BL\/26-27\/99/);
     const call = saved.find((s) => s.endpoint === '/api/invoices/packing-list');
     expect(call).toBeTruthy();
     expect(call.body.no).toBe('BL/26-27/99');
     expect(call.body.packingList[0]).toMatchObject({ jobName: 'Pouch A', totalQty: 100 });
+    expect(call.body.packingList[0].bags[0]).toMatchObject({ from: 1, to: 4, qty: 25 });
   });
 });

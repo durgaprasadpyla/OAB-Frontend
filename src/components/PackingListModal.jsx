@@ -49,6 +49,20 @@ export default function PackingListModal({ items, setItems, invNo, header, lines
     return { ...it, bags: [...it.bags, { from: (int(last.to) || 0) + 1, to: '', qty: '' }] };
   }));
 
+  // One-click completion: with Qty/bag entered, "auto" sets this range's Bag-To so
+  // it covers the item's REMAINING invoice quantity (other ranges left untouched).
+  const autoFillRow = (ii, bi) => setItems((xs) => xs.map((it, i) => {
+    if (i !== ii) return it;
+    const doneElsewhere = (it.bags || []).reduce((s, b, j) => s + (j === bi ? 0 : rowDispatched(b)), 0);
+    const remaining = Number(it.totalQty || 0) - doneElsewhere;
+    return { ...it, bags: it.bags.map((b, j) => {
+      if (j !== bi) return b;
+      const q = int(b.qty);
+      if (q <= 0 || remaining <= 0) return b;
+      return { ...b, to: (int(b.from) || 1) + Math.ceil(remaining / q) - 1 };
+    }) };
+  }));
+
   async function pdf() {
     try {
       const no = String(invNo || 'PL').trim().replace(/\//g, '-') || 'PL';
@@ -169,7 +183,15 @@ export default function PackingListModal({ items, setItems, invNo, header, lines
                           <td style={{ padding: '4px 8px', textAlign: 'right', fontSize: 11 }}>
                             {hasTo && hasQty
                               ? <strong style={{ color: '#0e6fb8' }}>{nBags} bags &times; {grp(int(bag.qty))} = {grp(nBags * int(bag.qty))}</strong>
-                              : <span style={{ color: '#ccc' }}>—</span>}
+                              : hasQty && !complete ? (
+                                // Qty/bag known, range open → one click computes Bag-To for
+                                // the remaining invoice quantity ("the data comes by itself").
+                                <button type="button" onClick={() => autoFillRow(ii, bi)}
+                                  aria-label={`Auto-fill bags for ${item.jobName || item.spec}`}
+                                  title="Set Bag To so this range covers the remaining invoice quantity"
+                                  style={{ height: 24, padding: '0 10px', fontSize: 11, fontWeight: 700, borderRadius: 12, border: '1px solid #0e6fb8', background: '#e9f2fb', color: '#0e6fb8', cursor: 'pointer' }}
+                                >⚡ auto-fill</button>
+                              ) : <span style={{ color: '#ccc' }}>—</span>}
                           </td>
                           <td style={{ padding: '4px 8px', textAlign: 'center' }}>
                             {isLast ? (
