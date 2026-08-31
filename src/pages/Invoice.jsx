@@ -8,7 +8,7 @@ import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
-import PackingListModal from '../components/PackingListModal.jsx';
+import PackingListModal, { buildAutoPackingList } from '../components/PackingListModal.jsx';
 import ProformaModal from '../components/ProformaModal.jsx';
 import { CertificateDoc } from '../components/CertificatePanel.jsx';
 import { printElement, elementToPDF } from '../lib/pdf.js';
@@ -170,12 +170,17 @@ export default function Invoice() {
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
   }
 
-  /** Open the packing list for the invoice currently in view, seeding one section
-   *  per invoice line (bag range 1–…) when nothing is saved yet. (openPackingList) */
+  /** The packing list is fully AUTO-GENERATED — nothing is typed. Every open
+   *  recomputes the bag ranges from the invoice lines and each spec's Qty per Bag
+   *  (JSS), so the document always matches the current invoice quantities. */
+  const qtyPerBagOf = (spec) => {
+    const k = String(spec || '').trim().toUpperCase();
+    const row = (mods.jss || []).find((r) => String(r.spec || '').trim().toUpperCase() === k);
+    return row ? row.qtyPerBag : 0;
+  };
+
   function openPackingList() {
-    if (!plItems.length && pendInv) {
-      setPlItems(pendInv.map((p) => ({ spec: p.spec, jobName: p.jobName, totalQty: p.qty, dispatchForm: p.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] })));
-    }
+    setPlItems(buildAutoPackingList(pendInv || [], qtyPerBagOf));
     setShowPL(true);
   }
 
@@ -358,21 +363,19 @@ export default function Invoice() {
         register={register}
         onView={(e) => loadRegister(e, false)}
         onPdf={(e) => loadRegister(e, true)}
-        // The register's 📦 button opens the invoice and its saved packing list —
-        // it must work on an invoice that is not currently in the builder. No saved
-        // list yet → seed one section per invoice line, same as Create Packing List.
+        // The register's 📦 button opens the invoice and its packing list —
+        // regenerated from the invoice lines on every open (never hand-typed), so
+        // stale or empty saved ranges can't blank the document.
         onPackingList={(e) => {
           loadRegister(e, false);
-          if (!(e.packingList || []).length) {
-            setPlItems((e.items || []).map((it) => ({ spec: it.spec, jobName: it.jobName || it.spec, totalQty: it.qty, dispatchForm: it.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] })));
-          }
+          setPlItems(buildAutoPackingList(e.items || [], qtyPerBagOf));
           setShowPL(true);
         }}
       />
 
       {showPL && (
         <PackingListModal
-          items={plItems} setItems={setPlItems} invNo={h.ivNo}
+          items={plItems} invNo={h.ivNo}
           header={h} lines={pendInv || []}
           onClose={closePackingList}
         />

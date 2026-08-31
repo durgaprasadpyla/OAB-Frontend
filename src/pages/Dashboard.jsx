@@ -551,7 +551,7 @@ const JSS_COLS = [
   ['spec', 'Spec No.*', 80], ['jobType', 'Job Type', 100], ['group', 'Group', 120], ['customer', 'Customer', 140],
   ['subBrand', 'Sub Brand', 100], ['jobName', 'Job Name*', 200], ['printLoc', 'Print Loc', 80], ['mic', 'MIC', 60],
   ['gsm', 'GSM', 60], ['material', 'Material*', 130], ['filmWidth', 'Film W', 70], ['width', 'W', 50],
-  ['height', 'H', 50], ['pouchWeight', 'Pouch Wt (g)', 100], ['dispatchForm', 'Disp Form*', 80],
+  ['height', 'H', 50], ['pouchWeight', 'Pouch Wt (g)', 100], ['qtyPerBag', 'Qty/Bag', 70], ['dispatchForm', 'Disp Form*', 80],
   ['machineRunOn', 'Machine', 90], ['status', 'Status', 80],
 ];
 
