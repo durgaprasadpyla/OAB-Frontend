@@ -99,10 +99,11 @@ describe('Invoice flow', () => {
     // A4 doc: 200 × 75 = 15000 taxable, +18% GST = 17,700 total.
     expect(await screen.findByText('TAX INVOICE')).toBeInTheDocument();
     expect(screen.getAllByText(/17,700/).length).toBeGreaterThan(0);
-    // only the output actions remain on the saved-invoice view
+    // only the output actions remain on the saved-invoice view — incl. the packing
+    // list (restored on the business's request after the one-step-Generate rewrite)
     expect(screen.queryByRole('button', { name: /Confirm & Update OAB/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Back to Edit/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Packing List/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Create Packing List/ })).toBeInTheDocument();
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
     expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/invoices'); // server-authoritative invoice endpoint

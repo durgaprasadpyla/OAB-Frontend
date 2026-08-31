@@ -25,4 +25,27 @@ describe('Invoice register — served from /api/invoices (normalized)', () => {
     await within(regCard).findByText('BL/26-27/99');
     expect(within(regCard).getByText('BL/26-27/99')).toBeTruthy();
   });
+
+  // Restored on the business's request: every register row carries a 📦 button after
+  // PDF that opens the invoice's packing list (seeding one section per line when
+  // none is saved), and closing the modal persists the ranges onto the invoice.
+  it('opens and persists a packing list from the register row', async () => {
+    const { saved } = renderApp(<Invoice />, { modules: seed });
+    const regCard = (await screen.findByText('Invoice Register')).closest('.card');
+    fireEvent.change(within(regCard).getByLabelText('Period'), { target: { value: 'all' } });
+    await within(regCard).findByText('BL/26-27/99');
+
+    fireEvent.click(within(regCard).getByLabelText('Packing list for BL/26-27/99'));
+    // the modal opens (title + printed doc both say PACKING LIST), seeded with Pouch A
+    expect((await screen.findAllByText(/PACKING LIST/i)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Pouch A/).length).toBeGreaterThan(0);
+
+    // closing persists the ranges through the granular endpoint
+    fireEvent.click(screen.getByRole('button', { name: /Save & Close/ }));
+    await screen.findByText(/Packing list saved with invoice BL\/26-27\/99/);
+    const call = saved.find((s) => s.endpoint === '/api/invoices/packing-list');
+    expect(call).toBeTruthy();
+    expect(call.body.no).toBe('BL/26-27/99');
+    expect(call.body.packingList[0]).toMatchObject({ jobName: 'Pouch A', totalQty: 100 });
+  });
 });
