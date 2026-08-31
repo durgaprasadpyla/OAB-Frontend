@@ -36,7 +36,11 @@ function installFetch() {
       { id: 200, name: 'Print-Pouch', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
       { id: 201, name: 'Print-Roll', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
     ]);
-    if (u.includes('/api/master/items')) return res([{ id: 1000, code: 'FILM', name: 'Film XYZ' }]);
+    if (u.includes('/api/master/items')) return res([
+      { id: 1000, code: 'FILM', name: 'Film XYZ', departmentId: 1 },
+      { id: 1001, code: 'GLUE', name: 'Turbo Glue', departmentId: 5 },
+      { id: 1002, code: 'MISC', name: 'Untagged Thing' },
+    ]);
 
     if (u.includes('/api/master/items/sync-from-purchase')) return res({ created: 0, updated: 0, skipped: 0 });
 
@@ -228,6 +232,11 @@ describe('JssPlanningPanel', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
     const itemSelect = await screen.findByLabelText('BOM item for Printing');
     expect(itemSelect.tagName).toBe('SELECT');
+    // Strictly department-related: Printing offers its own item only — no other
+    // department's item, and no untagged catalogue item.
+    expect(within(itemSelect).getByRole('option', { name: /Film XYZ/ })).toBeTruthy();
+    expect(within(itemSelect).queryByRole('option', { name: /Turbo Glue/ })).toBeNull();
+    expect(within(itemSelect).queryByRole('option', { name: /Untagged Thing/ })).toBeNull();
     fireEvent.change(itemSelect, { target: { value: '1000' } });
     await waitFor(() => expect(screen.getByText('FILM')).toBeInTheDocument());   // code auto-fills
   });

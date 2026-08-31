@@ -195,8 +195,10 @@ export default function JssPlanningPanel() {
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
   // §24-30: under each route department, only the items TAGGED to that department in
   // the item master (plus untagged "others") are offered.
+  // Strictly the department's OWN items — untagged catalogue items no longer
+  // flood every dropdown; tag items to a department in Master Data → Items.
   const itemsForDept = (departmentId) => (master.items || []).filter(
-    (it) => it.departmentId == null || String(it.departmentId) === String(departmentId));
+    (it) => String(it.departmentId ?? '') === String(departmentId));
   const itemById = (id) => (master.items || []).find((it) => String(it.id) === String(id));
   // Change 11: a plain dropdown (no type-and-search) — picking an item also pulls
   // its UOM in from the item master when the line has none yet.
@@ -411,6 +413,9 @@ export default function JssPlanningPanel() {
                                   <select style={{ width: '100%' }} aria-label={`BOM item for ${d.departmentName}`}
                                     value={l.itemId || ''} onChange={(e) => pickItem(i, e.target.value)}>
                                     <option value="">— select an item —</option>
+                                    {deptItems.length === 0 && (
+                                      <option value="" disabled>no items tagged to {d.departmentName} — tag them in Master Data → Items</option>
+                                    )}
                                     {sel && !deptItems.some((it) => String(it.id) === String(sel.id)) && (
                                       <option value={sel.id}>{itemLabel(sel)}</option>
                                     )}
