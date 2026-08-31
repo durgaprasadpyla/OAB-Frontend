@@ -87,3 +87,17 @@ describe('ASL — item code type-to-search + auto-fill', () => {
     expect([...tr.querySelectorAll('input')][4]).toHaveValue('');   // description untouched
   });
 });
+
+describe('ASL — Add Item puts the blank row on TOP of the supplier group', () => {
+  it('the new empty Item Code input appears before the existing item rows', async () => {
+    await openAsl();
+    // Ami Pyroflex (first group) has one filled row (BLM001). Add a new item to it.
+    const addBtn = screen.getAllByRole('button', { name: /Add Item/ })[0];
+    await userEvent.click(addBtn);
+    // First item-code input of the group is now the blank one; BLM001 sits below.
+    const codes = [...document.querySelectorAll('input[list="asl-item-codes"]')].map((i) => i.value);
+    expect(codes[0]).toBe('');
+    expect(codes).toContain('BLM001');
+    expect(codes.indexOf('BLM001')).toBeGreaterThan(0);
+  });
+});

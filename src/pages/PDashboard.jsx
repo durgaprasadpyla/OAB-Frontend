@@ -379,11 +379,14 @@ function ASLEditor() {
 
   function addItemToGroup(company) {
     setRows((rs) => {
-      const first = rs.find((r) => GKEY(r) === company) || {};
+      const at = rs.findIndex((r) => GKEY(r) === company);
+      const first = (at >= 0 && rs[at]) || {};
       const row = blankSupplier();
       row.company = first.company || '';
       ASL_SUP_FIELDS.forEach((f) => { row[f] = first[f] || ''; });
-      return [...rs, row];
+      // The blank row goes on TOP of the supplier's list — entry happens at eye
+      // level instead of below a long item table.
+      return at >= 0 ? [...rs.slice(0, at), row, ...rs.slice(at)] : [...rs, row];
     });
   }
   function removeRow(idx) {
