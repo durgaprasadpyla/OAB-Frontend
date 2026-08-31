@@ -5,6 +5,7 @@ import { masterApi } from '../api.js';
 import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO } from '../lib/bom.js';
+import { specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 
@@ -91,7 +92,7 @@ export default function BomPanel() {
     jss.forEach((j) => { const sp = String(j.spec).trim(); if (!seen.has(sp)) seen.set(sp, j); });
     const s = q.trim().toLowerCase();
     return [...seen.entries()]
-      .filter(([sp, j]) => !s || [sp, j.customer, j.jobName].some((v) => String(v || '').toLowerCase().includes(s)))
+      .filter(([sp, j]) => !s || [sp, j.customer, j.jobName, specGroup(j, mods.customers)].some((v) => String(v || '').toLowerCase().includes(s)))
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }));
   }, [jss, q]);
 
@@ -167,6 +168,7 @@ export default function BomPanel() {
     const baseLine = `${rec.baseQty ?? ''} ${rec.baseUOM || ''}`.trim() + (rec.meters ? ` / ${rec.meters} m` : '');
     const meta = [
       ['Spec', spec],
+      ['Group', specGroup(jssRow, mods.customers) || ''],
       ['Customer', jssRow.customer || ''],
       ['Job Name', jssRow.jobName || ''],
       ['Dispatch Form', jssRow.dispatchForm || ''],
@@ -192,7 +194,7 @@ export default function BomPanel() {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;padding:16px;font-family:Arial,sans-serif;width:760px;color:#111';
     wrap.innerHTML = `<div style="font-size:16px;font-weight:800;color:#0e6fb8;margin-bottom:6px">Bill of Materials — ${esc(spec)}</div>`
-      + `<div style="font-size:11px;color:#444;margin-bottom:2px">Customer: ${esc(jssRow.customer)}</div>`
+      + `<div style="font-size:11px;color:#444;margin-bottom:2px">Group: ${esc(specGroup(jssRow, mods.customers) || '-')} &nbsp; Customer: ${esc(jssRow.customer)}</div>`
       + `<div style="font-size:11px;color:#444;margin-bottom:2px">Job Name: ${esc(jssRow.jobName)}</div>`
       + `<div style="font-size:11px;color:#444;margin-bottom:10px">Dispatch Form: ${esc(jssRow.dispatchForm)} &nbsp; Base Qty: ${baseLine}</div>`
       + '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#0e6fb8;color:#fff">'
@@ -227,18 +229,18 @@ export default function BomPanel() {
 
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
-          <thead><tr><th>Spec</th><th>Customer</th><th style={{ minWidth: 200 }}>Job Name</th><th>Dispatch</th><th style={{ textAlign: 'center' }}>BOM</th><th style={{ textAlign: 'center', width: 180 }}></th></tr></thead>
+          <thead><tr><th>Spec</th><th>Group</th><th>Customer</th><th style={{ minWidth: 200 }}>Job Name</th><th>Dispatch</th><th style={{ textAlign: 'center' }}>BOM</th><th style={{ textAlign: 'center', width: 180 }}></th></tr></thead>
           <tbody>
             {specs.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
             ) : specs.map(([spec, j]) => (
               <BomRow
-                key={spec} spec={spec} jssRow={j} defined={hasBOM(bom, spec)}
+                key={spec} spec={spec} jssRow={j} group={specGroup(j, mods.customers)} defined={hasBOM(bom, spec)}
                 open={openSpec === spec} onToggle={() => openEditor(spec, j)}
                 onExportExcel={() => exportExcel(spec, j)} onExportPDF={() => exportPDF(spec, j)}
               >
                 {openSpec === spec && draft && (
-                  <td colSpan={6} style={{ background: 'var(--bg)', padding: '12px 18px' }}>
+                  <td colSpan={7} style={{ background: 'var(--bg)', padding: '12px 18px' }}>
                     {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
                     <div className="g4" style={{ marginBottom: 10 }}>
                       <div className="fg">
@@ -354,12 +356,14 @@ export default function BomPanel() {
 }
 
 /** One spec row plus, when open, its editor as a full-width sibling row. */
-function BomRow({ spec, jssRow, defined, open, onToggle, onExportExcel, onExportPDF, children }) {
+function BomRow({ spec, jssRow, group, defined, open, onToggle, onExportExcel, onExportPDF, children }) {
   const items = defined ? 'defined' : '—';
   return (
     <>
       <tr>
         <td><span className="tag tb" style={{ fontSize: 10 }}>{spec}</span></td>
+        {/* Buying group from the master data (spec's own group, else its customer's). */}
+        <td style={{ fontSize: 11 }}>{group || '-'}</td>
         <td style={{ fontSize: 11 }}>{jssRow.customer || '-'}</td>
         <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{jssRow.jobName || '-'}</td>
         <td style={{ fontSize: 11 }}>{jssRow.dispatchForm || '-'}</td>
