@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { ordersApi, stockApi } from '../api.js';
-import { today, fmtDate, dash } from '../lib/format.js';
+import { today, fmtDate, dash, rupees } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, getCustByLoc, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
 import { fgAvail, fgAddAllocation } from '../lib/fg.js';
@@ -300,10 +300,12 @@ export default function NewPO() {
                 <th>SO#</th><th>Spec</th><th style={{ minWidth: 170 }}>Job Name</th><th>Type</th>
                 <th>Customer</th><th>Location</th><th>PO#</th><th>Date</th><th style={{ textAlign: 'right' }}>Qty</th>
                 <th style={{ width: 50 }}>UOM</th><th style={{ textAlign: 'right' }}>Rate (₹)</th>
+                <th style={{ textAlign: 'right' }}>Total (₹) <span style={{ fontWeight: 400 }}>incl. 18% GST</span></th>
               </tr></thead>
               <tbody>
                 {/* Rate is re-read from the Price Master here (not carried from step 2)
-                    so the Confirm step is a second, independent price verification. */}
+                    so the Confirm step is a second, independent price verification.
+                    Total = PO qty × rate × 1.18 (18% GST), matching the tax invoice. */}
                 {selPO.map((r) => {
                   const rate = getPM(r.spec, mods.prices).price;
                   return (
@@ -319,10 +321,19 @@ export default function NewPO() {
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g)' }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rate > 0 ? rupees(num(r.poQty) * rate * 1.18) : '-'}</td>
                     </tr>
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={11} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (incl. 18% GST)</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>
+                    {rupees(selPO.reduce((t, r) => t + num(r.poQty) * getPM(r.spec, mods.prices).price * 1.18, 0))}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
           <div className="act">

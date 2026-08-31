@@ -39,6 +39,9 @@ describe('New PO flow', () => {
     expect(screen.queryByText('Print M/C')).toBeNull();
     expect(screen.queryByText('Lam M/C')).toBeNull();
     expect(screen.queryByText('Pouch M/C')).toBeNull();
+    // Total = qty × rate × 1.18 GST: 500 × 75 × 1.18 = ₹44,250.00,
+    // shown on the row and again as the grand total.
+    expect(screen.getAllByText('₹44,250.00')).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: /Add to OAB/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
