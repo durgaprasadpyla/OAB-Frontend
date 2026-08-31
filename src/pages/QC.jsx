@@ -21,7 +21,7 @@ const STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
 const BLANK = {
   group: '', customer: '', subBrand: '', jobName: '', jobType: '', material: '',
   mic: '', gsm: '', filmWidth: '', ups: '', width: '', height: '',
-  gusset: '', pouchWeight: '', dispatchForm: 'Pouch', machineRunOn: '', status: 'Active', printLoc: '',
+  gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', machineRunOn: '', status: 'Active', printLoc: '',
 };
 
 // Status -> legacy .tag colour class.
@@ -141,6 +141,9 @@ export default function QC() {
       status: form.status,
     };
     // Manual pouch weight wins; otherwise fall back to the derived figure.
+    // Packing standard: pcs per bag — drives the AUTO-GENERATED packing list.
+    const qpb = parseInt(form.qtyPerBag, 10);
+    if (qpb > 0) row.qtyPerBag = qpb;
     const pwManual = parseFloat(form.pouchWeight);
     const pw = (Number.isFinite(pwManual) && pwManual > 0) ? pwManual
       : (Number.isFinite(autoGrams) && autoGrams > 0 ? Number(autoGrams.toFixed(6)) : 0);
@@ -279,6 +282,7 @@ export default function QC() {
           <Field label="Width" type="number" value={form.width} onChange={set('width')} />
           <Field label="Height" type="number" value={form.height} onChange={set('height')} />
           <Field label="Gusset" value={form.gusset} onChange={set('gusset')} placeholder="e.g. 40 or 20+20" />
+          <Field label="Qty per Bag (packing)" type="number" value={form.qtyPerBag} onChange={set('qtyPerBag')} placeholder="pcs per bag" />
           <div className="fg">
             <label>Pouch Weight (g)</label>
             <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
