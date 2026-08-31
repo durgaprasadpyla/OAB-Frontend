@@ -18,12 +18,22 @@ const itemBags = (it) => (it.bags || []).reduce((s, b) => s + bagCount(b), 0);
 const itemDispatched = (it) => (it.bags || []).reduce((s, b) => s + rowDispatched(b), 0);
 
 /**
- * AUTO-GENERATED packing list: the ranges are computed, never typed. Each invoice
- * line's spec carries a packing standard — `qtyPerBag` on the JSS spec (QC → Add
- * Spec / superadmin JSS Editor) — and the bags derive from it: full bags of that
- * size plus one remainder bag, always summing exactly to the invoice quantity.
- * A spec with no standard shows a clear instruction instead of empty boxes.
- * The document is read-only; Print / PDF render the same computed sheet.
+ * Packing list — a port of openPackingList / renderPackingListDoc / printPackingList /
+ * downloadPlPDF in the production monolith.
+ *
+ * The document IS the editor: the Bag-To and Qty-per-bag inputs sit inside the printed
+ * layout, and the PDF is a capture of that same node (#pl-doc), which is why the saved
+ * PDF shows the filled-in fields. "Print" is a different render — buildPlPrintDoc()
+ * writes a clean, input-free sheet into a popup window and prints that.
+ */
+
+/**
+ * Convenience pre-fill, never a lock-out: when a spec carries a `qtyPerBag`
+ * packing standard (JSS), its bags open pre-computed — full bags of that size
+ * plus one remainder bag, summing exactly to the invoice quantity. Specs
+ * without one open with the classic empty range (from bag 1) to type into.
+ * Everything stays editable either way — the document is the editor, exactly
+ * as the business has always used it.
  */
 export function buildAutoPackingList(lines, qtyPerBagOf) {
   return (lines || []).map((it) => {
@@ -36,10 +46,12 @@ export function buildAutoPackingList(lines, qtyPerBagOf) {
       if (full > 0) bags.push({ from: 1, to: full, qty: qpb });
       if (rem > 0) bags.push({ from: full + 1, to: full + 1, qty: rem });
     }
-    return { spec: it.spec, jobName: it.jobName || it.spec, totalQty: total, dispatchForm: it.dispatchForm, qtyPerBag: qpb || '', bags };
+    if (!bags.length) bags.push({ from: 1, to: '', qty: '' });
+    return { spec: it.spec, jobName: it.jobName || it.spec, totalQty: total, dispatchForm: it.dispatchForm, bags };
   });
 }
-export default function PackingListModal({ items, invNo, header, lines, onClose }) {
+
+export default function PackingListModal({ items, setItems, invNo, header, lines, onClose }) {
   const docRef = useRef(null);
   const h = header || {};
   const rows = items || [];
@@ -51,6 +63,30 @@ export default function PackingListModal({ items, invNo, header, lines, onClose 
 
   const grandBags = rows.reduce((s, it) => s + itemBags(it), 0);
   const grandDisp = rows.reduce((s, it) => s + itemDispatched(it), 0);
+
+  const setBag = (ii, bi, patch) => setItems((xs) => xs.map((it, i) => (i === ii
+    ? { ...it, bags: it.bags.map((b, j) => (j === bi ? { ...b, ...patch } : b)) } : it)));
+
+  // The next range starts one past where the last one ended. (addPlBagRow)
+  const addBag = (ii) => setItems((xs) => xs.map((it, i) => {
+    if (i !== ii) return it;
+    const last = it.bags[it.bags.length - 1] || {};
+    return { ...it, bags: [...it.bags, { from: (int(last.to) || 0) + 1, to: '', qty: '' }] };
+  }));
+
+  // One-click completion: with Qty/bag entered, "auto" sets this range's Bag-To so
+  // it covers the item's REMAINING invoice quantity (other ranges left untouched).
+  const autoFillRow = (ii, bi) => setItems((xs) => xs.map((it, i) => {
+    if (i !== ii) return it;
+    const doneElsewhere = (it.bags || []).reduce((s, b, j) => s + (j === bi ? 0 : rowDispatched(b)), 0);
+    const remaining = Number(it.totalQty || 0) - doneElsewhere;
+    return { ...it, bags: it.bags.map((b, j) => {
+      if (j !== bi) return b;
+      const q = int(b.qty);
+      if (q <= 0 || remaining <= 0) return b;
+      return { ...b, to: (int(b.from) || 1) + Math.ceil(remaining / q) - 1 };
+    }) };
+  }));
 
   async function pdf() {
     try {
@@ -80,6 +116,7 @@ export default function PackingListModal({ items, invNo, header, lines, onClose 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn" style={{ height: 30, padding: '0 13px', background: 'var(--g)', color: '#fff', fontSize: 12 }} onClick={handlePrint}>🖨 Print</button>
             <button className="btn" style={{ height: 30, padding: '0 13px', background: '#1A4FA0', color: '#fff', fontSize: 12 }} onClick={pdf}>⬇ Download PDF</button>
+            <button className="btn" style={{ height: 30, padding: '0 13px', background: '#E67E22', color: '#fff', fontSize: 12 }} onClick={onClose}>💾 Save &amp; Close</button>
             <button className="btn btn-s" style={{ height: 30, padding: '0 12px', fontSize: 12 }} onClick={onClose}>✕ Close</button>
           </div>
         </div>
@@ -131,7 +168,7 @@ export default function PackingListModal({ items, invNo, header, lines, onClose 
                 return (
                   <Fragment key={ii}>
                     <tr style={{ background: '#eef4fc' }}>
-                      <td colSpan={3} style={{ padding: '7px 10px', fontSize: 11, fontWeight: 700, borderBottom: '2px solid #C5DFC8' }}>
+                      <td colSpan={5} style={{ padding: '7px 10px', fontSize: 11, fontWeight: 700, borderBottom: '2px solid #C5DFC8' }}>
                         {item.jobName || item.spec}
                         <span style={{ fontWeight: 400, color: '#555', fontSize: 10, marginLeft: 8 }}>
                           Invoice Qty: <strong>{grp(item.totalQty)}</strong> {getUOM(item.dispatchForm).toLowerCase()}
@@ -143,42 +180,75 @@ export default function PackingListModal({ items, invNo, header, lines, onClose 
                             : null}
                       </td>
                     </tr>
-                    {(item.bags || []).length === 0 ? (
-                      // No packing standard on the spec → the list cannot be generated
-                      // for this item; say exactly where to fix it instead of showing
-                      // blank boxes (the document has no manual entry).
-                      <tr style={{ borderBottom: '1px solid #eee' }}>
-                        <td colSpan={3} style={{ padding: '8px 10px', fontSize: 11, color: '#B7770D', background: '#FFF8E6' }}>
-                          ⚠ Qty per Bag is not set on JSS spec <strong>{item.spec}</strong>.
-                          Set it in QC → Add JSS Spec (or the Super Admin JSS Editor) and reopen — the bags fill in automatically.
-                        </td>
-                      </tr>
-                    ) : item.bags.map((bag, bi) => {
-                      const from = int(bag.from) || 1;
-                      const to = int(bag.to);
+                    {item.bags.map((bag, bi) => {
+                      const isLast = bi === item.bags.length - 1;
+                      const hasTo = bag.to !== '';
+                      const hasQty = bag.qty !== '';
                       const nBags = bagCount(bag);
+                      const canAdd = hasTo && hasQty && !complete;
                       return (
                         <tr key={ii + '-' + bi} style={{ borderBottom: '1px solid #eee' }}>
-                          <td style={{ padding: '5px 8px', textAlign: 'center', fontSize: 12, color: '#444', fontWeight: 600 }}>
-                            {from === to ? from : `${from} – ${to}`}
+                          <td style={{ padding: '4px 8px', textAlign: 'center', fontSize: 12, color: '#444', fontWeight: 600 }}>{int(bag.from) || 1}</td>
+                          <td style={{ padding: '3px 6px' }}>
+                            <input
+                              type="text" inputMode="numeric" placeholder="To" aria-label="Bag to"
+                              value={hasTo ? int(bag.to) : ''}
+                              onChange={(e) => setBag(ii, bi, { to: e.target.value === '' ? '' : (parseInt(e.target.value, 10) || '') })}
+                              style={{ width: 60, height: 26, border: '1px solid #ccc', borderRadius: 4, padding: '0 6px', fontSize: 12, textAlign: 'center' }}
+                            />
                           </td>
-                          <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: 12 }}>{grp(int(bag.qty))}</td>
-                          <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: 11 }}>
-                            <strong style={{ color: '#0e6fb8' }}>{nBags} bags &times; {grp(int(bag.qty))} = {grp(nBags * int(bag.qty))}</strong>
+                          <td style={{ padding: '3px 6px' }}>
+                            <input
+                              type="text" inputMode="numeric" placeholder="Qty/bag" aria-label="Qty per bag"
+                              value={hasQty ? int(bag.qty) : ''}
+                              onChange={(e) => setBag(ii, bi, { qty: e.target.value === '' ? '' : (parseInt(e.target.value, 10) || '') })}
+                              style={{ width: 80, height: 26, border: '1px solid #ccc', borderRadius: 4, padding: '0 6px', fontSize: 12, textAlign: 'right' }}
+                            />
+                          </td>
+                          <td style={{ padding: '4px 8px', textAlign: 'right', fontSize: 11 }}>
+                            {hasTo && hasQty
+                              ? <strong style={{ color: '#0e6fb8' }}>{nBags} bags &times; {grp(int(bag.qty))} = {grp(nBags * int(bag.qty))}</strong>
+                              : hasQty && !complete ? (
+                                // Qty/bag known, range open → one click computes Bag-To for
+                                // the remaining invoice quantity ("the data comes by itself").
+                                <button type="button" onClick={() => autoFillRow(ii, bi)}
+                                  aria-label={`Auto-fill bags for ${item.jobName || item.spec}`}
+                                  title="Set Bag To so this range covers the remaining invoice quantity"
+                                  style={{ height: 24, padding: '0 10px', fontSize: 11, fontWeight: 700, borderRadius: 12, border: '1px solid #0e6fb8', background: '#e9f2fb', color: '#0e6fb8', cursor: 'pointer' }}
+                                >⚡ auto-fill</button>
+                              ) : <span style={{ color: '#ccc' }}>—</span>}
+                          </td>
+                          <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                            {isLast ? (
+                              <button
+                                type="button" onClick={() => addBag(ii)} disabled={!canAdd}
+                                title={complete ? 'Invoice qty reached' : (!canAdd ? 'Enter Bag To and Qty Per Bag first' : 'Add next range')}
+                                style={{
+                                  width: 26, height: 26, borderRadius: '50%', fontSize: 16, fontWeight: 700, padding: 0,
+                                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                  border: '1px solid ' + (canAdd ? '#0e6fb8' : '#ccc'),
+                                  background: canAdd ? '#e9f2fb' : '#f5f5f5',
+                                  color: canAdd ? '#0e6fb8' : '#aaa',
+                                  cursor: canAdd ? 'pointer' : 'not-allowed',
+                                }}
+                              >+</button>
+                            ) : null}
                           </td>
                         </tr>
                       );
                     })}
                     <tr style={{ background: '#D4EDDA' }}>
-                      <td colSpan={2} style={{ padding: '5px 10px', fontSize: 11, color: '#155724', fontWeight: 600 }}>Sub-total</td>
+                      <td colSpan={3} style={{ padding: '5px 10px', fontSize: 11, color: '#155724', fontWeight: 600 }}>Sub-total</td>
                       <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#155724' }}>{totalBags} bags | {grp(dispatched)} pcs</td>
+                      <td />
                     </tr>
                   </Fragment>
                 );
               })}
               <tr style={{ background: '#0e6fb8', color: '#fff' }}>
-                <td colSpan={2} style={{ padding: '7px 10px', fontSize: 12, fontWeight: 700 }}>GRAND TOTAL</td>
+                <td colSpan={3} style={{ padding: '7px 10px', fontSize: 12, fontWeight: 700 }}>GRAND TOTAL</td>
                 <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: 12, fontWeight: 700 }}>{grandBags} bags | {grp(grandDisp)} pcs</td>
+                <td />
               </tr>
             </tbody>
           </table>

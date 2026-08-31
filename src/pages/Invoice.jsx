@@ -170,9 +170,10 @@ export default function Invoice() {
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
   }
 
-  /** The packing list is fully AUTO-GENERATED — nothing is typed. Every open
-   *  recomputes the bag ranges from the invoice lines and each spec's Qty per Bag
-   *  (JSS), so the document always matches the current invoice quantities. */
+  /** Open the packing list for the invoice currently in view. Nothing saved yet →
+   *  seed one section per invoice line; specs with a Qty per Bag on the JSS open
+   *  pre-filled, the rest get the classic empty range to type into. Always
+   *  editable — the document is the editor. (openPackingList) */
   const qtyPerBagOf = (spec) => {
     const k = String(spec || '').trim().toUpperCase();
     const row = (mods.jss || []).find((r) => String(r.spec || '').trim().toUpperCase() === k);
@@ -180,7 +181,9 @@ export default function Invoice() {
   };
 
   function openPackingList() {
-    setPlItems(buildAutoPackingList(pendInv || [], qtyPerBagOf));
+    if (!plItems.length && pendInv) {
+      setPlItems(buildAutoPackingList(pendInv, qtyPerBagOf));
+    }
     setShowPL(true);
   }
 
@@ -363,19 +366,22 @@ export default function Invoice() {
         register={register}
         onView={(e) => loadRegister(e, false)}
         onPdf={(e) => loadRegister(e, true)}
-        // The register's 📦 button opens the invoice and its packing list —
-        // regenerated from the invoice lines on every open (never hand-typed), so
-        // stale or empty saved ranges can't blank the document.
+        // The register's 📦 button opens the invoice and its saved packing list —
+        // it must work on an invoice that is not currently in the builder. No saved
+        // list yet → seed one section per invoice line (pre-filled from the spec's
+        // Qty per Bag when it has one), same as Create Packing List.
         onPackingList={(e) => {
           loadRegister(e, false);
-          setPlItems(buildAutoPackingList(e.items || [], qtyPerBagOf));
+          if (!(e.packingList || []).length) {
+            setPlItems(buildAutoPackingList(e.items || [], qtyPerBagOf));
+          }
           setShowPL(true);
         }}
       />
 
       {showPL && (
         <PackingListModal
-          items={plItems} invNo={h.ivNo}
+          items={plItems} setItems={setPlItems} invNo={h.ivNo}
           header={h} lines={pendInv || []}
           onClose={closePackingList}
         />
