@@ -35,6 +35,7 @@ export default function JssPlanningPanel() {
   const [baseUom, setBaseUom] = useState('');
   const [lines, setLines] = useState([]);  // [{ departmentId, itemId, qtyPerBase, uom, search }]
   const [setupMin, setSetupMin] = useState('');   // §22: QC-communicated job setup time
+  const [deptFil, setDeptFil] = useState('all');  // stage filter for the machines card
 
   useEffect(() => {
     (async () => {
@@ -122,6 +123,9 @@ export default function JssPlanningPanel() {
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
   const routeDepts = jss?.routeDepartments || [];
+  // A different spec/route brings different departments — drop a stale stage filter.
+  const routeId = jss?.config?.routeId;
+  useEffect(() => { setDeptFil('all'); }, [spec, routeId]);
   const machinesByDept = useMemo(() => {
     const m = {};
     (master.machines || []).forEach((mc) => { if (mc.departmentId != null) (m[mc.departmentId] = m[mc.departmentId] || []).push(mc); });
@@ -294,9 +298,25 @@ export default function JssPlanningPanel() {
               <div className="ctitle" style={{ margin: 0 }}>Eligible Machines · Speed · Changeover</div>
               <button className="btn btn-g" onClick={saveMachines} disabled={!routeDepts.length}>Save machines</button>
             </div>
+            {/* Stage filter: pick Printing / StayFresh / … to see ONLY that
+                department's machines instead of the whole route stacked. */}
+            {routeDepts.length > 1 && (
+              <div className="fbar" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                <button className={'btn btn-s' + (deptFil === 'all' ? ' on' : '')}
+                  style={deptFil === 'all' ? { background: 'var(--g)', color: '#fff' } : undefined}
+                  onClick={() => setDeptFil('all')}>All stages</button>
+                {routeDepts.map((d) => (
+                  <button key={d.departmentId}
+                    className={'btn btn-s' + (String(deptFil) === String(d.departmentId) ? ' on' : '')}
+                    style={String(deptFil) === String(d.departmentId) ? { background: 'var(--g)', color: '#fff' } : undefined}
+                    aria-label={`Show ${d.departmentName} machines`}
+                    onClick={() => setDeptFil(String(d.departmentId))}>{d.seq}. {d.departmentName}</button>
+                ))}
+              </div>
+            )}
             {!routeDepts.length ? (
               <div className="al al-y">Set the route first to list its departments.</div>
-            ) : routeDepts.map((d) => {
+            ) : routeDepts.filter((d) => deptFil === 'all' || String(d.departmentId) === String(deptFil)).map((d) => {
               const list = machinesByDept[d.departmentId] || [];
               return (
                 <div key={d.departmentId} style={{ marginBottom: 12 }}>

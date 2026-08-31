@@ -231,4 +231,32 @@ describe('JssPlanningPanel', () => {
     fireEvent.change(itemSelect, { target: { value: '1000' } });
     await waitFor(() => expect(screen.getByText('FILM')).toBeInTheDocument());   // code auto-fills
   });
+
+  it('stage filter narrows the machines card to the selected department only', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+
+    // All stages by default: machines from BOTH departments are visible.
+    await waitFor(() => expect(screen.getByText(/CI Flexo/)).toBeInTheDocument());
+    expect(screen.getByText(/Pouching 1/)).toBeInTheDocument();
+
+    // Select Printing → only Printing machines remain.
+    fireEvent.click(screen.getByLabelText('Show Printing machines'));
+    expect(screen.getByText(/CI Flexo/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pouching 1/)).toBeNull();
+
+    // Select Pouching → only its machine remains.
+    fireEvent.click(screen.getByLabelText('Show Pouching machines'));
+    expect(screen.getByText(/Pouching 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/CI Flexo/)).toBeNull();
+
+    // Back to all stages restores everything.
+    fireEvent.click(screen.getByRole('button', { name: 'All stages' }));
+    expect(screen.getByText(/CI Flexo/)).toBeInTheDocument();
+    expect(screen.getByText(/Pouching 1/)).toBeInTheDocument();
+  });
 });
