@@ -96,6 +96,16 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(201, { created });
     }
 
+    // Persist the packing list onto a SAVED invoice — must be matched before the
+    // generic /api/invoices POST below (substring overlap).
+    if (u.includes('/api/invoices/packing-list') && method === 'POST') {
+      const entry = ((modules.oab && modules.oab.INV_REG) || []).find((e) => e.no === body.no);
+      if (!entry) return res(404, { status: 404, message: 'No invoice ' + body.no + ' in the register' });
+      entry.packingList = body.packingList || [];
+      recordOab('/api/invoices/packing-list', body);
+      return res(200, { no: body.no, items: (body.packingList || []).length });
+    }
+
     if (u.includes('/api/invoices') && method === 'POST') {
       const oab = modules.oab;
       const prices = modules.prices || {};

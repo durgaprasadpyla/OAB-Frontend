@@ -218,10 +218,10 @@ describe('Invoice register — certificates, filters and PL', () => {
     expect(within(screen.getByText('BL/3').closest('tr')).getByText('COA ●')).toBeInTheDocument();
   });
 
-  it('offers a PDF button per row (packing list removed from the register)', async () => {
+  it('offers PDF and Packing List buttons per row (PL restored on request)', async () => {
     await open([inv('BL/4', 'PO-4', {})]);
     expect(screen.getByLabelText('PDF for BL/4')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Packing list for BL/4')).toBeNull();
+    expect(screen.getByLabelText('Packing list for BL/4')).toBeInTheDocument();
   });
 
   it('filters by PO and searches', async () => {

@@ -8,6 +8,7 @@ import { getCustByLoc, getCustLocations } from '../lib/master.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
+import PackingListModal from '../components/PackingListModal.jsx';
 import ProformaModal from '../components/ProformaModal.jsx';
 import { CertificateDoc } from '../components/CertificatePanel.jsx';
 import { printElement, elementToPDF } from '../lib/pdf.js';
@@ -32,6 +33,11 @@ export default function Invoice() {
   const [savedLastN, setSavedLastN] = useState(null);   // numeric tail of the last saved invoice no.
   const [showProforma, setShowProforma] = useState(false);
   const [autoPdf, setAutoPdf] = useState(false);
+  // Packing list (restored — it was lost in the one-step-Generate rewrite): bag
+  // ranges per invoice line, editable in the printable modal and persisted onto
+  // the saved invoice so the register re-opens it with its ranges intact.
+  const [plItems, setPlItems] = useState([]);
+  const [showPL, setShowPL] = useState(false);
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -158,8 +164,33 @@ export default function Invoice() {
   function closePreview() {
     setPendInv(null);
     setLines({});
+    setPlItems([]);
+    setShowPL(false);
     setH(emptyHeader(savedLastN != null ? savedLastN : (mods.oab && mods.oab.lastInvNo)));
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+  }
+
+  /** Open the packing list for the invoice currently in view, seeding one section
+   *  per invoice line (bag range 1–…) when nothing is saved yet. (openPackingList) */
+  function openPackingList() {
+    if (!plItems.length && pendInv) {
+      setPlItems(pendInv.map((p) => ({ spec: p.spec, jobName: p.jobName, totalQty: p.qty, dispatchForm: p.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] })));
+    }
+    setShowPL(true);
+  }
+
+  /** Closing the modal persists the bag ranges onto the saved invoice, so the
+   *  register's 📦 button restores them next time. Best-effort — the printable
+   *  document itself never depends on the save. */
+  async function closePackingList() {
+    setShowPL(false);
+    const no = String(h.ivNo || '').trim();
+    if (!no || !plItems.length) return;
+    try {
+      await ordersApi.saveInvoicePackingList(no, plItems);
+      await refetchRegister();
+      flash('📦 Packing list saved with invoice ' + no + '.');
+    } catch (e) { flash('Packing list not saved: ' + e.message, 'r'); }
   }
 
   // Capture the rendered #inv-doc — the same document the screen and the printer
@@ -181,6 +212,7 @@ export default function Invoice() {
     const lns = (entry.items || []).map((it) => ({ spec: it.spec, jobName: it.jobName || it.spec, qty: it.qty, rate: it.rate, dispatchForm: it.dispatchForm, lineTotal: num(it.qty) * num(it.rate) }));
     setPendInv(lns.length ? lns : null);
     setH((x) => ({ ...x, ...hdr }));
+    setPlItems(entry.packingList || []);   // saved bag ranges travel with the entry
     setAutoPdf(pdf);
     // Bring the preview into view. Without this the invoice renders above the
     // register but below the current scroll position, so it looks like nothing
@@ -314,6 +346,7 @@ export default function Invoice() {
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn btn-g" onClick={savePDF} disabled={pdfBusy}>{pdfBusy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
+            <button className="btn btn-s" style={{ background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--g)' }} onClick={openPackingList}>📦 Create Packing List</button>
             <button className="btn btn-r" onClick={closePreview}>✕ Close — back to Invoices</button>
           </div>
           <InvoiceDoc ref={docRef} header={h} lines={pendInv} />
@@ -325,7 +358,25 @@ export default function Invoice() {
         register={register}
         onView={(e) => loadRegister(e, false)}
         onPdf={(e) => loadRegister(e, true)}
+        // The register's 📦 button opens the invoice and its saved packing list —
+        // it must work on an invoice that is not currently in the builder. No saved
+        // list yet → seed one section per invoice line, same as Create Packing List.
+        onPackingList={(e) => {
+          loadRegister(e, false);
+          if (!(e.packingList || []).length) {
+            setPlItems((e.items || []).map((it) => ({ spec: it.spec, jobName: it.jobName || it.spec, totalQty: it.qty, dispatchForm: it.dispatchForm, bags: [{ from: 1, to: '', qty: '' }] })));
+          }
+          setShowPL(true);
+        }}
       />
+
+      {showPL && (
+        <PackingListModal
+          items={plItems} setItems={setPlItems} invNo={h.ivNo}
+          header={h} lines={pendInv || []}
+          onClose={closePackingList}
+        />
+      )}
 
       {showProforma && <ProformaModal onClose={() => setShowProforma(false)} />}
     </div>
@@ -387,7 +438,7 @@ function CertBadge({ inv, type, label, onDownload }) {
   );
 }
 
-function Register({ po, register, onView, onPdf }) {
+function Register({ po, register, onView, onPdf, onPackingList }) {
   const [period, setPeriod] = useState('thismonth');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -482,10 +533,10 @@ function Register({ po, register, onView, onPdf }) {
             <thead><tr>
               <th>Invoice No</th><th>Date</th><th>PO #</th><th>Customer</th>
               <th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Amount</th>
-              <th style={{ textAlign: 'center' }}>Certificates</th><th style={{ textAlign: 'center' }}>PDF</th>
+              <th style={{ textAlign: 'center' }}>Certificates</th><th style={{ textAlign: 'center' }}>PDF</th><th style={{ textAlign: 'center' }}>Packing List</th>
             </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>{
+              {rows.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>{
                 scoped ? 'No invoices for PO ' + po
                   : poFilter ? 'No invoices for PO ' + poFilter
                     : q.trim() ? 'No invoices match your search'
@@ -508,6 +559,14 @@ function Register({ po, register, onView, onPdf }) {
                     </td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                       <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>
+                    </td>
+                    <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      {/* Restored: open (or start) this invoice's packing list. A green
+                          dot marks invoices that already carry saved bag ranges. */}
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px', color: 'var(--g)' }}
+                        aria-label={`Packing list for ${e.no}`}
+                        title={(e.packingList || []).length ? 'Open the saved packing list' : 'Create a packing list for this invoice'}
+                        onClick={() => onPackingList(e)}>📦 PL{(e.packingList || []).length ? ' ●' : ''}</button>
                     </td>
                   </tr>
                 ))}
