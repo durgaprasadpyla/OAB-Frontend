@@ -1,17 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
+import { masterApi } from '../api.js';
 import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO } from '../lib/bom.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 
-// Bill of Materials editor — superadmin only (module 13).
-// Defines, per spec, the raw material needed to make a BASE quantity. The Raw
-// Material Requirement view then scales that recipe by each open order's balance.
-// Ported from the legacy renderBomList / bomEditorHTML / bomSaveSpec /
-// bomFillFromCode / bomExportExcel / bomExportPDF.
+// Bill of Materials editor (module 13) — superadmin Dashboard AND the QC
+// workspace's "BOM (legacy)" tab. Defines, per spec, the raw material needed to
+// make a BASE quantity. The Raw Material Requirement view then scales that
+// recipe by each open order's balance. Ported from the legacy renderBomList /
+// bomEditorHTML / bomSaveSpec / bomFillFromCode / bomExportExcel / bomExportPDF.
 
 const blankItem = () => ({ itemCode: '', itemDescription: '', materialType: '', subGroup: '', microns: '', uom: '', qtyPerBase: '' });
 const DATALIST_ID = 'bom-item-code-list';
@@ -46,7 +47,33 @@ export default function BomPanel() {
   const { mods, save } = useData();
   const { user } = useAuth();
   const bom = mods.bom || {};
-  const itemMaster = useMemo(() => buildItemMaster(mods.purchase), [mods.purchase]);
+
+  // QC cannot read the purchase blob (module 6 stays purchase/padmin/superadmin —
+  // it carries supplier pricing), so in the QC login the catalogue above is empty
+  // and every dropdown showed only "Any". Fall back to the NORMALIZED item master
+  // (/api/master/items — readable by every signed-in role, no pricing), which the
+  // JSS-planning sync keeps aligned with the P Dashboard catalogue.
+  const [masterItems, setMasterItems] = useState([]);
+  const purchaseEmpty = buildItemMaster(mods.purchase).length === 0;
+  useEffect(() => {
+    if (!purchaseEmpty) return undefined;
+    let live = true;
+    masterApi.listItems()
+      .then((r) => { if (live && Array.isArray(r)) setMasterItems(r); })
+      .catch(() => { /* master unreachable — dropdowns stay free-text */ });
+    return () => { live = false; };
+  }, [purchaseEmpty]);
+
+  const itemMaster = useMemo(() => {
+    const fromPurchase = buildItemMaster(mods.purchase);
+    if (fromPurchase.length) return fromPurchase;
+    return masterItems
+      .map((it) => ({ code: it.code, ref: {
+        materialType: it.materialType || '', subGroup: it.subGroup || '',
+        specificMaterial: it.name || '', microns: it.microns || '', uom: it.uom || '',
+      } }))
+      .sort((a, b) => String(a.code).localeCompare(String(b.code)));
+  }, [mods.purchase, masterItems]);
   const jss = useMemo(() => (mods.jss || []).filter((j) => String(j.spec || '').trim()), [mods.jss]);
 
   const [q, setQ] = useState('');
