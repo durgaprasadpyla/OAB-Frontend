@@ -96,7 +96,6 @@ export default function NewPO() {
       so: `${soY}/${n++}`, spec: s.spec, jobName: s.jobName, jobType: s.jobType, subBrand: s.subBrand || '',
       customer, dispLoc: loc, warehouseName: (getCustByLoc(mods.customers, customer, loc) || {}).warehouseName || '',
       poNum: poNum.trim(), poDate, poExp, poQty: num(s.qty), invDisp: 0, manDisp: 0, fg: 0, stage: '',
-      printMC: '', lamMC: '', pouchMC: '',
       width: s.width, material: s.material, mic: s.mic, height: s.height, filmWidth: s.filmWidth,
       gsm: s.gsm, dispatchForm: s.dispatchForm || '', pouchingMachines: s.pouchingMachines || '',
     }));
@@ -178,7 +177,7 @@ export default function NewPO() {
   return (
     <div id="app">
       <div className="pg-ttl">New PO Entry</div>
-      <div className="pg-sub">Fill PO details and location → select SKUs → assign machines → submit</div>
+      <div className="pg-sub">Fill PO details and location → select SKUs → verify prices → submit</div>
 
       {!(mods.jss || []).length && (
         <div className="al al-y">⚠ No JSS loaded yet. Add specs via <strong>Dashboard → JSS Editor</strong> (admin) or <strong>QC login → Add New Spec</strong>.</div>
@@ -248,7 +247,7 @@ export default function NewPO() {
               <input type="checkbox" className="cb" checked={skus.length > 0 && skus.every((s) => s.checked)} onChange={(e) => toggleAll(e.target.checked)} /> Select all active
             </label>
             <span style={{ color: 'var(--bd)' }}>|</span>
-            <span style={{ color: 'var(--i3)' }}>Tick SKUs in this PO → enter qty and machine allocation</span>
+            <span style={{ color: 'var(--i3)' }}>Tick SKUs in this PO → enter qty</span>
           </div>
           <div className="tw sy">
             <table>
@@ -300,25 +299,29 @@ export default function NewPO() {
               <thead><tr>
                 <th>SO#</th><th>Spec</th><th style={{ minWidth: 170 }}>Job Name</th><th>Type</th>
                 <th>Customer</th><th>Location</th><th>PO#</th><th>Date</th><th style={{ textAlign: 'right' }}>Qty</th>
-                <th>Print M/C</th><th>Lam M/C</th><th>Pouch M/C</th>
+                <th style={{ width: 50 }}>UOM</th><th style={{ textAlign: 'right' }}>Rate (₹)</th>
               </tr></thead>
               <tbody>
-                {selPO.map((r) => (
-                  <tr key={r.so}>
-                    <td><span className="so-pill">{r.so}</span></td>
-                    <td><span className="tag tb">{r.spec}</span></td>
-                    <td style={{ fontSize: 11 }}>{r.jobName}</td>
-                    <td><span className={'tag ' + (r.jobType === 'StayFresh' ? 'tg' : 'tgr')}>{r.jobType}</span></td>
-                    <td style={{ fontSize: 11 }}>{r.customer}</td>
-                    <td style={{ fontSize: 11 }}>{r.dispLoc}</td>
-                    <td style={{ fontSize: 11 }}>{r.poNum}</td>
-                    <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
-                    <td style={{ fontSize: 11 }}>{r.printMC || '-'}</td>
-                    <td style={{ fontSize: 11 }}>{r.lamMC || '-'}</td>
-                    <td style={{ fontSize: 11 }}>{r.pouchMC || r.pouchingMachines || '-'}</td>
-                  </tr>
-                ))}
+                {/* Rate is re-read from the Price Master here (not carried from step 2)
+                    so the Confirm step is a second, independent price verification. */}
+                {selPO.map((r) => {
+                  const rate = getPM(r.spec, mods.prices).price;
+                  return (
+                    <tr key={r.so}>
+                      <td><span className="so-pill">{r.so}</span></td>
+                      <td><span className="tag tb">{r.spec}</span></td>
+                      <td style={{ fontSize: 11 }}>{r.jobName}</td>
+                      <td><span className={'tag ' + (r.jobType === 'StayFresh' ? 'tg' : 'tgr')}>{r.jobType}</span></td>
+                      <td style={{ fontSize: 11 }}>{r.customer}</td>
+                      <td style={{ fontSize: 11 }}>{r.dispLoc}</td>
+                      <td style={{ fontSize: 11 }}>{r.poNum}</td>
+                      <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
+                      <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g)' }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
