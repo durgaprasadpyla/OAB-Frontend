@@ -242,6 +242,24 @@ function AllCustomers({ sales, patch }) {
     finally { setBusy(false); }
   }
 
+  // The reverse move: demote a customer back to a plain lead. Removes the name
+  // from the Customer Master (so it leaves SO creation) and clears the flag.
+  async function revertToLead(lead) {
+    const name = String(lead.client_name || '').trim();
+    if (!name) return;
+    const inCm = (mods.customers || []).filter((c) => normName(c.customer) === normName(name)).length;
+    if (!window.confirm('Move "' + name + '" back to a LEAD?\n\n' + (inCm
+      ? 'Its ' + inCm + ' Customer Master row(s) are removed, so it disappears from sale-order creation. JSS specs and existing orders are not touched.'
+      : 'It is not in the Customer Master; only the converted mark is cleared.'))) return;
+    setBusy(true);
+    try {
+      if (inCm) await save('customers', (mods.customers || []).filter((c) => normName(c.customer) !== normName(name)));
+      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: false } : l)) });
+      setMsg({ t: 'g', text: `↩ "${name}" is a lead again.` });
+    } catch (e) { setMsg({ t: 'r', text: 'Could not revert: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+
   function exportRows() {
     const header = ['Lead', 'Group', 'Categories', 'Status', 'Payment', 'Owners', 'Head Office', 'Delivery', 'GSTIN', 'Next follow-up'];
     const body = rows.map((l) => {
@@ -309,11 +327,20 @@ function AllCustomers({ sales, patch }) {
                     </td>
                     <td><span style={pill(FOLLOW_UP_STYLE[st.kind])}>{st.kind === 'later' ? fmtDate(st.label) : st.label}</span></td>
                     <td style={{ textAlign: 'center' }}>
-                      {(l.converted_to_customer || inMaster(l.client_name))
-                        ? <span className="tag tg" title="In the Customer Master">✓ Customer</span>
-                        : <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
-                            aria-label={`Convert ${l.client_name} to customer`}
-                            onClick={() => convertLead(l)}>→ Customer</button>}
+                      {(l.converted_to_customer || inMaster(l.client_name)) ? (
+                        <span style={{ whiteSpace: 'nowrap' }}>
+                          <span className="tag tg" title="In the Customer Master">✓ Customer</span>
+                          {' '}
+                          <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} disabled={busy}
+                            title="Move back to a lead (removes it from the Customer Master)"
+                            aria-label={`Revert ${l.client_name} to lead`}
+                            onClick={() => revertToLead(l)}>↩ Lead</button>
+                        </span>
+                      ) : (
+                        <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
+                          aria-label={`Convert ${l.client_name} to customer`}
+                          onClick={() => convertLead(l)}>→ Customer</button>
+                      )}
                     </td>
                   </tr>
                 );

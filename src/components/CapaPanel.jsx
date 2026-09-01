@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { custGroupOf, groupOptions } from '../lib/master.js';
 import { today, fmtDate } from '../lib/format.js';
@@ -47,9 +47,11 @@ export default function CapaPanel() {
   const [fCust, setFCust] = useState('');
   const [fStatus, setFStatus] = useState('');
   const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
-  const custNames = useMemo(
-    () => [...new Set(list.map((c) => String(c.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [list]);
+  const custNames = useMemo(() => {
+    const pool = fGroup ? list.filter((c) => custGroupOf(c.customer, mods.customers) === fGroup) : list;
+    return [...new Set(pool.map((c) => String(c.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [list, fGroup, mods.customers]);
+  useEffect(() => { if (fCust && !custNames.includes(fCust)) setFCust(''); }, [custNames, fCust]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();

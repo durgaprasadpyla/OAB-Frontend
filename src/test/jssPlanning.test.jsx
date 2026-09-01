@@ -6,8 +6,8 @@ import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-li
 // dispatch form (manual fallback); A2 carries dispatchForm 'Pouch' (Issues 1.0 #1).
 vi.mock('../data.jsx', () => ({
   useData: () => ({ mods: { jss: [
-    { spec: 'A1', jobName: 'Stay Fresh 100g', width: 250, height: 300, pouchWeight: 5 },
-    { spec: 'A2', jobName: 'MAP Pouch 500g', dispatchForm: 'Pouch', group: 'North Group' },
+    { spec: 'A1', jobName: 'Stay Fresh 100g', customer: 'Acme', width: 250, height: 300, pouchWeight: 5 },
+    { spec: 'A2', jobName: 'MAP Pouch 500g', customer: 'Bharat', dispatchForm: 'Pouch', group: 'North Group' },
   ] } }),
 }));
 
@@ -291,6 +291,11 @@ describe('JssPlanningPanel', () => {
     fireEvent.change(grpSel, { target: { value: 'North Group' } });
     expect(screen.getByText('MAP Pouch 500g')).toBeInTheDocument();
     expect(screen.queryByText('Stay Fresh 100g')).toBeNull();
+
+    // ...and the CUSTOMER filter now offers only that group's customers
+    const custSel = screen.getByLabelText('Filter list by customer');
+    expect(within(custSel).getByRole('option', { name: 'Bharat' })).toBeTruthy();
+    expect(within(custSel).queryByRole('option', { name: 'Acme' })).toBeNull();
   });
   it('shows the JSS pouch figures and computes metres + weight from the base qty', async () => {
     render(<JssPlanningPanel />);
