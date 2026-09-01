@@ -12,7 +12,7 @@ import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
 import LeadsAdmin from '../components/LeadsAdmin.jsx';
-import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
+import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
 import StoresStockPanel from '../components/StoresStockPanel.jsx';
 import BomPanel from '../components/BomPanel.jsx';
 import KamPanel from '../components/KamPanel.jsx';
@@ -57,16 +57,19 @@ export default function Dashboard() {
   // form reads. Backfilling here — on the super admin's landing page — means a list
   // saved before this existed reaches QC without anyone opening that tab. Creates
   // missing names only; runs once per mount and never blocks the page.
-  const { mods } = useData();
+  const { mods, loading } = useData();
   const sales = mods.sales;
   const syncedRef = useRef(false);
   useEffect(() => {
-    if (syncedRef.current) return;
-    const list = storedDespatchList(sales);
+    // Not before the modules have loaded: `mods.sales` is pre-seeded with an empty
+    // shape, so until the blob arrives the effective list is the built-in default
+    // and syncing it would push names the admin never had.
+    if (syncedRef.current || loading) return;
+    const list = effectiveDespatchList(sales);
     if (!list.length) return;
     syncedRef.current = true;
     syncDespatchMaster(list);
-  }, [sales]);
+  }, [sales, loading]);
   return (
     <div id="app">
       <div className="pg-ttl">📊 Business Dashboard</div>

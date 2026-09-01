@@ -133,4 +133,32 @@ describe('Issues 2.2 §2 — despatch forms reach QC without visiting Drop-down 
     expect(created).not.toContain('Pouch');
     expect(created).not.toContain('Roll');
   });
+  it('the built-in list also reaches QC when the admin never pressed Save', async () => {
+    // Issues 2.3 §4, from production: module 12 existed but carried NO despatch
+    // list. The Drop-down selections screen shows the built-in defaults exactly as
+    // it shows a saved list, so the admin believed the forms were configured while
+    // QC saw only the two the routes had created.
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      const u = String(url);
+      const method = (opts.method || 'GET').toUpperCase();
+      const body = opts.body ? JSON.parse(opts.body) : {};
+      if (u.includes('/api/auth/me')) return res(200, { username: 'boss', role: 'superadmin' });
+      if (u.includes('/api/master/dispatch-types')) {
+        if (method === 'POST') { created.push(body.name); return res(201, { id: 9, name: body.name }); }
+        return res(200, [{ id: 100, name: 'Pouch' }, { id: 101, name: 'Roll' }]);
+      }
+      if (u.includes('/rest/v1/oab_data')) {
+        // leads present, but nothing under dropdowns — exactly what production had
+        return res(200, [{ id: 12, data: JSON.stringify({ leads: [], dropdowns: {} }), version: 1 }]);
+      }
+      return res(200, []);
+    });
+    const { default: Dashboard } = await import('../pages/Dashboard.jsx');
+    render(<MemoryRouter><AuthProvider><DataProvider><Dashboard /></DataProvider></AuthProvider></MemoryRouter>);
+    // the forms the screen displays are created, minus the two already there
+    await waitFor(() => expect(created.length).toBeGreaterThan(0));
+    expect(created).toEqual(expect.arrayContaining(['Label', 'Shrink Sleeve', 'Bulk Bags']));
+    expect(created).not.toContain('Pouch');
+    expect(created).not.toContain('Roll');
+  });
 });

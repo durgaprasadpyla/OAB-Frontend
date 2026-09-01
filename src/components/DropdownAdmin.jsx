@@ -3,7 +3,7 @@ import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
 import { masterApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
-import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
+import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
 
 // Super-admin editor for the nine shared dropdown lists (module 12).
 // Ported from the monolith's Dropdowns tab (ddRender / ddRenderEditor / ddSave).
@@ -15,7 +15,7 @@ const blankFor = (type) => (type === 'pairs' ? ['', ''] : type === 'substrate' ?
 const UNITS = ['Micron', 'GSM'];
 
 export default function DropdownAdmin() {
-  const { mods, save } = useData();
+  const { mods, save, loading } = useData();
   const { role } = useAuth();
   const sales = mods.sales || {};
 
@@ -75,12 +75,17 @@ export default function DropdownAdmin() {
   // does the same on mount, so visiting this tab is not required.)
   const syncedRef = useRef(false);
   useEffect(() => {
-    if (syncedRef.current || role !== 'superadmin') return;
-    const list = storedDespatchList(sales);
+    // Wait for the sales module; before it lands the effective list is the
+    // built-in default and syncing it would invent names.
+    // Not until the modules have actually loaded. `mods.sales` is pre-seeded with
+    // an empty shape, so before the blob arrives the effective list is the built-in
+    // default — syncing that would invent names the admin never had.
+    if (syncedRef.current || role !== 'superadmin' || loading) return;
+    const list = effectiveDespatchList(sales);
     if (!list.length) return;
     syncedRef.current = true;
     syncDespatchMaster(list);
-  }, [sales, role]);
+  }, [sales, role, loading]);
 
   const saved = useMemo(() => ddList(sales, sel), [sales, sel]);
   const rows = work ?? saved;
@@ -162,6 +167,15 @@ export default function DropdownAdmin() {
         </div>
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         {dirty && <div className="al al-y">Unsaved changes.</div>}
+        {/* An admin cannot otherwise tell a saved list from the built-in one — they
+            look identical — which is exactly how the despatch forms were thought to
+            be configured when nothing had been saved. */}
+        {!def.master && !ddIsOverridden(sales, sel) && (
+          <div className="al al-b" style={{ marginTop: 6 }}>
+            These are the built-in defaults for <strong>{def.label}</strong>, not a list you have saved.
+            Edit and <strong>Save</strong> to make them yours — they are already offered across the app either way.
+          </div>
+        )}
 
         <div className="tw sy" style={{ maxHeight: 380 }}>
           <table>
