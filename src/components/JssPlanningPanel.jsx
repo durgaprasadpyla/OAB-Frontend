@@ -192,12 +192,40 @@ export default function JssPlanningPanel() {
   const addLine = (departmentId) => setLines((l) => [...l, { departmentId, itemId: '', qtyPerBase: '', uom: '' }]);
   const setLine = (i, k, v) => setLines((l) => l.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const rmLine = (i) => setLines((l) => l.filter((_, j) => j !== i));
+  /**
+   * Save the recipe — refusing rather than quietly dropping what it cannot use.
+   *
+   * This used to filter incomplete rows out and still report "BOM saved", so a
+   * row whose item never resolved (a typed name that matched nothing, or a
+   * selection cleared by a filter change) produced a green message and an EMPTY
+   * BOM. Two specs were saved that way before anyone noticed. Now a row that is
+   * started but unfinished blocks the save and says which one and why.
+   */
   async function saveBom() {
     setErr('');
-    const items = lines.filter((x) => x.itemId && Number(x.qtyPerBase) > 0)
-      .map((x) => ({ departmentId: Number(x.departmentId), itemId: Number(x.itemId), qtyPerBase: Number(x.qtyPerBase), uom: x.uom || undefined }));
-    try { await bomApi.set(spec, { baseQty: numOr(baseQty, 1), baseUom: baseUom || undefined, items }); flash('BOM saved'); await loadSpec(spec); }
-    catch (e) { setErr(e.message); }
+    const deptName = (id) => (routeDepts.find((d) => String(d.departmentId) === String(id)) || {}).departmentName || 'this department';
+    const started = lines.filter((x) => x.itemId || x._search || x._codeSearch || String(x.qtyPerBase || '').trim());
+    const broken = [];
+    started.forEach((x) => {
+      if (!x.itemId) {
+        const typed = (x._search || x._codeSearch || '').trim();
+        broken.push(`${deptName(x.departmentId)}: ${typed ? `"${typed}" is not an item in the master` : 'no item chosen'} — pick one from the list`);
+      } else if (!(Number(x.qtyPerBase) > 0)) {
+        broken.push(`${deptName(x.departmentId)}: enter the quantity per base`);
+      }
+    });
+    if (broken.length) { setErr('Nothing was saved. ' + broken.join('; ') + '.'); return; }
+
+    const items = started.map((x) => ({
+      departmentId: Number(x.departmentId), itemId: Number(x.itemId),
+      qtyPerBase: Number(x.qtyPerBase), uom: x.uom || undefined,
+    }));
+    if (!items.length && lines.length) { setErr('Nothing to save — add an item to a department first.'); return; }
+    try {
+      await bomApi.set(spec, { baseQty: numOr(baseQty, 1), baseUom: baseUom || undefined, items });
+      flash(items.length ? `BOM saved — ${items.length} line(s)` : 'BOM cleared');
+      await loadSpec(spec);
+    } catch (e) { setErr(e.message); }
   }
 
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
@@ -580,7 +608,8 @@ export default function JssPlanningPanel() {
                                 </td>
                                 <td>
                                   {/* Type-and-search by item NAME — codes are not shown here. */}
-                                  <input list={`bom-items-${d.departmentId}-${i}`} style={{ width: '100%' }}
+                                  <input list={`bom-items-${d.departmentId}-${i}`}
+                                    style={{ width: '100%', ...(!sel && l._search ? { borderColor: 'var(--red)' } : null) }}
                                     aria-label={`BOM item for ${d.departmentName}`}
                                     placeholder={deptItems.length ? 'type to search…' : `no items tagged to ${d.departmentName} — tag them in Master Data → Items`}
                                     value={sel ? itemName(sel) : (l._search || '')}
@@ -592,8 +621,19 @@ export default function JssPlanningPanel() {
                                       else setLines((ls) => ls.map((x, j) => (j === i ? { ...x, itemId: '', uom: '', _search: v } : x)));
                                     }} />
                                   <datalist id={`bom-items-${d.departmentId}-${i}`}>
-                                    {narrowed.map((it) => <option key={it.id} value={itemName(it)} />)}
+                                    {/* 100+ items are named only as a number ("700"), so the
+                                        hint carries what tells them apart. */}
+                                    {narrowed.map((it) => (
+                                      <option key={it.id} value={itemName(it)}>
+                                        {[it.materialType, it.subGroup, it.microns ? it.microns + ' mic' : ''].filter(Boolean).join(' · ')}
+                                      </option>
+                                    ))}
                                   </datalist>
+                                  {!sel && l._search ? (
+                                    <div style={{ fontSize: 10, color: 'var(--red)', marginTop: 2 }}>
+                                      not an item in the master — pick from the list, or type its code
+                                    </div>
+                                  ) : null}
                                 </td>
                                 {/* Issues 2.3: the code is what tells the stores desk
                                     whether the material is in stock, so it is a field of
@@ -611,7 +651,9 @@ export default function JssPlanningPanel() {
                                   </datalist>
                                 </td>
                                 <td>{sel && sel.microns ? sel.microns : '—'}</td>
-                                <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
+                                <td><input type="number" step="any" value={l.qtyPerBase}
+                                  aria-label={`Qty per base for ${d.departmentName}`}
+                                  onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
                                 {/* Issues 2.0: UOM comes from the item master — not typed. */}
                                 <td><input value={l.uom} readOnly aria-label="Line UOM (from item master)"
                                   placeholder="auto" style={{ background: 'var(--bg)' }} /></td>

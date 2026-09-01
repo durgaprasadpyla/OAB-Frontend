@@ -362,4 +362,36 @@ describe('JssPlanningPanel', () => {
     await waitFor(() => expect(screen.getByLabelText('BOM item for Printing')).toHaveValue('700'));
     expect(screen.getByLabelText('Line UOM (from item master)')).toHaveValue('KG');
   });
+  // The two BOMs in production that were saved with no lines at all: a row whose
+  // item never resolved was dropped, and the screen still said "BOM saved".
+  it('refuses to save a BOM whose item was never resolved, and says why', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText(/SAVE the eligible machines above first/i)).toBeInTheDocument());
+    fireEvent.click((await screen.findAllByRole('checkbox'))[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
+
+    // a name that matches nothing, with a quantity typed
+    fireEvent.change(await screen.findByLabelText('BOM item for Printing'), { target: { value: 'not a real item' } });
+    fireEvent.change(screen.getByLabelText('Qty per base for Printing'), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save BOM' }));
+
+    // nothing is sent, and the message names the department and the reason
+    await waitFor(() => expect(screen.getByText(/Nothing was saved/)).toBeInTheDocument());
+    // the row itself is flagged too (the banner says it as well, hence getAll)
+    expect(screen.getAllByText(/not an item in the master/i).length).toBeGreaterThan(0);
+    const puts = globalThis.fetch.mock.calls.filter(([u, o]) => String(u).includes('/api/bom/') && (o?.method || '').toUpperCase() === 'PUT');
+    expect(puts).toHaveLength(0);
+
+    // resolve the item and it saves, reporting how many lines went in
+    fireEvent.change(screen.getByLabelText('BOM item for Printing'), { target: { value: 'Film XYZ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save BOM' }));
+    await waitFor(() => expect(screen.getByText(/BOM saved — 1 line/)).toBeInTheDocument());
+  });
 });
