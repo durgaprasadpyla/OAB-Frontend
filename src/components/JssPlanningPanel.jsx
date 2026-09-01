@@ -547,6 +547,15 @@ export default function JssPlanningPanel() {
                 </div>
               );
             })()}
+            {/* A BOM row can exist with no lines at all — that is what the silent-save
+                bug left behind, and an empty recipe looks identical to one never
+                started. Say which it is. */}
+            {routeDepts.length > 0 && machinesSaved && lines.length === 0 && (
+              <div className="al al-r">
+                <strong>This spec has no BOM lines saved.</strong> Nothing here reaches Stores, PLAN, PPC or MIS
+                until at least one item is added below and saved.
+              </div>
+            )}
             {!routeDepts.length ? (
               <div className="al al-y">Set the route first.</div>
             ) : !machinesSaved ? (
