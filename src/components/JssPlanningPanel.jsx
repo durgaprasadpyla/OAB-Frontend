@@ -242,12 +242,26 @@ export default function JssPlanningPanel() {
   function pickItem(i, id) {
     const found = itemById(id);
     setLines((l) => l.map((x, j) => (j === i ? {
-      ...x, itemId: found ? found.id : '', uom: (found && found.uom) || '',
+      ...x, itemId: found ? found.id : '', uom: (found && found.uom) || '', _codeSearch: '',
       _mat: found ? String(found.materialType || '') : x._mat,
       _sub: found ? String(found.subGroup || '') : x._sub,
       _spl: found ? String(found.specialtyName || '') : x._spl,
     } : x)));
   }
+  /**
+   * Issues 2.3 — the same line, entered from the code end. An exact code (in this
+   * department, or anywhere in the master as a fallback) selects the item and pulls
+   * its UOM and identity across, exactly as picking the item by name does. Anything
+   * else is kept as free text so the operator can keep typing.
+   */
+  function pickItemByCode(i, code, deptItems) {
+    const norm = (v) => String(v || '').trim().toLowerCase();
+    const hit = (deptItems || []).find((it) => norm(it.code) === norm(code))
+      || (master.items || []).find((it) => norm(it.code) === norm(code));
+    if (hit) { pickItem(i, hit.id); return; }
+    setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: '', uom: '', _codeSearch: code } : x)));
+  }
+
   // Changing a cascade filter clears the picked item so the narrowed list rules.
   const setLineFil = (i, k, v) => setLines((l) => l.map((x, j) => (j === i ? { ...x, [k]: v, itemId: '', uom: '' } : x)));
 
@@ -523,6 +537,7 @@ export default function JssPlanningPanel() {
                           <th style={{ minWidth: 110 }}>Sub-Group</th>
                           <th style={{ minWidth: 110 }}>Specialty</th>
                           <th style={{ minWidth: 220 }}>Item</th>
+                          <th style={{ width: 130 }}>Item Code</th>
                           <th style={{ width: 80 }}>Microns</th>
                           <th style={{ width: 130 }}>Qty / base</th>
                           <th style={{ width: 90 }}>UOM</th>
@@ -574,6 +589,21 @@ export default function JssPlanningPanel() {
                                     }} />
                                   <datalist id={`bom-items-${d.departmentId}-${i}`}>
                                     {narrowed.map((it) => <option key={it.id} value={itemName(it)} />)}
+                                  </datalist>
+                                </td>
+                                {/* Issues 2.3: the code is what tells the stores desk
+                                    whether the material is in stock, so it is a field of
+                                    its own — and it works BOTH ways. Type or pick a code
+                                    here and the item (and its UOM/microns) follow; pick
+                                    the item above and the code fills itself in. */}
+                                <td>
+                                  <input list={`bom-codes-${d.departmentId}-${i}`} style={{ width: '100%' }}
+                                    aria-label={`Item code for ${d.departmentName}`}
+                                    placeholder={deptItems.length ? 'code…' : '—'}
+                                    value={sel ? (sel.code || '') : (l._codeSearch || '')}
+                                    onChange={(e) => pickItemByCode(i, e.target.value, deptItems)} />
+                                  <datalist id={`bom-codes-${d.departmentId}-${i}`}>
+                                    {deptItems.map((it) => <option key={it.id} value={it.code}>{itemName(it)}</option>)}
                                   </datalist>
                                 </td>
                                 <td>{sel && sel.microns ? sel.microns : '—'}</td>

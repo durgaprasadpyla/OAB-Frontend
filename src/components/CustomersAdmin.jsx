@@ -220,18 +220,35 @@ function ManagePanel({ mods, save, groups, custNames, flash, disabled }) {
     await save('customers', c4);
     const j = (mods.jss || []).map((r) => (norm(r.group) === from ? { ...r, group: to } : r));
     if (j.some((r, k) => r !== (mods.jss || [])[k])) await save('jss', j);
+    await renameGroupOnLeads(from, to);
     setGSel(''); setGNew('');
   }
   async function deleteGroup() {
     const from = norm(gSel);
     if (!from) return flash('r', 'Pick a group first.');
     const n = (mods.customers || []).filter((r) => norm(r.group) === from).length;
-    if (!window.confirm(`Remove the group "${from}" from ${n} customer(s)? The customers stay; they just become ungrouped. JSS specs on this group are also cleared. This cannot be undone.`)) return;
+    const onLeads = ((mods.sales && mods.sales.leads) || []).filter((l) => norm(l.group) === from).length;
+    if (!window.confirm(`Remove the group "${from}" from ${n} customer(s)${onLeads ? ` and ${onLeads} lead(s)` : ''}? They stay; they just become ungrouped. JSS specs on this group are also cleared. This cannot be undone.`)) return;
     const c4 = (mods.customers || []).map((r) => (norm(r.group) === from ? { ...r, group: '' } : r));
     await save('customers', c4);
     const j = (mods.jss || []).map((r) => (norm(r.group) === from ? { ...r, group: '' } : r));
     if (j.some((r, k) => r !== (mods.jss || [])[k])) await save('jss', j);
+    await renameGroupOnLeads(from, '');
     setGSel('');
+  }
+
+  /**
+   * A group deleted or renamed here must also leave the sales LEADS (module 12).
+   * Without this a rep-created group lingered on the S Dashboard long after it was
+   * removed from the Customer Master, which is what the business reported.
+   */
+  async function renameGroupOnLeads(from, to) {
+    const leads = (mods.sales && mods.sales.leads) || [];
+    if (!leads.some((l) => norm(l.group) === from)) return;
+    await save('sales', (prev) => ({
+      ...(prev || {}),
+      leads: ((prev && prev.leads) || []).map((l) => (norm(l.group) === from ? { ...l, group: to } : l)),
+    }));
   }
 
   // ── customer ops (cascade master + jss + oab) ──

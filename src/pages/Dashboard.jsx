@@ -11,6 +11,7 @@ import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
+import LeadsAdmin from '../components/LeadsAdmin.jsx';
 import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
 import StoresStockPanel from '../components/StoresStockPanel.jsx';
 import BomPanel from '../components/BomPanel.jsx';
@@ -33,6 +34,8 @@ const TABS = [
   { k: 'jss', label: '📋 JSS Editor' },
   { k: 'delete', label: '✏ Edit SOs' },
   { k: 'customers', label: '🏢 Customers' },
+  // Leads sit beside Customers: a rep's entry lives here until it is promoted.
+  { k: 'leads', label: '🌱 Leads' },
   { k: 'kam', label: '🎯 Customer KAM & Targets' },
   { k: 'users', label: '👤 Users & Access' },
   { k: 'dropdowns', label: '🧩 Drop-down selections' },
@@ -80,6 +83,7 @@ export default function Dashboard() {
       {tab === 'price' && <PriceMaster />}
       {tab === 'jss' && <JssEditor />}
       {tab === 'customers' && <CustomersAdmin />}
+      {tab === 'leads' && <LeadsAdmin />}
       {tab === 'delete' && <DeleteSOs />}
       {tab === 'trends' && <Trends />}
       {tab === 'costing' && <SOCosting />}
