@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { custGroups, custGroupOf } from '../lib/master.js';
+import { custGroupOf, groupOptions } from '../lib/master.js';
 import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
@@ -44,7 +44,7 @@ function QcCsa() {
   const [fGroup, setFGroup] = useState('');
   const [fCust, setFCust] = useState('');
   const [fStatus, setFStatus] = useState('');
-  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
   const csaCustNames = useMemo(
     () => [...new Set((sales.qc_reports || []).map((r) => String(csaCompanyItem(sales, r).company || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [sales]);

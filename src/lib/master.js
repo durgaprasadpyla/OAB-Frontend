@@ -89,3 +89,14 @@ export function specVisibleTo(j, cu, customers) {
   if (cust) return normName(cust) === normName(cu);
   return true;
 }
+
+/**
+ * Group options that survive an unreadable Customer Master (e.g. the qc role
+ * before it was granted module-4 read): the master's groups plus every group
+ * carried on the JSS specs themselves.
+ */
+export function groupOptions(customers, jss) {
+  const s = new Set(custGroups(customers));
+  (jss || []).forEach((j) => { const g = specGroup(j, customers); if (g) s.add(g); });
+  return [...s].sort((a, b) => a.localeCompare(b));
+}

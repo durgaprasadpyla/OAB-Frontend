@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
-import { custGroups, custGroupOf } from '../lib/master.js';
+import { custGroupOf, groupOptions } from '../lib/master.js';
 import { today, fmtDate } from '../lib/format.js';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import { COMPANY } from '../lib/company.js';
@@ -46,7 +46,7 @@ export default function CapaPanel() {
   const [fGroup, setFGroup] = useState('');
   const [fCust, setFCust] = useState('');
   const [fStatus, setFStatus] = useState('');
-  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
   const custNames = useMemo(
     () => [...new Set(list.map((c) => String(c.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [list]);

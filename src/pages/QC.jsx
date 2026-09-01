@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { pouchWeightQC } from '../lib/calc.js';
-import { custGroups, custsInGroup, specGroup } from '../lib/master.js';
+import { custsInGroup, groupOptions, specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
@@ -83,8 +83,19 @@ export default function QC() {
   // Customer Master lookups: groups for the Group dropdown, and the companies
   // in the chosen group (blank group -> the ungrouped companies) for the
   // cascading Customer picker. (legacy qcPopulateGroups / qcPopulateCustomers)
-  const groups = useMemo(() => custGroups(customers), [customers]);
-  const custOptions = useMemo(() => custsInGroup(customers, form.group), [customers, form.group]);
+  const groups = useMemo(() => groupOptions(customers, jss), [customers, jss]);
+  const custOptions = useMemo(() => {
+    const fromMaster = custsInGroup(customers, form.group);
+    if (fromMaster.length) return fromMaster;
+    // Customer Master unreadable/empty -> offer the customers already on specs.
+    const names = new Set();
+    jss.forEach((j) => {
+      const c = String(j.customer || '').trim();
+      if (!c) return;
+      if (!form.group || specGroup(j, customers) === form.group) names.add(c);
+    });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [customers, jss, form.group]);
 
   // Issues 2.0: Add New Group / Add New Customer right on the JSS form. The new
   // name is stored on the spec (the Customer Master itself is Super Admin's).
