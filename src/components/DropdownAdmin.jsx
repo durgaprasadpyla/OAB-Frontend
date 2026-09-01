@@ -58,6 +58,33 @@ export default function DropdownAdmin() {
   useEffect(() => { if (role === 'superadmin') loadMachines(); }, [loadMachines, role]);
 
   const def = DEFS.find((d) => d.key === sel) || DEFS[0];
+  // The QC Add-JSS Dispatch Form reads the normalized dispatch-type master, so
+  // that master must carry every name in THIS despatch list. Create any missing
+  // name (never delete) — on save, and once on open so an already-saved list
+  // syncs without a resave. Superadmin only (the master's write role).
+  const syncDespatchMaster = useCallback(async (names) => {
+    if (role !== 'superadmin') return;
+    try {
+      const existing = await masterApi.listDispatchTypes({ includeInactive: 1 });
+      const have = new Set((existing || []).map((t) => String(t.name || '').trim().toLowerCase()));
+      for (const n of names || []) {
+        const nm = String(n || '').trim();
+        if (nm && !have.has(nm.toLowerCase())) {
+          await masterApi.createDispatchType({ name: nm });
+          have.add(nm.toLowerCase());
+        }
+      }
+    } catch { /* best-effort — the list itself saved fine */ }
+  }, [role]);
+  const despatchSynced = useMemo(() => ({ done: false }), []);
+  useEffect(() => {
+    // Only the super admin's STORED list syncs on open — never the built-in
+    // defaults (which would quietly add names like "Others" to the master).
+    if (despatchSynced.done || !ddIsOverridden(sales, 'despatch')) return;
+    despatchSynced.done = true;
+    syncDespatchMaster(ddList(sales, 'despatch'));
+  }, [sales, syncDespatchMaster, despatchSynced]);
+
   const saved = useMemo(() => ddList(sales, sel), [sales, sel]);
   const rows = work ?? saved;
   const dirty = work !== null;
@@ -74,6 +101,7 @@ export default function DropdownAdmin() {
     try {
       const patch = ddPatch(sales, sel, values);
       await save('sales', (prev) => ({ ...(prev || {}), ...patch }));
+      if (sel === 'despatch') await syncDespatchMaster(values);
       setWork(null);
       setMsg({ t: 'g', text: `✅ ${def.label} saved.` });
     } catch (e) {
