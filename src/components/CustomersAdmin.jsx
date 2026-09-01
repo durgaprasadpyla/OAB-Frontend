@@ -16,8 +16,9 @@ const COLS = [
   ['warehouseName', 'Warehouse', 120], ['billingAddr', 'Billing Address', 190], ['shippingAddr', 'Shipping Address', 190],
   ['gstin', 'GSTIN', 130], ['state', 'State', 100], ['contactPerson', 'Contact Person', 120],
   ['contactPhone', 'Contact Phone', 120], ['contactEmail', 'Contact Email', 150],
+  ['remarks', 'Remarks', 170],
 ];
-const blankRow = () => ({ group: '', customer: '', dispatchLoc: '', warehouseName: '', billingAddr: '', shippingAddr: '', gstin: '', state: '', contactPerson: '', contactPhone: '', contactEmail: '' });
+const blankRow = () => ({ group: '', customer: '', dispatchLoc: '', warehouseName: '', billingAddr: '', shippingAddr: '', gstin: '', state: '', contactPerson: '', contactPhone: '', contactEmail: '', remarks: '' });
 const norm = (v) => String(v || '').trim();
 
 export default function CustomersAdmin() {
@@ -159,26 +160,27 @@ export default function CustomersAdmin() {
           <span style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={exportExcel} disabled={!rows.length}>⬇ Export</button>
         </div>
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 0 }}>Read-only — use <strong>Edit</strong> to load a customer into the form above. One row per customer + dispatch location; <strong>Group</strong> lets the New-PO / JSS / FG screens resolve a buying group.</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 0 }}>Read-only — pick a row with its radio button to load it into the form above; ✕ deletes the row. One row per customer + dispatch location; <strong>Group</strong> lets the New-PO / JSS / FG screens resolve a buying group.</p>
 
         <div className="tw sy">
           <table>
             <thead>
-              <tr><th style={{ width: 90 }}></th>{COLS.map(([k, label, w]) => <th key={k} style={{ minWidth: w }}>{label.replace(' *', '')}</th>)}</tr>
+              <tr><th style={{ width: 42 }}>Edit</th>{COLS.map(([k, label, w]) => <th key={k} style={{ minWidth: w }}>{label.replace(' *', '')}</th>)}<th style={{ width: 40 }}></th></tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
-                <tr><td colSpan={COLS.length + 1} style={{ textAlign: 'center', padding: 22, color: 'var(--i3)' }}>{rows.length ? 'No matches' : 'No customers yet — add one in the form above'}</td></tr>
+                <tr><td colSpan={COLS.length + 2} style={{ textAlign: 'center', padding: 22, color: 'var(--i3)' }}>{rows.length ? 'No matches' : 'No customers yet — add one in the form above'}</td></tr>
               ) : visible.map(({ r, i }) => (
                 <tr key={i} style={editIdx === i ? { background: 'var(--gl)' } : undefined}>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }}
-                      aria-label={'Edit customer ' + (norm(r.customer) || i)} onClick={() => startEdit(i)}>✏ Edit</button>
-                    {' '}
-                    <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 6px', color: 'var(--red)', borderColor: '#F5A8A0' }}
-                      onClick={() => deleteRow(i)} title="Delete customer">✕</button>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="radio" name="cust-edit-sel" checked={editIdx === i} onChange={() => startEdit(i)}
+                      aria-label={'Edit customer ' + (norm(r.customer) || i)} />
                   </td>
                   {COLS.map(([k]) => <td key={k} style={{ fontSize: 11 }}>{r[k] || '-'}</td>)}
+                  <td style={{ textAlign: 'center' }}>
+                    <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 6px', color: 'var(--red)', borderColor: '#F5A8A0' }}
+                      aria-label={'Delete customer ' + (norm(r.customer) || i)} onClick={() => deleteRow(i)} title="Delete customer">✕</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
