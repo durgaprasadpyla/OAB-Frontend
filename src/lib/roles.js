@@ -28,9 +28,9 @@ export function landingPath(role) {
     case 'quote': return '/quotes';
     case 'sales': return '/rep';
     // Production-planning roles. Planner lands on the weekly planner; stores lands
-    // on the Master Data hub (stock alerts + item stock) until it gets its own desk.
+    // on its own desk (stock on hand, GRNs, issues and returns).
     case 'planner': return '/planner';
-    case 'stores': return '/master';
+    case 'stores': return '/stores';
     // Enhancements 2.0 planning module logins → each to its own role-specific landing:
     // PPC → planning dashboard (planned-vs-actual + wastage), MIS → status board,
     // PLAN → Ready-to-Plan readiness screen.
@@ -85,6 +85,8 @@ export function canAccess(role, path) {
   // Master Data hub: superadmin + padmin (config/items), planner + stores (read /
   // stock). Per-section write permission is enforced again on the backend.
   if (p === '/master') return ['superadmin', 'padmin', 'planner', 'stores'].includes(role);
+  // Stores desk: the stores role plus Super Admin (who also reads the stock value).
+  if (p === '/stores') return role === 'stores' || role === 'superadmin';
   // Production execution: Plant + Plant Manager (record), Super Admin, Planner (view),
   // MIS (records actuals — Enhancements 2.0 §51).
   if (p === '/production') return ['plant', 'pm', 'mis', 'superadmin', 'planner'].includes(role);

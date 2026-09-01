@@ -300,3 +300,23 @@ export const reportsApi = {
   soProduction: (from, to) =>
     api('/api/reports/so-production?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
 };
+
+// Stores Login — the physical stock the business holds, unit by unit: the on-hand
+// board (closing stock derived from the units, with each item's MSL), the rolls /
+// cans behind an item, GRNs against a purchase order, issues and returns to the
+// shop floor (including a roll returned split into narrower rolls), the expected
+// arrival dates the planner waits on, and the value blocked per disposition.
+export const storesApi = {
+  onHand: () => api('/api/stores/on-hand'),
+  units: (itemId, includeEmpty) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/units' + (includeEmpty ? '?includeEmpty=1' : '')),
+  setMsl: (itemId, msl) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/msl', { method: 'PUT', body: { msl } }),
+  setUnitStatus: (unitId, status) => api('/api/stores/units/' + encodeURIComponent(unitId) + '/status', { method: 'PUT', body: { status } }),
+  grns: () => api('/api/stores/grns'),
+  createGrn: (body) => api('/api/stores/grns', { method: 'POST', body }),
+  issue: (body) => api('/api/stores/issues', { method: 'POST', body }),
+  receiveReturn: (body) => api('/api/stores/returns', { method: 'POST', body }),
+  txns: (p) => api('/api/stores/txns' + qs(p)),
+  etas: () => api('/api/stores/po-eta'),
+  setEta: (body) => api('/api/stores/po-eta', { method: 'PUT', body }),
+  summary: () => api('/api/stores/summary'),
+};
