@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
+import { custGroups, specGroup } from '../lib/master.js';
 import { fmtDate, inr } from '../lib/format.js';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import { COMPANY } from '../lib/company.js';
@@ -14,18 +15,36 @@ export default function CertificatePanel() {
   const { mods, save } = useData();
   const [q, setQ] = useState('');
   const [pendingOnly, setPendingOnly] = useState(true);   // legacy qc-cert-pending, default checked
+  // Issues 2.0: group / customer / status / JSS-number filters on every QC table.
+  const [fGroup, setFGroup] = useState('');
+  const [fCust, setFCust] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [fSpec, setFSpec] = useState('');
   const [editing, setEditing] = useState(null);   // { line, type, data }
   const [msg, setMsg] = useState(null);
 
   const lines = useMemo(() => certLines(mods.oab), [mods.oab]);
+  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const custNames = useMemo(
+    () => [...new Set(lines.map((l) => String(l.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [lines]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
+    const groupOf = (l) => {
+      const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === String(l.spec || '').trim());
+      return (j && specGroup(j, mods.customers)) || '';
+    };
     let list = lines;
     // A line is "done" only when BOTH its COA and Food Grade are issued.
     if (pendingOnly) list = list.filter((l) => !(l.status.coa && l.status.fg));
+    if (fGroup) list = list.filter((l) => groupOf(l) === fGroup);
+    if (fCust) list = list.filter((l) => String(l.customer || '').trim() === fCust);
+    if (fStatus === 'pending') list = list.filter((l) => !(l.status.coa && l.status.fg));
+    if (fStatus === 'complete') list = list.filter((l) => l.status.coa && l.status.fg);
+    if (fSpec.trim()) list = list.filter((l) => String(l.spec || '').toLowerCase().includes(fSpec.trim().toLowerCase()));
     if (t) list = list.filter((l) => [l.invNo, l.customer, l.spec].some((v) => String(v || '').toLowerCase().includes(t)));
     return list;
-  }, [lines, q, pendingOnly]);
+  }, [lines, q, pendingOnly, fGroup, fCust, fStatus, fSpec, mods.jss, mods.customers]);
 
   function open(line, type) {
     setMsg(null);
@@ -58,6 +77,21 @@ export default function CertificatePanel() {
           Pending only
         </label>
         <input placeholder="Search invoice / customer / spec…" value={q} aria-label="Search certificate lines" onChange={(e) => setQ(e.target.value)} />
+        <select value={fGroup} onChange={(e) => setFGroup(e.target.value)} aria-label="Filter certificates by group">
+          <option value="">All Groups</option>
+          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Filter certificates by customer">
+          <option value="">All Customers</option>
+          {custNames.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter certificates by status">
+          <option value="">All Statuses</option>
+          <option value="pending">Pending</option>
+          <option value="complete">Complete</option>
+        </select>
+        <input placeholder="JSS number…" value={fSpec} onChange={(e) => setFSpec(e.target.value)}
+          aria-label="Filter certificates by JSS number" style={{ width: 100 }} />
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="pg-sub" style={{ marginTop: 0 }}>

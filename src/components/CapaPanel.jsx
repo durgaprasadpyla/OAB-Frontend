@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
+import { custGroups, custGroupOf } from '../lib/master.js';
 import { today, fmtDate } from '../lib/format.js';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import { COMPANY } from '../lib/company.js';
@@ -40,12 +41,25 @@ export default function CapaPanel() {
   const flash = (t, text) => { setMsg({ t, text }); if (t !== 'g') setTimeout(() => setMsg(null), 4500); };
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
 
+  // Issues 2.0: group / customer / status filters on every QC table (a CAPA
+  // record has no JSS number — invoice/SKU search covers that need).
+  const [fGroup, setFGroup] = useState('');
+  const [fCust, setFCust] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const custNames = useMemo(
+    () => [...new Set(list.map((c) => String(c.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [list]);
+
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const arr = list.slice().reverse();
+    let arr = list.slice().reverse();
+    if (fGroup) arr = arr.filter((c) => custGroupOf(c.customer, mods.customers) === fGroup);
+    if (fCust) arr = arr.filter((c) => String(c.customer || '').trim() === fCust);
+    if (fStatus) arr = arr.filter((c) => String(c.status || 'Open') === fStatus);
     if (!s) return arr;
     return arr.filter((c) => [c.no, c.invNo, c.customer, c.sku, c.complaint, c.responsible, c.status].some((v) => String(v || '').toLowerCase().includes(s)));
-  }, [list, q]);
+  }, [list, q, fGroup, fCust, fStatus, mods.customers]);
 
   function openNew() { setDraft(blank(list)); setIsNew(true); }
   function openEdit(c) { setDraft({ ...c }); setIsNew(false); }
@@ -82,6 +96,24 @@ export default function CapaPanel() {
         <div className="ctitle" style={{ margin: 0 }}>QC CAPA — Corrective &amp; Preventive Actions ({list.length})</div>
         <span style={{ flex: 1 }} />
         {!draft && <input placeholder="Search CAPA / invoice / customer…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />}
+        {!draft && (
+          <select value={fGroup} onChange={(e) => setFGroup(e.target.value)} aria-label="Filter CAPA by group">
+            <option value="">All Groups</option>
+            {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+        )}
+        {!draft && (
+          <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Filter CAPA by customer">
+            <option value="">All Customers</option>
+            {custNames.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+        {!draft && (
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter CAPA by status">
+            <option value="">All Statuses</option>
+            {STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+          </select>
+        )}
         {!draft && <button className="btn btn-g" onClick={openNew}>+ New CAPA</button>}
       </div>
 

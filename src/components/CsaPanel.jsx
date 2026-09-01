@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { custGroups, custGroupOf } from '../lib/master.js';
 import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
@@ -39,16 +40,30 @@ function QcCsa() {
   const [busy, setBusy] = useState(false);
 
   const pending = useMemo(() => csaPendingForQc(sales), [sales]);
+  // Issues 2.0: group / customer / status filters on every QC table.
+  const [fGroup, setFGroup] = useState('');
+  const [fCust, setFCust] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const csaCustNames = useMemo(
+    () => [...new Set((sales.qc_reports || []).map((r) => String(csaCompanyItem(sales, r).company || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [sales]);
+  const csaStatuses = useMemo(
+    () => [...new Set((sales.qc_reports || []).map((r) => String(r.status || '').trim()).filter(Boolean))].sort(),
+    [sales]);
   const reports = useMemo(() => {
-    const list = (sales.qc_reports || []).slice()
+    let list = (sales.qc_reports || []).slice()
       .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    if (fGroup) list = list.filter((r) => custGroupOf(csaCompanyItem(sales, r).company, mods.customers) === fGroup);
+    if (fCust) list = list.filter((r) => String(csaCompanyItem(sales, r).company || '').trim() === fCust);
+    if (fStatus) list = list.filter((r) => String(r.status || '').trim() === fStatus);
     const s = q.trim().toLowerCase();
     if (!s) return list;
     return list.filter((r) => {
       const ci = csaCompanyItem(sales, r);
       return [ci.company, ci.item, csaStructure(r)].some((v) => String(v || '').toLowerCase().includes(s));
     });
-  }, [sales, q]);
+  }, [sales, q, fGroup, fCust, fStatus, mods.customers]);
   const leadName = (id) => ((sales.leads || []).find((l) => l.id === id) || {}).client_name || '—';
 
   // Re-approve: QC edited the report after the plant answered — flag it for
@@ -141,6 +156,18 @@ function QcCsa() {
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>CSA history <span className="tag tgr">{reports.length}</span></div>
           <span style={{ flex: 1 }} />
+          <select value={fGroup} onChange={(e) => setFGroup(e.target.value)} aria-label="Filter CSA by group">
+            <option value="">All Groups</option>
+            {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Filter CSA by customer">
+            <option value="">All Customers</option>
+            {csaCustNames.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter CSA by status">
+            <option value="">All Statuses</option>
+            {csaStatuses.map((st) => <option key={st} value={st}>{st}</option>)}
+          </select>
           <input placeholder="Search customer / item / structure…" value={q} aria-label="Search CSA history" onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />
         </div>
         <div className="tw sy" style={{ maxHeight: 340 }}>
