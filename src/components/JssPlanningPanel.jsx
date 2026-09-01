@@ -206,9 +206,12 @@ export default function JssPlanningPanel() {
   const normItem = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
   // Issues 2.0: the JSS list shown under Route and BOM — filtered, click to open.
   const groupsList = useMemo(() => groupOptions(customers, specs), [customers, specs]);
-  const custNames = useMemo(
-    () => [...new Set(specs.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [specs]);
+  // The customer options follow the picked group — only that group's customers.
+  const custNames = useMemo(() => {
+    const pool = fGroup ? specs.filter((j) => (specGroup(j, customers) || '') === fGroup) : specs;
+    return [...new Set(pool.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [specs, customers, fGroup]);
+  useEffect(() => { if (fCust && !custNames.includes(fCust)) setFCust(''); }, [custNames, fCust]);
   const listRows = useMemo(() => {
     let list = specs.slice();
     if (fGroup) list = list.filter((j) => (specGroup(j, customers) || '') === fGroup);

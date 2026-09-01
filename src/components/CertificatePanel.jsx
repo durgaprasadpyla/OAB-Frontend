@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { groupOptions, specGroup } from '../lib/master.js';
 import { fmtDate, inr } from '../lib/format.js';
@@ -25,9 +25,15 @@ export default function CertificatePanel() {
 
   const lines = useMemo(() => certLines(mods.oab), [mods.oab]);
   const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
-  const custNames = useMemo(
-    () => [...new Set(lines.map((l) => String(l.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [lines]);
+  const lineGroupOf = (l) => {
+    const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === String(l.spec || '').trim());
+    return (j && specGroup(j, mods.customers)) || '';
+  };
+  const custNames = useMemo(() => {
+    const pool = fGroup ? lines.filter((l) => lineGroupOf(l) === fGroup) : lines;
+    return [...new Set(pool.map((l) => String(l.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [lines, fGroup, mods.jss, mods.customers]);
+  useEffect(() => { if (fCust && !custNames.includes(fCust)) setFCust(''); }, [custNames, fCust]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
     const groupOf = (l) => {

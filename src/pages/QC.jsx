@@ -138,10 +138,12 @@ export default function QC() {
       [j.spec, j.customer, j.jobName, j.material].some((v) => String(v || '').toLowerCase().includes(s)));
   }, [jss, q, fGroup, fCust, fStatus, fSpec, customers]);
 
-  // Distinct customers across the JSS list, for the Customer filter dropdown.
-  const jssCustomerNames = useMemo(
-    () => [...new Set(jss.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [jss]);
+  // Customer filter options — narrowed to the picked group's customers.
+  const jssCustomerNames = useMemo(() => {
+    const pool = fGroup ? jss.filter((j) => (specGroup(j, customers) || '') === fGroup) : jss;
+    return [...new Set(pool.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [jss, customers, fGroup]);
+  useEffect(() => { if (fCust && !jssCustomerNames.includes(fCust)) setFCust(''); }, [jssCustomerNames, fCust]);
 
   // Issues 2.0: QC may change ONLY the status of a JSS, straight from the list.
   async function setSpecStatus(spec, status) {

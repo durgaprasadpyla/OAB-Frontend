@@ -279,14 +279,14 @@ const ASL_DETAIL_FIELDS = [
   { k: 'company', label: 'Company Name' }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' }, { k: 'email', label: 'Email' },
   { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' }, { k: 'gstn', label: 'GSTN' },
-  { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
+  { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)', select: ['Vendor', 'Bloomflex'] }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
 ];
 // Add-new-supplier form fields. (renderASLEdit new form 11838)
 const ASL_NEW_FIELDS = [
   { k: 'company', label: 'Company Name *', span: 2 }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'email', label: 'Primary Email' }, { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' },
   { k: 'gstn', label: 'GSTN' }, { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' },
-  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)' },
+  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)', select: ['Vendor', 'Bloomflex'] },
 ];
 // Item-level fields — one row per material within a supplier group.
 const ASL_ITEM_COLS = [
@@ -532,7 +532,16 @@ function ASLEditor() {
             {ASL_NEW_FIELDS.map((f) => (
               <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
                 <label style={supLabel}>{f.label}</label>
-                <input value={newSup[f.k] ?? ''} onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={supInput} />
+                {f.select ? (
+                  <select value={newSup[f.k] ?? ''} aria-label={f.label}
+                    onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={supInput}>
+                    <option value="">— select —</option>
+                    {newSup[f.k] && !f.select.includes(newSup[f.k]) && <option value={newSup[f.k]}>{newSup[f.k]}</option>}
+                    {f.select.map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                ) : (
+                  <input value={newSup[f.k] ?? ''} onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={supInput} />
+                )}
               </div>
             ))}
           </div>
@@ -583,7 +592,16 @@ function ASLEditor() {
                   {ASL_DETAIL_FIELDS.map((f) => (
                     <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
                       <label style={supLabel}>{f.label}</label>
-                      <input value={first[f.k] ?? ''} onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={supInput} />
+                      {f.select ? (
+                        <select value={first[f.k] ?? ''} aria-label={`${f.label} for ${g.company}`}
+                          onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={supInput}>
+                          <option value="">— select —</option>
+                          {first[f.k] && !f.select.includes(first[f.k]) && <option value={first[f.k]}>{first[f.k]}</option>}
+                          {f.select.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      ) : (
+                        <input value={first[f.k] ?? ''} onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={supInput} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -749,11 +767,10 @@ function ItemMaster() {
   async function submitItem() {
     const f = { ...imForm };
     Object.keys(f).forEach((k) => { f[k] = String(f[k] ?? '').trim(); });
-    if (!f.specificMaterial && !f.itemCode) { flash('r', 'Enter at least an Item Code or a Description.'); return; }
-    if (!f.itemCode) f.itemCode = nextItemCode(asl, extra);
-    if (imEditIdx < 0 && [...aslItems.map((m) => m.code), ...extra.map((r) => r.itemCode)].includes(f.itemCode)) {
-      flash('r', 'Item code ' + f.itemCode + ' already exists — pick it with the radio to edit it.'); return;
-    }
+    if (!f.specificMaterial) { flash('r', 'Enter a Description for the item.'); return; }
+    // The code is always system-assigned: next free number for a new item, the
+    // row's own code (unchanged) when editing.
+    f.itemCode = imEditIdx >= 0 ? String(extra[imEditIdx]?.itemCode || '').trim() || nextItemCode(asl, extra) : nextItemCode(asl, extra);
     const next = imEditIdx >= 0 ? extra.map((r, j) => (j === imEditIdx ? { ...r, ...f } : r)) : [f, ...extra];
     setBusy(true);
     try {
@@ -843,9 +860,11 @@ function ItemMaster() {
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         <div className="g4">
           <div className="fg">
-            <label>Item Code</label>
-            <input value={imForm.itemCode} onChange={setImField('itemCode')} readOnly={imEditIdx >= 0}
-              placeholder={'auto: ' + nextItemCode(asl, extra)} aria-label="Item form code" />
+            <label>Item Code (auto)</label>
+            {/* Codes are assigned by the system — typing one is not allowed, to
+                avoid duplicates. Editing keeps the row's existing code. */}
+            <input value={imEditIdx >= 0 ? (imForm.itemCode || '') : nextItemCode(asl, extra)}
+              readOnly aria-label="Item form code" style={{ background: 'var(--bg)' }} />
           </div>
           {IM_FIELDS.map((f) => (
             <div className="fg" key={f.k}>

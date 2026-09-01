@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { custGroupOf, groupOptions } from '../lib/master.js';
 import { useAuth } from '../auth.jsx';
@@ -45,9 +45,12 @@ function QcCsa() {
   const [fCust, setFCust] = useState('');
   const [fStatus, setFStatus] = useState('');
   const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
-  const csaCustNames = useMemo(
-    () => [...new Set((sales.qc_reports || []).map((r) => String(csaCompanyItem(sales, r).company || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [sales]);
+  const csaCustNames = useMemo(() => {
+    let pool = (sales.qc_reports || []);
+    if (fGroup) pool = pool.filter((r) => custGroupOf(csaCompanyItem(sales, r).company, mods.customers) === fGroup);
+    return [...new Set(pool.map((r) => String(csaCompanyItem(sales, r).company || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [sales, fGroup, mods.customers]);
+  useEffect(() => { if (fCust && !csaCustNames.includes(fCust)) setFCust(''); }, [csaCustNames, fCust]);
   const csaStatuses = useMemo(
     () => [...new Set((sales.qc_reports || []).map((r) => String(r.status || '').trim()).filter(Boolean))].sort(),
     [sales]);
