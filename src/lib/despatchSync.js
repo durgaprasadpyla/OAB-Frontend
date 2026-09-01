@@ -33,7 +33,22 @@ export async function syncDespatchMaster(names) {
   return created;
 }
 
-/** The stored despatch list when the admin has one, else [] (defaults never sync). */
+/**
+ * The despatch forms to push into the master — the EFFECTIVE list, which is what
+ * the Drop-down selections screen actually displays.
+ *
+ * This used to return the stored list only, on the reasoning that built-in
+ * defaults were names "nobody asked for". That was wrong in practice: the screen
+ * shows the defaults exactly as it shows a saved list, so an admin who never
+ * pressed Save still sees five forms and reasonably believes they are configured
+ * — while QC saw only the two the routes happened to create. Syncing what the
+ * admin is looking at removes that gap. Names are only ever added.
+ */
+export function effectiveDespatchList(sales) {
+  return ddList(sales, 'despatch');
+}
+
+/** Kept for callers that only want an explicitly saved list. */
 export function storedDespatchList(sales) {
   return ddIsOverridden(sales, 'despatch') ? ddList(sales, 'despatch') : [];
 }
