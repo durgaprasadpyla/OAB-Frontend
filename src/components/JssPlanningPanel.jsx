@@ -243,9 +243,13 @@ export default function JssPlanningPanel() {
     const found = itemById(id);
     setLines((l) => l.map((x, j) => (j === i ? {
       ...x, itemId: found ? found.id : '', uom: (found && found.uom) || '', _codeSearch: '',
-      _mat: found ? String(found.materialType || '') : x._mat,
-      _sub: found ? String(found.subGroup || '') : x._sub,
-      _spl: found ? String(found.specialtyName || '') : x._spl,
+      // Adopt the item's own identity ONLY where the master actually records it.
+      // Many items carry no material type or sub-group, and blanking the boxes on
+      // selection threw the operator's narrowing away — the row snapped back to
+      // "Any / Any / Any" the moment an item was chosen.
+      _mat: (found && found.materialType) ? String(found.materialType) : x._mat,
+      _sub: (found && found.subGroup) ? String(found.subGroup) : x._sub,
+      _spl: (found && found.specialtyName) ? String(found.specialtyName) : x._spl,
     } : x)));
   }
   /**
