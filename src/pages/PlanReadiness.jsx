@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { useData } from '../data.jsx';
 import { planningApi } from '../api.js';
 import { dash, today } from '../lib/format.js';
@@ -6,6 +6,7 @@ import { balance } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
+import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
 
 // PLAN landing page — Enhancements 2.0 §46-56. Against each open sale order the
 // readiness gatekeeper picks: Ready to plan (entire / partial SO with metres), or
@@ -38,6 +39,9 @@ export default function PlanReadiness() {
   const [changes, setChanges] = useState([]);    // §56: jobs edited after first save
   const [q, setQ] = useState('');                // Issues 2.2 §7: search the board
   const [specFil, setSpecFil] = useState('');
+  // Which order has its material panel open — the planner assigns the film here
+  // while marking the order ready to plan.
+  const [matFor, setMatFor] = useState('');
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
@@ -223,7 +227,8 @@ export default function PlanReadiness() {
                 const cur = stateBySo[r.so];
                 const d = draftFor(r.so);
                 return (
-                  <tr key={r.so} className={cur?.readyToPlan ? undefined : 'hi'}>
+                  <Fragment key={r.so}>
+                  <tr className={cur?.readyToPlan ? undefined : 'hi'}>
                     <td><span className="so-pill">{r.so}</span></td>
                     <td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td>
                     <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.sku || '—'}</td>
@@ -274,9 +279,21 @@ export default function PlanReadiness() {
                         <button className="btn btn-g" style={{ height: 28 }} disabled={busy === r.so || !d.pick} onClick={() => apply(r)}>
                           {cur ? 'Update' : 'Save'}
                         </button>
+                        {/* The material the order will run on — FIFO, film first. */}
+                        <button className="btn btn-s" style={{ height: 28 }}
+                          aria-label={`Assign material for ${r.so}`}
+                          onClick={() => setMatFor(matFor === r.so ? '' : r.so)}>
+                          {matFor === r.so ? '▲ Material' : '▼ Material'}
+                        </button>
                       </div>
                     </td>
                   </tr>
+                  {matFor === r.so && (
+                    <tr><td colSpan={18} style={{ background: 'var(--bg)', padding: '4px 12px 12px' }}>
+                      <MaterialAssignPanel so={r.so} spec={r.spec} material={r.substrate} />
+                    </td></tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

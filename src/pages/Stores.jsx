@@ -16,7 +16,9 @@ import { inr, today } from '../lib/format.js';
 //     including a roll returned as two narrower rolls.
 
 const TABS = [
-  { k: 'onhand', label: '📦 Material on Hand' },
+  { k: 'onhand', label: '📦 Raw Material on Hand' },
+  { k: 'sfg', label: '🏭 SFG (semi-finished)' },
+  { k: 'fg', label: '✅ FG (finished)' },
   { k: 'pos', label: '📄 Purchase Orders' },
   { k: 'grn', label: '📥 GRN' },
   { k: 'issues', label: '🔄 Issues & Returns' },
@@ -52,6 +54,8 @@ export default function Stores() {
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       {tab === 'onhand' && <OnHand flash={flash} />}
+      {tab === 'sfg' && <Sfg flash={flash} />}
+      {tab === 'fg' && <Fg flash={flash} />}
       {tab === 'pos' && <PurchaseOrders flash={flash} />}
       {tab === 'grn' && <Grn flash={flash} />}
       {tab === 'issues' && <IssuesReturns flash={flash} />}
@@ -73,6 +77,10 @@ function OnHand({ flash }) {
   const [open, setOpen] = useState(null);        // itemId whose units are expanded
   const [units, setUnits] = useState([]);
   const [unitsBusy, setUnitsBusy] = useState(false);
+  // The MSL the last three months' consumption implies, shown beside the one in
+  // force. Manual entry stays; this is the "going forward" automatic figure.
+  const [sugg, setSugg] = useState({});
+  const [suggAny, setSuggAny] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -81,6 +89,26 @@ function OnHand({ flash }) {
     finally { setBusy(false); }
   }, [flash]);
   useEffect(() => { load(); }, [load]);
+
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const list = await storesApi.mslSuggestions(3) || [];
+      const m = {};
+      list.forEach((r) => { m[r.itemId] = r; });
+      setSugg(m);
+      setSuggAny(list.some((r) => r.hasHistory));
+    } catch { /* the suggestion column is an extra, never a blocker */ }
+  }, []);
+  useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
+
+  async function adoptSuggestions() {
+    if (!window.confirm('Set every item\'s MSL to its average consumption over the last three months?\n\nItems with no consumption history are left exactly as they are.')) return;
+    try {
+      const r = await storesApi.applyMslSuggestions(3);
+      flash('g', `MSL updated from consumption for ${r.applied} item(s).`);
+      await load(); await loadSuggestions();
+    } catch (e) { flash('r', e.message); }
+  }
 
   // The five filters the doc asks for, each offering only what the data holds.
   const opts = (key) => [...new Set(rows.map((r) => String(r[key] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -151,6 +179,10 @@ function OnHand({ flash }) {
           <option value="">All departments</option>{opts('departmentName').map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
         <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
+          title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
+          ⚙ Set MSL from 3-month average
+        </button>
         <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
       </div>
 
@@ -162,7 +194,7 @@ function OnHand({ flash }) {
 
       <div className="pg-sub" style={{ marginTop: 0 }}>
         Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
-        MSL is entered by hand for now; it becomes the average of the last three months&rsquo; consumption once that history exists.
+        MSL can be typed per item, or set for every item at once from the average of the last three months&rsquo; consumption.
       </div>
 
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
@@ -171,11 +203,13 @@ function OnHand({ flash }) {
             <th style={{ width: 30 }}></th><th>Item Code</th><th style={{ minWidth: 200 }}>Description</th>
             <th>Material</th><th>Sub-Group</th><th>Speciality</th><th>Microns</th><th>Department</th>
             <th style={{ textAlign: 'right' }}>Closing Stock</th><th style={{ width: 60 }}>UOM</th>
-            <th style={{ textAlign: 'right', width: 110 }}>MSL</th><th style={{ textAlign: 'right' }}>Stock Value</th>
+            <th style={{ textAlign: 'right', width: 110 }}>MSL</th>
+            <th style={{ textAlign: 'right', width: 110 }}>3-mo avg</th>
+            <th style={{ textAlign: 'right' }}>Stock Value</th>
           </tr></thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
                 {rows.length ? 'No items match these filters' : 'No items yet — the Item Master (P Dashboard) feeds this list'}
               </td></tr>
             ) : visible.map((r) => (
@@ -195,11 +229,14 @@ function OnHand({ flash }) {
                     <input type="number" min="0" step="any" defaultValue={r.msl ?? ''} aria-label={`MSL for ${r.code}`}
                       onBlur={(e) => saveMsl(r, e.target.value)} style={{ width: 90, height: 24, textAlign: 'right' }} />
                   </td>
+                  <td style={{ textAlign: 'right', fontSize: 11 }} title="Average monthly consumption over the last three months">
+                    {sugg[r.id] && sugg[r.id].hasHistory ? qty(sugg[r.id].suggestedMsl) : <span style={{ color: 'var(--i3)' }}>—</span>}
+                  </td>
                   <td style={{ textAlign: 'right', fontSize: 11 }}>{r.stockValue ? inr(Math.round(num(r.stockValue))) : '—'}</td>
                 </tr>
                 {open === r.id && (
                   <tr>
-                    <td colSpan={12} style={{ background: 'var(--bg)', padding: '10px 16px' }}>
+                    <td colSpan={13} style={{ background: 'var(--bg)', padding: '10px 16px' }}>
                       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
                         Rolls / cans of {r.code} <span className="tag tgr">{units.length}</span>
                         <span className="pg-sub" style={{ display: 'inline', marginLeft: 8 }}>oldest first — issue in this order (FIFO)</span>
@@ -735,5 +772,180 @@ function IssuesReturns({ flash }) {
         </table></div>
       </div>
     </>
+  );
+}
+
+/* ─────────────────────── SFG — semi-finished, per spec ──────────────────── */
+
+// Everything issued from the racks against a spec's sale orders that has not
+// come back: material on the shop floor, in its own unit, with how far
+// production has carried it. Finished goods sit alongside in pieces — the two
+// are never subtracted from one another, because they are different things.
+function Sfg({ flash }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try { setRows(await storesApi.sfg() || []); }
+    catch (e) { flash('r', e.message); }
+    finally { setBusy(false); }
+  }, [flash]);
+  useEffect(() => { load(); }, [load]);
+
+  const visible = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return rows;
+    return rows.filter((r) => [r.spec, r.customer, r.jobName].some((v) => String(v || '').toLowerCase().includes(t)));
+  }, [rows, q]);
+
+  return (
+    <div className="card">
+      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+        <div className="ctitle" style={{ margin: 0 }}>Semi-finished goods, per spec <span className="tag tgr">{visible.length}</span></div>
+        <input placeholder="Search spec / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search SFG" style={{ minWidth: 220 }} />
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Material issued from stores against each spec&rsquo;s orders and not returned — it is on the floor until it becomes
+        finished goods. Click a spec to see which orders it is sitting in.
+      </div>
+      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
+        <table>
+          <thead><tr>
+            <th style={{ width: 30 }}></th><th>Spec</th><th style={{ minWidth: 180 }}>Job Name</th><th>Customer</th>
+            <th style={{ minWidth: 240 }}>Material on the floor</th>
+            <th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>FG so far</th>
+          </tr></thead>
+          <tbody>
+            {visible.length === 0 ? (
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+                Nothing in process — SFG appears once stores issues material against a sale order.
+              </td></tr>
+            ) : visible.map((r) => (
+              <Fragment key={r.spec}>
+                <tr style={{ cursor: 'pointer' }} onClick={() => setOpen(open === r.spec ? null : r.spec)}>
+                  <td style={{ textAlign: 'center', color: 'var(--i3)' }}>{open === r.spec ? '▼' : '▶'}</td>
+                  <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec}</span></td>
+                  <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.jobName || '—'}</td>
+                  <td style={{ fontSize: 11 }}>{r.customer || '—'}</td>
+                  <td style={{ fontSize: 11 }}>
+                    {(r.materials || []).map((m, i) => (
+                      <span key={i} style={{ marginRight: 10 }}>
+                        <strong>{qty(m.qty)}</strong> {m.uom || ''} {m.itemCode}
+                      </span>
+                    ))}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>{qty(r.poQty)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--g)', fontWeight: 700 }}>{qty(r.fgQty)}</td>
+                </tr>
+                {open === r.spec && (
+                  <tr><td colSpan={7} style={{ background: 'var(--bg)', padding: '10px 16px' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>In process</div>
+                    {(r.inProcess || []).length === 0 ? (
+                      <div className="pg-sub" style={{ margin: 0 }}>
+                        No open production stage recorded — the material is issued but production has not booked a stage yet.
+                      </div>
+                    ) : (
+                      <div className="tw"><table>
+                        <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th>
+                          <th style={{ textAlign: 'right' }}>In</th><th style={{ textAlign: 'right' }}>Completed</th>
+                          <th style={{ textAlign: 'right' }}>Wastage</th><th>Status</th></tr></thead>
+                        <tbody>
+                          {r.inProcess.map((s2, i) => (
+                            <tr key={i}>
+                              <td><span className="so-pill" style={{ fontSize: 10 }}>{s2.so}</span></td>
+                              <td>{s2.stage_seq}</td>
+                              <td style={{ fontSize: 11 }}>{s2.department || '—'}</td>
+                              <td style={{ textAlign: 'right' }}>{qty(s2.qty_in)}</td>
+                              <td style={{ textAlign: 'right' }}>{qty(s2.qty_completed)}</td>
+                              <td style={{ textAlign: 'right', color: 'var(--red)' }}>{qty(s2.qty_wastage)}</td>
+                              <td style={{ fontSize: 11 }}>{s2.status || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table></div>
+                    )}
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ────────────────────────── FG — finished, per spec ─────────────────────── */
+
+function Fg({ flash }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try { setRows(await storesApi.fg() || []); }
+    catch (e) { flash('r', e.message); }
+    finally { setBusy(false); }
+  }, [flash]);
+  useEffect(() => { load(); }, [load]);
+
+  const visible = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return rows;
+    return rows.filter((r) => [r.spec, r.customer, r.jobName].some((v) => String(v || '').toLowerCase().includes(t)));
+  }, [rows, q]);
+  const totalFg = visible.reduce((t, r) => t + num(r.fgQty), 0);
+
+  return (
+    <div className="card">
+      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+        <div className="ctitle" style={{ margin: 0 }}>Finished goods, per spec <span className="tag tgr">{visible.length}</span></div>
+        <input placeholder="Search spec / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search FG" style={{ minWidth: 220 }} />
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+      </div>
+      <div className="stats" style={{ marginBottom: 8 }}>
+        <div className="stat"><div className="sl">Specs holding FG</div><div className="sv">{visible.length}</div></div>
+        <div className="stat"><div className="sl">Finished pieces</div><div className="sv" style={{ color: 'var(--g)' }}>{totalFg.toLocaleString('en-IN')}</div></div>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>Booked on the FG Entry sheet, gathered per spec number.</div>
+      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
+        <table>
+          <thead><tr>
+            <th>Spec</th><th style={{ minWidth: 200 }}>Job Name</th><th>Customer</th>
+            <th style={{ textAlign: 'right' }}>Orders</th><th style={{ textAlign: 'right' }}>PO Qty</th>
+            <th style={{ textAlign: 'right' }}>FG</th><th style={{ textAlign: 'right' }}>Dispatched</th>
+            <th style={{ textAlign: 'right' }}>FG in hand</th>
+          </tr></thead>
+          <tbody>
+            {visible.length === 0 ? (
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+                No finished goods booked yet — they arrive from the FG Entry sheet.
+              </td></tr>
+            ) : visible.map((r) => {
+              const inHand = num(r.fgQty) - num(r.dispatched);
+              return (
+                <tr key={r.spec}>
+                  <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec}</span></td>
+                  <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.jobName || '—'}</td>
+                  <td style={{ fontSize: 11 }}>{r.customer || '—'}</td>
+                  <td style={{ textAlign: 'right' }}>{r.orders}</td>
+                  <td style={{ textAlign: 'right' }}>{qty(r.poQty)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{qty(r.fgQty)}</td>
+                  <td style={{ textAlign: 'right' }}>{qty(r.dispatched)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700 }}>{inHand > 0 ? inHand.toLocaleString('en-IN') : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
