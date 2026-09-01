@@ -30,6 +30,7 @@ import Reports from './pages/Reports.jsx';
 import PpcDashboard from './pages/PpcDashboard.jsx';
 import MisStatus from './pages/MisStatus.jsx';
 import PlanReadiness from './pages/PlanReadiness.jsx';
+import Stores from './pages/Stores.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="/ppc" element={<RoleRoute path="/ppc"><PpcDashboard /></RoleRoute>} />
         <Route path="/mis" element={<RoleRoute path="/mis"><MisStatus /></RoleRoute>} />
         <Route path="/plan" element={<RoleRoute path="/plan"><PlanReadiness /></RoleRoute>} />
+        <Route path="/stores" element={<RoleRoute path="/stores"><Stores /></RoleRoute>} />
         <Route path="*" element={<Landing />} />
       </Route>
     </Routes>

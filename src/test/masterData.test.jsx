@@ -16,9 +16,10 @@ describe('planning roles wiring', () => {
     expect(ROLE_LABEL.superadmin).toBe('Super Admin');
   });
 
-  it('lands planner on the weekly planner and stores on the Master Data hub', () => {
+  it('lands planner on the weekly planner and stores on its own desk', () => {
     expect(landingPath('planner')).toBe('/planner');
-    expect(landingPath('stores')).toBe('/master');
+    // Stores used to land on the Master Data hub; it now has a desk of its own.
+    expect(landingPath('stores')).toBe('/stores');
     // existing landings untouched
     expect(landingPath('qc')).toBe('/qc');
     expect(landingPath('superadmin')).toBe('/po');

@@ -12,6 +12,7 @@ import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
 import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
+import StoresStockPanel from '../components/StoresStockPanel.jsx';
 import BomPanel from '../components/BomPanel.jsx';
 import KamPanel from '../components/KamPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
@@ -84,7 +85,8 @@ export default function Dashboard() {
       {tab === 'costing' && <SOCosting />}
       {tab === 'kam' && <KamPanel />}
       {tab === 'bom' && <BomPanel />}
-      {tab === 'material' && <RawMaterialPanel />}
+      {/* Raw Material = what we HOLD (stores) above what we NEED (BOM requirement). */}
+      {tab === 'material' && <><StoresStockPanel /><RawMaterialPanel /></>}
       {tab === 'fgval' && <FgValuePanel />}
       {tab === 'dropdowns' && <DropdownAdmin />}
       {/* Machines (né Master Data) keeps only Departments + Machines; Routes and
