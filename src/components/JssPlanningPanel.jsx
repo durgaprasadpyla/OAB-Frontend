@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi, jssApi, bomApi } from '../api.js';
 import { bomUOM } from '../lib/bom.js';
-import { custGroups, specGroup } from '../lib/master.js';
+import { groupOptions, specGroup } from '../lib/master.js';
 
 // QC JSS planning (Stage 3): pick a JSS spec — its Dispatch Form comes FROM the
 // JSS itself (Issues 1.0 #1, no manual dropdown), which reveals the form's routes
@@ -201,7 +201,7 @@ export default function JssPlanningPanel() {
 
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
   // Issues 2.0: the JSS list shown under Route and BOM — filtered, click to open.
-  const groupsList = useMemo(() => custGroups(customers), [customers]);
+  const groupsList = useMemo(() => groupOptions(customers, specs), [customers, specs]);
   const custNames = useMemo(
     () => [...new Set(specs.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [specs]);

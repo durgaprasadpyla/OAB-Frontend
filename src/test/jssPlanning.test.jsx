@@ -7,7 +7,7 @@ import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-li
 vi.mock('../data.jsx', () => ({
   useData: () => ({ mods: { jss: [
     { spec: 'A1', jobName: 'Stay Fresh 100g' },
-    { spec: 'A2', jobName: 'MAP Pouch 500g', dispatchForm: 'Pouch' },
+    { spec: 'A2', jobName: 'MAP Pouch 500g', dispatchForm: 'Pouch', group: 'North Group' },
   ] } }),
 }));
 
@@ -278,5 +278,15 @@ describe('JssPlanningPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All stages' }));
     expect(screen.getByText(/CI Flexo/)).toBeInTheDocument();
     expect(screen.getByText(/Pouching 1/)).toBeInTheDocument();
+  });
+  it('JSS-list group filter offers spec-carried groups even with no Customer Master (QC)', async () => {
+    render(<JssPlanningPanel />);
+    // the list card is visible before any spec is opened
+    const grpSel = await screen.findByLabelText('Filter list by group');
+    expect(within(grpSel).getByRole('option', { name: 'North Group' })).toBeTruthy();
+    // filtering by it narrows the list to A2
+    fireEvent.change(grpSel, { target: { value: 'North Group' } });
+    expect(screen.getByText('MAP Pouch 500g')).toBeInTheDocument();
+    expect(screen.queryByText('Stay Fresh 100g')).toBeNull();
   });
 });

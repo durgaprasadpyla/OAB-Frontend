@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
-import { custGroups, specGroup } from '../lib/master.js';
+import { groupOptions, specGroup } from '../lib/master.js';
 import { fmtDate, inr } from '../lib/format.js';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import { COMPANY } from '../lib/company.js';
@@ -24,7 +24,7 @@ export default function CertificatePanel() {
   const [msg, setMsg] = useState(null);
 
   const lines = useMemo(() => certLines(mods.oab), [mods.oab]);
-  const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
   const custNames = useMemo(
     () => [...new Set(lines.map((l) => String(l.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [lines]);
