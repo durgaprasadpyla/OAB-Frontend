@@ -319,4 +319,15 @@ export const storesApi = {
   etas: () => api('/api/stores/po-eta'),
   setEta: (body) => api('/api/stores/po-eta', { method: 'PUT', body }),
   summary: () => api('/api/stores/summary'),
+  // Semi-finished (material out on the floor) and finished goods, both per spec.
+  sfg: () => api('/api/stores/sfg'),
+  fg: () => api('/api/stores/fg'),
+  // The MSL the last three months' consumption suggests, and adopting it.
+  mslSuggestions: (months = 3) => api('/api/stores/msl-suggestions?months=' + encodeURIComponent(months)),
+  applyMslSuggestions: (months = 3) => api('/api/stores/msl-suggestions/apply?months=' + encodeURIComponent(months), { method: 'POST' }),
+  // Planner: rolls still free to promise (oldest first = FIFO), and the earmarks.
+  available: (p) => api('/api/stores/available' + qs(p)),
+  allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),
+  allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
+  releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),
 };
