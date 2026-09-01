@@ -213,13 +213,14 @@ export default function QC() {
 
   function exportExcel() {
     if (!jss.length) { setMsg({ type: 'r', text: 'No JSS data to export.' }); return; }
-    const header = ['Spec', 'Job Type', 'Group', 'Customer', 'Sub Brand', 'Job Name', 'Print Loc', 'MIC', 'GSM',
-      'Material', 'Film Width', 'Ups', 'Width', 'Height', 'Gusset', 'Dispatch Form', 'Machine Run On', 'Status'];
+    // Issues 2.0: Machine Run On + Print Loc deleted from the JSS completely.
+    const header = ['Spec', 'Job Type', 'Group', 'Customer', 'Sub Brand', 'Job Name', 'MIC', 'GSM',
+      'Material', 'Film Width', 'Ups', 'Width', 'Height', 'Gusset', 'Dispatch Form', 'Status'];
     const rows = jss.map((j) => {
       // Group: the spec's stored group if set, else derived from the customer list.
       const grp = specGroup(j, customers) || j.group || '';
-      return [j.spec, j.jobType, grp, j.customer, j.subBrand, j.jobName, j.printLoc, j.mic,
-        j.gsm, j.material, j.filmWidth, j.ups, j.width, j.height, j.gusset, j.dispatchForm, j.machineRunOn, j.status]
+      return [j.spec, j.jobType, grp, j.customer, j.subBrand, j.jobName, j.mic,
+        j.gsm, j.material, j.filmWidth, j.ups, j.width, j.height, j.gusset, j.dispatchForm, j.status]
         .map((v) => (v == null ? '' : v));
     });
     exportAOA([header, ...rows], 'Bloomflex_JSS_Master_' + today().replace(/-/g, '_'), 'JSS Master');
