@@ -279,14 +279,14 @@ const ASL_DETAIL_FIELDS = [
   { k: 'company', label: 'Company Name' }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' }, { k: 'email', label: 'Email' },
   { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' }, { k: 'gstn', label: 'GSTN' },
-  { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)', select: ['Vendor', 'Bloomflex'] }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
+  { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
 ];
 // Add-new-supplier form fields. (renderASLEdit new form 11838)
 const ASL_NEW_FIELDS = [
   { k: 'company', label: 'Company Name *', span: 2 }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'email', label: 'Primary Email' }, { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' },
   { k: 'gstn', label: 'GSTN' }, { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' },
-  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport (Vendor / Bloomflex)', select: ['Vendor', 'Bloomflex'] },
+  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] },
 ];
 // Item-level fields — one row per material within a supplier group.
 const ASL_ITEM_COLS = [

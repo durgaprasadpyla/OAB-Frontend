@@ -1,8 +1,9 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
 import { masterApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
+import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
 
 // Super-admin editor for the nine shared dropdown lists (module 12).
 // Ported from the monolith's Dropdowns tab (ddRender / ddRenderEditor / ddSave).
@@ -62,28 +63,24 @@ export default function DropdownAdmin() {
   // that master must carry every name in THIS despatch list. Create any missing
   // name (never delete) — on save, and once on open so an already-saved list
   // syncs without a resave. Superadmin only (the master's write role).
-  const syncDespatchMaster = useCallback(async (names) => {
+  // Saving the despatch list pushes any new name into the dispatch-type master, so
+  // QC's Add-JSS Dispatch Form offers it. (The Super Admin Dashboard also runs this
+  // on mount, so an already-saved list backfills without visiting this tab.)
+  const pushDespatch = useCallback(async (names) => {
     if (role !== 'superadmin') return;
-    try {
-      const existing = await masterApi.listDispatchTypes({ includeInactive: 1 });
-      const have = new Set((existing || []).map((t) => String(t.name || '').trim().toLowerCase()));
-      for (const n of names || []) {
-        const nm = String(n || '').trim();
-        if (nm && !have.has(nm.toLowerCase())) {
-          await masterApi.createDispatchType({ name: nm });
-          have.add(nm.toLowerCase());
-        }
-      }
-    } catch { /* best-effort — the list itself saved fine */ }
+    await syncDespatchMaster(names);
   }, [role]);
-  const despatchSynced = useMemo(() => ({ done: false }), []);
+  // …and an already-saved list backfills when this tab opens, so the master catches
+  // up even for a list stored before the sync existed. (The Super Admin Dashboard
+  // does the same on mount, so visiting this tab is not required.)
+  const syncedRef = useRef(false);
   useEffect(() => {
-    // Only the super admin's STORED list syncs on open — never the built-in
-    // defaults (which would quietly add names like "Others" to the master).
-    if (despatchSynced.done || !ddIsOverridden(sales, 'despatch')) return;
-    despatchSynced.done = true;
-    syncDespatchMaster(ddList(sales, 'despatch'));
-  }, [sales, syncDespatchMaster, despatchSynced]);
+    if (syncedRef.current || role !== 'superadmin') return;
+    const list = storedDespatchList(sales);
+    if (!list.length) return;
+    syncedRef.current = true;
+    syncDespatchMaster(list);
+  }, [sales, role]);
 
   const saved = useMemo(() => ddList(sales, sel), [sales, sel]);
   const rows = work ?? saved;
@@ -101,7 +98,7 @@ export default function DropdownAdmin() {
     try {
       const patch = ddPatch(sales, sel, values);
       await save('sales', (prev) => ({ ...(prev || {}), ...patch }));
-      if (sel === 'despatch') await syncDespatchMaster(values);
+      if (sel === 'despatch') await pushDespatch(values);
       setWork(null);
       setMsg({ t: 'g', text: `✅ ${def.label} saved.` });
     } catch (e) {

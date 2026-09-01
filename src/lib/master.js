@@ -100,3 +100,18 @@ export function groupOptions(customers, jss) {
   (jss || []).forEach((j) => { const g = specGroup(j, customers); if (g) s.add(g); });
   return [...s].sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * The JSS spec behind an OAB row — by spec code, else by customer + job name.
+ * The PM board and the PLAN board must read the same record, so both call this.
+ * (native port of pmFindJSS, legacy index.html ~4759)
+ */
+export function findSpecForRow(jss, r) {
+  if (!r) return null;
+  const list = jss || [];
+  if (r.spec) {
+    const bySpec = list.find((j) => String(j.spec || '').trim() === String(r.spec || '').trim());
+    if (bySpec) return bySpec;
+  }
+  return list.find((j) => j.customer === r.customer && j.jobName === r.jobName) || null;
+}

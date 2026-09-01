@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useData } from '../data.jsx';
 import { planningApi } from '../api.js';
-import { today } from '../lib/format.js';
+import { dash, today } from '../lib/format.js';
+import { balance } from '../lib/calc.js';
+import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 
@@ -14,6 +16,7 @@ import SoWastagePanel from '../components/SoWastagePanel.jsx';
 
 function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const rt = { textAlign: 'right' };
 
 // §46-50: the one dropdown the doc asks for.
 const READINESS_OPTIONS = [
@@ -33,6 +36,8 @@ export default function PlanReadiness() {
   const [msg, setMsg] = useState('');
   const [weekFrom] = useState(today());          // §56 change panel's week window
   const [changes, setChanges] = useState([]);    // §56: jobs edited after first save
+  const [q, setQ] = useState('');                // Issues 2.2 §7: search the board
+  const [specFil, setSpecFil] = useState('');
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
@@ -58,13 +63,51 @@ export default function PlanReadiness() {
     return m;
   }, [board]);
 
-  // Every OPEN sale order (module 1), the list the gatekeeper works down.
+  // Every OPEN sale order (module 1), the list the gatekeeper works down — carrying
+  // the same JSS-derived figures the PM board shows (Issues 2.2 §7). The planner
+  // decides off the SKU and the FILM WIDTH, so those travel with every row. What the
+  // PM board additionally does — entering printed Kg / metres — is not here: that is
+  // the MIS login's job now.
   const openRows = useMemo(() => {
     const oab = (mods && mods.oab && mods.oab.OAB) || {};
+    const jss = (mods && mods.jss) || [];
     const rows = [];
-    ['SF', 'OT'].forEach((sh) => (oab[sh] || []).forEach((r) => { if (!r.closed) rows.push({ ...r, sheet: sh }); }));
+    ['SF', 'OT'].forEach((sh) => (oab[sh] || []).forEach((r) => {
+      if (r.closed) return;
+      const j = findSpecForRow(jss, r);
+      const pw = j ? num(j.pouchWeight) : 0;
+      const widthMm = j ? num(j.width) : 0;
+      rows.push({
+        ...r,
+        sheet: sh,
+        // SKU follows the CURRENT spec — the row's stored jobName is only the copy
+        // taken at SO creation, so a repointed spec self-corrects here too.
+        sku: (j && j.jobName) || r.jobName || '',
+        customer: (j && j.customer) || r.customer || '',
+        dispLoc: r.dispLoc || '',
+        disp: num(r.invDisp) + num(r.manDisp),
+        bal: balance(r),
+        substrate: (j && j.material) || '',
+        filmWidth: (j && j.filmWidth) || '',
+        thickness: (j && j.mic) || '',
+        gsm: (j && j.gsm) || '',
+        pouchW: (j && j.width) || '',
+        pouchH: (j && j.height) || '',
+        totalKg: pw > 0 ? num(r.poQty) * pw / 1000 : 0,
+        totalMt: widthMm > 0 ? num(r.poQty) * widthMm / 1000 : 0,
+      });
+    }));
     return rows.sort((a, b) => String(b.so).localeCompare(String(a.so), undefined, { numeric: true }));
   }, [mods]);
+
+  // Spec filter + free-text search, the same pair the PM board offers.
+  const specOptions = useMemo(() => [...new Set(openRows.map((r) => r.spec).filter(Boolean))].sort(), [openRows]);
+  const visibleRows = useMemo(() => {
+    let list = specFil ? openRows.filter((r) => String(r.spec || '') === specFil) : openRows;
+    const t = q.trim().toLowerCase();
+    if (t) list = list.filter((r) => [r.so, r.customer, r.spec, r.sku, r.dispLoc, r.substrate].some((v) => String(v || '').toLowerCase().includes(t)));
+    return list;
+  }, [openRows, q, specFil]);
 
   const readyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so]?.readyToPlan).length, [openRows, stateBySo]);
   const notReadyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so] && !stateBySo[r.so].readyToPlan && stateBySo[r.so].notReadyReason).length, [openRows, stateBySo]);
@@ -152,20 +195,52 @@ export default function PlanReadiness() {
 
       {/* Readiness list (§46-54) */}
       <div className="card" style={{ marginTop: 12 }}>
-        <div className="ctitle">Sale orders <span className="tag ty">{openRows.length}</span></div>
+        <div className="fbar" style={{ flexWrap: 'wrap' }}>
+          <div className="ctitle" style={{ margin: 0 }}>Sale orders <span className="tag ty">{visibleRows.length}</span></div>
+          <input placeholder="Search SO / customer / spec / SKU…" value={q} aria-label="Search sale orders"
+            onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
+          <select value={specFil} onChange={(e) => setSpecFil(e.target.value)} aria-label="Filter by spec">
+            <option value="">All specs</option>
+            {specOptions.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
+          </select>
+        </div>
         {openRows.length === 0 ? <div className="al al-b">No open sale orders.</div> : (
           <div className="tw sy"><table>
-            <thead><tr><th>Sale Order</th><th>Spec</th><th>Customer</th><th>Job Qty</th><th>Readiness</th><th style={{ minWidth: 420 }}>Set readiness</th></tr></thead>
+            {/* Issues 2.2 §7: the PM board's display fields — SKU and FILM WIDTH above
+                all, since the planner judges plannability off the film width. */}
+            <thead><tr>
+              <th>Sale Order</th><th>Spec</th><th style={{ minWidth: 170 }}>SKU</th><th>Customer</th><th>Disp Loc</th>
+              <th style={rt}>PO Qty</th><th style={rt}>Dispatched</th><th style={rt}>Balance</th>
+              <th>Substrate</th><th style={rt}>Film W</th><th style={rt}>Thick (mic)</th><th style={rt}>GSM</th>
+              <th style={rt}>Pouch W</th><th style={rt}>Pouch H</th><th style={rt}>Total Kg</th><th style={rt}>Total Mt</th>
+              <th>Readiness</th><th style={{ minWidth: 420 }}>Set readiness</th>
+            </tr></thead>
             <tbody>
-              {openRows.map((r) => {
+              {visibleRows.length === 0 && (
+                <tr><td colSpan={18} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
+              )}
+              {visibleRows.map((r) => {
                 const cur = stateBySo[r.so];
                 const d = draftFor(r.so);
                 return (
                   <tr key={r.so} className={cur?.readyToPlan ? undefined : 'hi'}>
                     <td><span className="so-pill">{r.so}</span></td>
-                    <td>{r.spec}</td>
-                    <td>{r.customer}</td>
-                    <td>{r.poQty}</td>
+                    <td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td>
+                    <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.sku || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{r.customer}</td>
+                    <td style={{ fontSize: 11 }}>{r.dispLoc || '—'}</td>
+                    <td style={rt}>{dash(r.poQty)}</td>
+                    <td style={{ ...rt, color: 'var(--g)' }}>{dash(r.disp)}</td>
+                    <td style={{ ...rt, fontWeight: 700 }}>{dash(r.bal)}</td>
+                    <td style={{ fontSize: 11 }}>{r.substrate || '—'}</td>
+                    {/* the field the planner actually decides on */}
+                    <td style={{ ...rt, fontWeight: 700, color: 'var(--blu)' }}>{r.filmWidth || '—'}</td>
+                    <td style={rt}>{r.thickness || '—'}</td>
+                    <td style={rt}>{r.gsm || '—'}</td>
+                    <td style={rt}>{r.pouchW || '—'}</td>
+                    <td style={rt}>{r.pouchH || '—'}</td>
+                    <td style={rt}>{r.totalKg ? r.totalKg.toFixed(1) : '—'}</td>
+                    <td style={rt}>{r.totalMt ? Math.round(r.totalMt).toLocaleString('en-IN') : '—'}</td>
                     <td>{cur?.readyToPlan
                       ? <span className={'tag ' + (cur.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{cur.readyMode === 'PARTIAL' ? `Partial · ${cur.readyQty} m` : 'Entire SO'}</span>
                       : cur?.notReadyReason
