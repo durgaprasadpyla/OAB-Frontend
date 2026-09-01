@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi, jssApi, bomApi } from '../api.js';
 import { bomUOM } from '../lib/bom.js';
+import { calcMetres, calcKg } from '../lib/calc.js';
 import { groupOptions, specGroup } from '../lib/master.js';
 
 // QC JSS planning (Stage 3): pick a JSS spec — its Dispatch Form comes FROM the
@@ -200,6 +201,9 @@ export default function JssPlanningPanel() {
   }
 
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
+  // The BOM picker shows plain item NAMES (no codes) and is type-and-search.
+  const itemName = (it) => String(it.name || it.code || '').trim();
+  const normItem = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
   // Issues 2.0: the JSS list shown under Route and BOM — filtered, click to open.
   const groupsList = useMemo(() => groupOptions(customers, specs), [customers, specs]);
   const custNames = useMemo(
@@ -469,6 +473,31 @@ export default function JssPlanningPanel() {
               </div>
               <div className="fg"><label>&nbsp;</label><div style={{ paddingTop: 8 }} className="pg-sub">Requirement = (SO qty / base) × qty per base.</div></div>
             </div>
+            {/* The JSS's own numbers, and what the base quantity works out to. */}
+            {specRow && (() => {
+              const w = Number(specRow.width) || 0;
+              const hh = Number(specRow.height) || 0;
+              const pw = Number(specRow.pouchWeight) || 0;
+              const q = Number(baseQty) || 0;
+              const m = q > 0 ? calcMetres(specRow, q, specRow) : null;
+              const kg = q > 0 ? calcKg(specRow, q, specRow) : null;
+              return (
+                <div className="al al-b" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline' }} aria-label="JSS figures">
+                  <span>From JSS <strong>{spec}</strong>:
+                    &nbsp;Pouch Width <strong>{w ? w + ' mm' : '—'}</strong> ·
+                    &nbsp;Height <strong>{hh ? hh + ' mm' : '—'}</strong> ·
+                    &nbsp;Per-pouch Weight <strong>{pw ? pw + ' g' : '—'}</strong></span>
+                  {q > 0 && (
+                    <span>→ for <strong>{q.toLocaleString('en-IN')} {baseUom || 'pcs'}</strong>:
+                      &nbsp;<strong>{m && m.net ? m.net.toLocaleString('en-IN') + ' m' : '—'}</strong>
+                      {m && m.net ? <span style={{ color: 'var(--i3)' }}> (+5% = {m.withWastage.toLocaleString('en-IN')} m)</span> : null} ·
+                      &nbsp;weight <strong>{kg ? (Math.round(kg.net * 100) / 100).toLocaleString('en-IN') + ' kg' : '—'}</strong>
+                      {kg ? <span style={{ color: 'var(--i3)' }}> (+5% = {(Math.round(kg.withWastage * 100) / 100).toLocaleString('en-IN')} kg)</span> : null}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
             {!routeDepts.length ? (
               <div className="al al-y">Set the route first.</div>
             ) : !machinesSaved ? (
@@ -490,8 +519,7 @@ export default function JssPlanningPanel() {
                           <th style={{ minWidth: 120 }}>Material Type</th>
                           <th style={{ minWidth: 110 }}>Sub-Group</th>
                           <th style={{ minWidth: 110 }}>Specialty</th>
-                          <th style={{ minWidth: 200 }}>Item</th>
-                          <th style={{ width: 110 }}>Item code</th>
+                          <th style={{ minWidth: 220 }}>Item</th>
                           <th style={{ width: 80 }}>Microns</th>
                           <th style={{ width: 130 }}>Qty / base</th>
                           <th style={{ width: 90 }}>UOM</th>
@@ -529,19 +557,22 @@ export default function JssPlanningPanel() {
                                   </select>
                                 </td>
                                 <td>
-                                  <select style={{ width: '100%' }} aria-label={`BOM item for ${d.departmentName}`}
-                                    value={l.itemId || ''} onChange={(e) => pickItem(i, e.target.value)}>
-                                    <option value="">— select an item —</option>
-                                    {deptItems.length === 0 && (
-                                      <option value="" disabled>no items tagged to {d.departmentName} — tag them in Master Data → Items</option>
-                                    )}
-                                    {sel && !narrowed.some((it) => String(it.id) === String(sel.id)) && (
-                                      <option value={sel.id}>{itemLabel(sel)}</option>
-                                    )}
-                                    {narrowed.map((it) => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
-                                  </select>
+                                  {/* Type-and-search by item NAME — codes are not shown here. */}
+                                  <input list={`bom-items-${d.departmentId}-${i}`} style={{ width: '100%' }}
+                                    aria-label={`BOM item for ${d.departmentName}`}
+                                    placeholder={deptItems.length ? 'type to search…' : `no items tagged to ${d.departmentName} — tag them in Master Data → Items`}
+                                    value={sel ? itemName(sel) : (l._search || '')}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      const hit = narrowed.find((it) => normItem(itemName(it)) === normItem(v))
+                                        || deptItems.find((it) => normItem(itemName(it)) === normItem(v));
+                                      if (hit) pickItem(i, hit.id);
+                                      else setLines((ls) => ls.map((x, j) => (j === i ? { ...x, itemId: '', uom: '', _search: v } : x)));
+                                    }} />
+                                  <datalist id={`bom-items-${d.departmentId}-${i}`}>
+                                    {narrowed.map((it) => <option key={it.id} value={itemName(it)} />)}
+                                  </datalist>
                                 </td>
-                                <td>{sel ? sel.code : '—'}</td>
                                 <td>{sel && sel.microns ? sel.microns : '—'}</td>
                                 <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
                                 {/* Issues 2.0: UOM comes from the item master — not typed. */}

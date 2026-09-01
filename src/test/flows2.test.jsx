@@ -45,7 +45,8 @@ describe('QC — add spec flow', () => {
     const { saved } = renderApp(<QC />, { modules: { jss }, role: 'qc' });
     await screen.findByText(/Add New Spec/);
 
-    await user.type(fieldByLabel('Customer *'), 'NewCust');
+    await user.selectOptions(screen.getByLabelText('Customer'), '__new__');
+    await user.type(screen.getByLabelText('New customer name'), 'NewCust');
     await user.type(fieldByLabel('Job Name *'), 'New Job');
     await user.type(fieldByLabel('Material *'), 'BOPP/PE');   // Material is now required (restored legacy validation)
     await user.click(screen.getByRole('button', { name: /Add Spec/ }));

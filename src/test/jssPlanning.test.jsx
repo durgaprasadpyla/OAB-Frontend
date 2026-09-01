@@ -6,7 +6,7 @@ import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-li
 // dispatch form (manual fallback); A2 carries dispatchForm 'Pouch' (Issues 1.0 #1).
 vi.mock('../data.jsx', () => ({
   useData: () => ({ mods: { jss: [
-    { spec: 'A1', jobName: 'Stay Fresh 100g' },
+    { spec: 'A1', jobName: 'Stay Fresh 100g', width: 250, height: 300, pouchWeight: 5 },
     { spec: 'A2', jobName: 'MAP Pouch 500g', dispatchForm: 'Pouch', group: 'North Group' },
   ] } }),
 }));
@@ -38,7 +38,7 @@ function installFetch() {
       { id: 201, name: 'Print-Roll', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
     ]);
     if (u.includes('/api/master/items')) return res([
-      { id: 1000, code: 'FILM', name: 'Film XYZ', departmentId: 1 },
+      { id: 1000, code: 'FILM', name: 'Film XYZ', departmentId: 1, uom: 'Kgs' },
       { id: 1001, code: 'GLUE', name: 'Turbo Glue', departmentId: 5 },
       { id: 1002, code: 'MISC', name: 'Untagged Thing' },
     ]);
@@ -241,15 +241,18 @@ describe('JssPlanningPanel', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
-    const itemSelect = await screen.findByLabelText('BOM item for Printing');
-    expect(itemSelect.tagName).toBe('SELECT');
-    // Strictly department-related: Printing offers its own item only — no other
-    // department's item, and no untagged catalogue item.
-    expect(within(itemSelect).getByRole('option', { name: /Film XYZ/ })).toBeTruthy();
-    expect(within(itemSelect).queryByRole('option', { name: /Turbo Glue/ })).toBeNull();
-    expect(within(itemSelect).queryByRole('option', { name: /Untagged Thing/ })).toBeNull();
-    fireEvent.change(itemSelect, { target: { value: '1000' } });
-    await waitFor(() => expect(screen.getByText('FILM')).toBeInTheDocument());   // code auto-fills
+    // Type-and-search input showing NAMES (no codes), scoped to the department.
+    const itemInput = await screen.findByLabelText('BOM item for Printing');
+    expect(itemInput.tagName).toBe('INPUT');
+    const dl = document.getElementById(itemInput.getAttribute('list'));
+    const opts = [...dl.querySelectorAll('option')].map((x) => x.value);
+    expect(opts).toContain('Film XYZ');          // Printing's own item, by name
+    expect(opts).not.toContain('Turbo Glue');    // another department's item
+    expect(opts).not.toContain('Untagged Thing');// untagged catalogue item
+    expect(opts.join(' ')).not.toContain('FILM');// codes are not shown here
+    // typing the name picks the item and pulls its UOM from the master
+    fireEvent.change(itemInput, { target: { value: 'Film XYZ' } });
+    await waitFor(() => expect(screen.getByLabelText('Line UOM (from item master)')).toHaveValue('Kgs'));
   });
 
   it('stage filter narrows the machines card to the selected department only', async () => {
@@ -288,5 +291,26 @@ describe('JssPlanningPanel', () => {
     fireEvent.change(grpSel, { target: { value: 'North Group' } });
     expect(screen.getByText('MAP Pouch 500g')).toBeInTheDocument();
     expect(screen.queryByText('Stay Fresh 100g')).toBeNull();
+  });
+  it('shows the JSS pouch figures and computes metres + weight from the base qty', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+
+    // the strip shows the spec's own numbers
+    const strip = await screen.findByLabelText('JSS figures');
+    expect(strip.textContent).toContain('250 mm');
+    expect(strip.textContent).toContain('300 mm');
+    expect(strip.textContent).toContain('5 g');
+
+    // base qty 1000 pouches -> 1000 × 250mm / 1000 = 250 m; 1000 × 5g / 1000 = 5 kg
+    const baseQty = screen.getByText('Base quantity').parentElement.querySelector('input');
+    fireEvent.change(baseQty, { target: { value: '1000' } });
+    const strip2 = screen.getByLabelText('JSS figures');
+    expect(strip2.textContent).toContain('250 m');
+    expect(strip2.textContent).toContain('5 kg');
   });
 });
