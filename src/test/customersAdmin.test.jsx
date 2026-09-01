@@ -15,7 +15,8 @@ describe('Customers admin', () => {
       modules: { customers: [{ customer: 'Acme', dispatchLoc: 'Hyderabad', gstin: '36AB', contactPerson: '', state: 'Telangana' }] },
       role: 'superadmin',
     });
-    await screen.findAllByText('Acme');
+    // wait for the ROW (not just any 'Acme' text — the Manage panel renders first)
+    await screen.findByLabelText('Edit customer Acme');
 
     // the table itself is read-only — no text inputs in its body
     const table = screen.getAllByRole('table')[0];
@@ -37,7 +38,7 @@ describe('Customers admin', () => {
   it('the top form adds a new customer; a blank name is refused', async () => {
     const user = userEvent.setup();
     const { saved } = renderApp(<CustomersAdmin />, { modules: { customers: [{ customer: 'Acme', gstin: '36AB' }] }, role: 'superadmin' });
-    await screen.findAllByText('Acme');
+    await screen.findByLabelText('Edit customer Acme');
 
     // no name → refused, nothing saved
     await user.click(screen.getByRole('button', { name: /Add Customer/ }));
