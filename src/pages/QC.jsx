@@ -22,6 +22,7 @@ const BLANK = {
   group: '', customer: '', subBrand: '', jobName: '', jobType: '', material: '',
   mic: '', gsm: '', filmWidth: '', ups: '', width: '', height: '',
   gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', status: 'Active',
+  groupNew: '', customerNew: '',
 };
 
 // Status -> legacy .tag colour class.
@@ -85,28 +86,23 @@ export default function QC() {
   // cascading Customer picker. (legacy qcPopulateGroups / qcPopulateCustomers)
   const groups = useMemo(() => groupOptions(customers, jss), [customers, jss]);
   const custOptions = useMemo(() => {
-    const fromMaster = custsInGroup(customers, form.group);
+    const g = form.group === '__new__' ? '' : form.group;
+    if (form.group === '__new__') return [];   // a brand-new group has no members yet
+    const fromMaster = custsInGroup(customers, g);
     if (fromMaster.length) return fromMaster;
     // Customer Master unreadable/empty -> offer the customers already on specs.
     const names = new Set();
     jss.forEach((j) => {
       const c = String(j.customer || '').trim();
       if (!c) return;
-      if (!form.group || specGroup(j, customers) === form.group) names.add(c);
+      if (!g || specGroup(j, customers) === g) names.add(c);
     });
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [customers, jss, form.group]);
 
-  // Issues 2.0: Add New Group / Add New Customer right on the JSS form. The new
-  // name is stored on the spec (the Customer Master itself is Super Admin's).
-  function addNewGroup() {
-    const g = window.prompt('New group name:');
-    if (g && g.trim()) setForm((f) => ({ ...f, group: g.trim() }));
-  }
-  function addNewCustomer() {
-    const c = window.prompt('New customer name' + (form.group ? ' (group ' + form.group + ')' : '') + ':');
-    if (c && c.trim()) setForm((f) => ({ ...f, customer: c.trim() }));
-  }
+  // The names actually saved on the spec — "__new__" resolves to the typed name.
+  const effGroup = form.group === '__new__' ? form.groupNew.trim() : form.group.trim();
+  const effCustomer = form.customer === '__new__' ? form.customerNew.trim() : form.customer.trim();
 
   // Auto spec code = 'A' + (max numeric suffix among existing /^A(\d+)$/ specs) + 1.
   const nextSpec = useMemo(() => {
@@ -160,8 +156,8 @@ export default function QC() {
   }
 
   async function addSpec() {
-    const group = form.group.trim();
-    const customer = form.customer.trim();
+    const group = effGroup;
+    const customer = effCustomer;
     const jobName = form.jobName.trim();
     const material = form.material.trim();
     const dispatchForm = form.dispatchForm;
@@ -214,7 +210,7 @@ export default function QC() {
       await save('jss', next);
       setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully. Next spec ready.' });
       // Reset entry fields but keep the group + customer for fast repeat entry.
-      setForm((f) => ({ ...BLANK, group: f.group, customer: f.customer }));
+      setForm((f) => ({ ...BLANK, group: f.group, groupNew: f.groupNew, customer: f.customer, customerNew: f.customerNew }));
     } catch (e) {
       setMsg({ type: 'r', text: 'Save failed: ' + (e && e.message ? e.message : String(e)) });
     } finally {
@@ -288,32 +284,30 @@ export default function QC() {
           <Field label="Spec Code" value={nextSpec} readOnly />
           <div className="fg">
             <label>Group</label>
-            <div style={{ display: 'flex', gap: 5 }}>
-              <select value={form.group} onChange={set('group')} aria-label="Group" style={{ flex: 1 }}>
-                <option value="">— No group —</option>
-                {form.group && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
-                {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-              </select>
-              <button type="button" className="btn btn-s" onClick={addNewGroup} title="Add a new group"
-                aria-label="Add new group" style={{ height: 32, padding: '0 8px', flexShrink: 0 }}>＋ New</button>
-            </div>
+            <select value={form.group} aria-label="Group"
+              onChange={(e) => setForm((f) => ({ ...f, group: e.target.value, customer: '', customerNew: '' }))}>
+              <option value="">— No group —</option>
+              {form.group && form.group !== '__new__' && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
+              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+              <option value="__new__">＋ Add new group…</option>
+            </select>
+            {form.group === '__new__' && (
+              <input placeholder="New group name" value={form.groupNew} aria-label="New group name"
+                style={{ marginTop: 6 }} onChange={set('groupNew')} />
+            )}
           </div>
           <div className="fg">
             <label>Customer *</label>
-            <div style={{ display: 'flex', gap: 5 }}>
-              <input
-                list="qc-cust-options"
-                value={form.customer}
-                onChange={set('customer')}
-                placeholder={form.group ? 'Pick or type a company' : 'Pick or type (or leave to whole group)'}
-                style={{ flex: 1 }}
-              />
-              <button type="button" className="btn btn-s" onClick={addNewCustomer} title="Add a new customer"
-                aria-label="Add new customer" style={{ height: 32, padding: '0 8px', flexShrink: 0 }}>＋ New</button>
-            </div>
-            <datalist id="qc-cust-options">
-              {custOptions.map((c) => <option key={c} value={c} />)}
-            </datalist>
+            <select value={form.customer} aria-label="Customer" onChange={set('customer')}>
+              <option value="">{form.group && form.group !== '__new__' ? '— whole group —' : '— select customer —'}</option>
+              {form.customer && form.customer !== '__new__' && !custOptions.includes(form.customer) && <option value={form.customer}>{form.customer}</option>}
+              {custOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              <option value="__new__">＋ Add new customer…</option>
+            </select>
+            {form.customer === '__new__' && (
+              <input placeholder="New customer name" value={form.customerNew} aria-label="New customer name"
+                style={{ marginTop: 6 }} onChange={set('customerNew')} />
+            )}
           </div>
           <Field label="Sub Brand" value={form.subBrand} onChange={set('subBrand')} />
         </div>
