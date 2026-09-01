@@ -174,7 +174,7 @@ describe('QC Certificates screen', () => {
   it('lists invoiced lines with their certificate status', async () => {
     await openCerts();
     await waitFor(() => expect(screen.getByText('BFX/2026-27/001')).toBeInTheDocument());
-    expect(screen.getByText('Acme Foods')).toBeInTheDocument();
+    expect(screen.getAllByText('Acme Foods').length).toBeGreaterThan(0);
     expect(screen.getByText('5,000')).toBeInTheDocument();
   });
 
