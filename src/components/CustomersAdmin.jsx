@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { exportAOA } from '../lib/xlsx.js';
-import { custGroups } from '../lib/master.js';
+import { custGroups, custsInGroup } from '../lib/master.js';
 import { today } from '../lib/format.js';
 
 // Customers admin (superadmin) — Issues 2.0: works like the old version. A TOP
@@ -30,6 +30,10 @@ export default function CustomersAdmin() {
   // table itself is read-only. "Edit" loads the row into the form; Save writes.
   const [form, setForm] = useState(() => blankRow());
   const [editIdx, setEditIdx] = useState(-1);
+  // "+ Add new group…" / "+ Add new customer…" live INSIDE the dropdowns and
+  // reveal a text field; picking a group populates its customers below.
+  const [groupNew, setGroupNew] = useState('');
+  const [customerNew, setCustomerNew] = useState('');
 
   // Re-sync the read-only copy whenever the server module changes.
   useEffect(() => { setRows(clone(mods.customers || [])); }, [mods.customers]);
@@ -42,6 +46,12 @@ export default function CustomersAdmin() {
     [mods.customers],
   );
 
+  // Customers that belong to the currently picked group (for the cascade).
+  const groupCustomers = useMemo(() => {
+    if (form.group === '__new__') return [];
+    return custsInGroup(mods.customers, form.group);
+  }, [mods.customers, form.group]);
+
   const visible = useMemo(() => {
     const s = q.trim().toLowerCase();
     // Keep original indices so edits map back to the full array.
@@ -51,15 +61,21 @@ export default function CustomersAdmin() {
   const setField = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   function startEdit(i) {
     setForm(clone(rows[i]));
+    setGroupNew(''); setCustomerNew('');
     setEditIdx(i);
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ }
   }
-  function cancelEdit() { setForm(blankRow()); setEditIdx(-1); }
+  function cancelEdit() { setForm(blankRow()); setGroupNew(''); setCustomerNew(''); setEditIdx(-1); }
 
   async function submitForm() {
-    if (!norm(form.customer)) return flash('r', 'Customer name is required.');
+    // Build the row from the form, resolving the "+ add new" pickers.
+    const row = {};
+    COLS.forEach(([k]) => { row[k] = String(form[k] ?? '').trim(); });
+    if (form.group === '__new__') row.group = groupNew.trim();
+    if (form.customer === '__new__') row.customer = customerNew.trim();
+    if (!norm(row.customer)) return flash('r', 'Customer name is required.');
     const next = clone(rows);
-    if (editIdx >= 0) next[editIdx] = clone(form); else next.push(clone(form));
+    if (editIdx >= 0) next[editIdx] = row; else next.push(row);
     setBusy(true);
     try {
       await save('customers', next.filter((r) => norm(r.customer)));
@@ -94,8 +110,37 @@ export default function CustomersAdmin() {
           {COLS.map(([k, label]) => (
             <div className="fg" key={k}>
               <label>{label}</label>
-              <input value={form[k] ?? ''} list={k === 'group' ? 'cust-groups-dl' : undefined}
-                aria-label={'Customer form ' + label.replace(' *', '')} onChange={setField(k)} />
+              {k === 'group' ? (
+                <>
+                  <select value={form.group} aria-label="Customer form Group"
+                    onChange={(e) => setForm((f) => ({ ...f, group: e.target.value }))}>
+                    <option value="">— No group —</option>
+                    {form.group && form.group !== '__new__' && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
+                    {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+                    <option value="__new__">＋ Add new group…</option>
+                  </select>
+                  {form.group === '__new__' && (
+                    <input placeholder="New group name" value={groupNew} aria-label="New group name"
+                      style={{ marginTop: 6 }} onChange={(e) => setGroupNew(e.target.value)} />
+                  )}
+                </>
+              ) : k === 'customer' ? (
+                <>
+                  <select value={form.customer} aria-label="Customer form Customer" onChange={setField('customer')}>
+                    <option value="">— select customer —</option>
+                    {form.customer && form.customer !== '__new__' && !groupCustomers.includes(form.customer) && <option value={form.customer}>{form.customer}</option>}
+                    {groupCustomers.map((c) => <option key={c} value={c}>{c}</option>)}
+                    <option value="__new__">＋ Add new customer…</option>
+                  </select>
+                  {form.customer === '__new__' && (
+                    <input placeholder="New customer name" value={customerNew} aria-label="New customer name"
+                      style={{ marginTop: 6 }} onChange={(e) => setCustomerNew(e.target.value)} />
+                  )}
+                </>
+              ) : (
+                <input value={form[k] ?? ''}
+                  aria-label={'Customer form ' + label.replace(' *', '')} onChange={setField(k)} />
+              )}
             </div>
           ))}
         </div>

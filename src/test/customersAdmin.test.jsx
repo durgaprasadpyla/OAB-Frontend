@@ -45,7 +45,8 @@ describe('Customers admin', () => {
     expect(await screen.findByText(/Customer name is required/)).toBeInTheDocument();
     expect(saved.some((s) => s.id === 4)).toBe(false);
 
-    await user.type(screen.getByLabelText('Customer form Customer'), 'Bharat Foods');
+    await user.selectOptions(screen.getByLabelText('Customer form Customer'), '__new__');
+    await user.type(screen.getByLabelText('New customer name'), 'Bharat Foods');
     await user.type(screen.getByLabelText('Customer form GSTIN'), '29ZZ');
     await user.click(screen.getByRole('button', { name: /Add Customer/ }));
 

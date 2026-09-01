@@ -15,7 +15,7 @@ function res(status, body) {
   return { status, ok: status >= 200 && status < 300, headers: { get: () => 'application/json' }, json: async () => body, text: async () => JSON.stringify(body) };
 }
 
-let depts, created, deptFail;
+let depts, created, deptFail, dtypes, dtCreated;
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('blm_token', 't');
@@ -23,6 +23,8 @@ beforeEach(() => {
   depts = [{ id: 1, name: 'Printing', active: true }, { id: 2, name: 'Slitting', active: true }];
   created = [];
   deptFail = false;
+  dtypes = [{ id: 100, name: 'Pouch', active: true }, { id: 101, name: 'Roll', active: true }];
+  dtCreated = [];
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = (opts.method || 'GET').toUpperCase();
@@ -44,7 +46,17 @@ beforeEach(() => {
       if (method === 'POST') { created.push(body); return res(201, { id: 77, ...body, active: true }); }
       return res(200, [{ id: 70, code: 'P1', name: 'Poucher 1', departmentId: 2, defaultSpeed: 40, speedUom: 'pcs/min', active: true }]);
     }
-    if (u.includes('/rest/v1/oab_data')) { return method === 'GET' ? res(200, []) : res(201, { id: body.id, version: 2 }); }
+    if (u.includes('/api/master/dispatch-types')) {
+      if (method === 'POST') { const t = { id: 200 + dtypes.length, name: body.name, active: true }; dtypes.push(t); dtCreated.push(body.name); return res(201, t); }
+      return res(200, dtypes);
+    }
+    if (u.includes('/rest/v1/oab_data')) {
+      if (method === 'GET') {
+        // Sales blob (module 12) carrying the super admin's FIVE despatch forms.
+        return res(200, [{ id: 12, data: JSON.stringify({ dropdowns: { despatch: ['Pouch', 'Roll', 'Label', 'Shrink Sleeve', 'Bulk Bags'] } }), version: 1 }]);
+      }
+      return res(201, { id: body.id, version: 2 });
+    }
     return res(200, {});
   };
 });
@@ -122,5 +134,11 @@ describe('Drop-down selections → Machines (Issues 1.0 #6)', () => {
     await userEvent.selectOptions(screen.getByLabelText('New machine department'), '2');
     await userEvent.click(screen.getByRole('button', { name: '＋ Add' }));
     await waitFor(() => expect(created.some((c) => c.code === 'SL2' && c.departmentId === 2 && c.speedUom === 'm/min')).toBe(true));
+  });
+  it('syncs the despatch list into the dispatch-type master, so QC sees all five forms', async () => {
+    mount();
+    // on open, the three names missing from the master are created (never deleted)
+    await waitFor(() => expect(dtCreated.sort()).toEqual(['Bulk Bags', 'Label', 'Shrink Sleeve']));
+    expect(dtypes.map((t) => t.name)).toEqual(expect.arrayContaining(['Pouch', 'Roll', 'Label', 'Shrink Sleeve', 'Bulk Bags']));
   });
 });
