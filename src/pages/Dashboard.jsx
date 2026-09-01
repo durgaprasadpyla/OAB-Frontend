@@ -29,7 +29,7 @@ const TABS = [
   { k: 'price', label: '💰 Price Master' },
   { k: 'fgval', label: '💹 FG Value' },
   { k: 'jss', label: '📋 JSS Editor' },
-  { k: 'delete', label: '🗑 Delete SOs' },
+  { k: 'delete', label: '✏ Edit SOs' },
   { k: 'customers', label: '🏢 Customers' },
   { k: 'kam', label: '🎯 Customer KAM & Targets' },
   { k: 'users', label: '👤 Users & Access' },
@@ -885,8 +885,8 @@ function Trends() {
   }, [openRows, jssBySpec]);
 
   function exportByCustomer() {
-    const rows = [['Customer', 'Open SOs', 'PO Qty', 'Balance Qty', 'PO Value (₹)', 'Balance Value (₹)']];
-    byCustomer.forEach((c) => rows.push([c.customer, c.orders, c.poQty, c.balQty, Math.round(c.value), Math.round(c.balValue)]));
+    const rows = [['Customer', 'Open SOs', 'PO Qty', 'PO Value (₹)', 'Balance Qty', 'Balance Value (₹)']];
+    byCustomer.forEach((c) => rows.push([c.customer, c.orders, c.poQty, Math.round(c.value), c.balQty, Math.round(c.balValue)]));
     exportAOA(rows, 'Orders_by_Customer', 'Orders by Customer');
   }
   function exportMaterial() {
@@ -905,10 +905,10 @@ function Trends() {
         </div>
         <div className="tw sy" style={{ maxHeight: 300 }}>
           <table>
-            <thead><tr><th>Customer</th><th style={rt}>Open SOs</th><th style={rt}>PO Qty</th><th style={rt}>Balance Qty</th><th style={rt}>PO Value (₹)</th><th style={rt}>Balance Value (₹)</th></tr></thead>
+            <thead><tr><th>Customer</th><th style={rt}>Open SOs</th><th style={rt}>PO Qty</th><th style={rt}>PO Value (₹)</th><th style={rt}>Balance Qty</th><th style={rt}>Balance Value (₹)</th></tr></thead>
             <tbody>
               {byCustomer.length === 0 ? <tr><td colSpan={6} style={emptyTd}>No open orders</td></tr>
-                : byCustomer.map((c, i) => <tr key={i}><td style={{ fontSize: 11 }}>{c.customer}</td><td style={rt}>{c.orders}</td><td style={rt}>{dash(c.poQty)}</td><td style={rt}>{dash(c.balQty)}</td><td style={rt}>{rupees(c.value, 0)}</td><td style={rt}>{rupees(c.balValue, 0)}</td></tr>)}
+                : byCustomer.map((c, i) => <tr key={i}><td style={{ fontSize: 11 }}>{c.customer}</td><td style={rt}>{c.orders}</td><td style={rt}>{dash(c.poQty)}</td><td style={rt}>{rupees(c.value, 0)}</td><td style={rt}>{dash(c.balQty)}</td><td style={rt}>{rupees(c.balValue, 0)}</td></tr>)}
             </tbody>
           </table>
         </div>

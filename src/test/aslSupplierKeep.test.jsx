@@ -79,21 +79,7 @@ describe('ASL — deleting items keeps suppliers', () => {
     expect(acme[0].certs).toEqual([{ name: 'iso.pdf', type: 'pdf', dataUrl: 'x' }]);   // certs moved, not lost
   });
 
-  it('Clear All Items wipes every item but keeps one row per supplier with details + certs', async () => {
-    mount();
-    await openASL();
-    await screen.findByText('Acme Films');
-    fireEvent.click(screen.getByRole('button', { name: /Clear All Items/ }));
-    saveASL();
-    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
-    const rows = lastSavedAsl();
-    expect(rows).toHaveLength(2);                                     // one row per supplier
-    const acme = rows.find((r) => r.company === 'Acme Films');
-    const bafna = rows.find((r) => r.company === 'Bafna Stores');
-    expect(acme).toMatchObject({ itemCode: '', specificMaterial: '', basicPrice: '', gstn: 'GST1', contact: 'Ravi' });
-    expect(acme.certs).toEqual([{ name: 'iso.pdf', type: 'pdf', dataUrl: 'x' }]);
-    expect(bafna).toMatchObject({ itemCode: '', gstn: 'GST2', contact: 'Meena' });
-  });
+  // Issues 2.0: the "Clear All Items" bulk action was removed on the client's request.
 
   it('header 🗑 Delete removes the whole supplier (all rows) after confirm', async () => {
     mount();
@@ -123,7 +109,6 @@ describe('ASL — deleting items keeps suppliers', () => {
     mount();
     await openASL();
     await screen.findByText('Acme Films');
-    fireEvent.click(screen.getByRole('button', { name: /Clear All Items/ }));
     fireEvent.click(screen.getAllByTitle('Delete item')[0]);
     fireEvent.click(screen.getByTitle('Delete supplier Acme Films'));
     saveASL();

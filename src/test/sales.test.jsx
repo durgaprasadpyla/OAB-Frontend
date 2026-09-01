@@ -221,7 +221,7 @@ const repTab = async (label) => {
 describe('Rep Portal — allocation', () => {
   it('shows a rep only their own customers', async () => {
     await openRep('R1');
-    await repTab('My Customers');
+    await repTab('My Leads');
     await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
     expect(screen.getByText('Gamma Foods')).toBeInTheDocument();
     expect(screen.queryByText('Beta Snacks')).not.toBeInTheDocument();   // R2's lead
@@ -229,7 +229,7 @@ describe('Rep Portal — allocation', () => {
 
   it('shows a shared customer to the other rep with THEIR category only', async () => {
     await openRep('R2');
-    await repTab('My Customers');
+    await repTab('My Leads');
     await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
     const row = screen.getByText('Acme Dairy').closest('tr');
     expect(within(row).getByText('Ice Creams')).toBeInTheDocument();
@@ -273,7 +273,7 @@ describe('Rep Portal — follow-ups', () => {
 describe('Rep Portal — add customer', () => {
   it('saves a lead allocated to the signed-in rep', async () => {
     const { saved } = await openRep('R1');
-    await repTab('Add Customer');
+    await repTab('Add Lead');
     await userEvent.type(screen.getByLabelText('Customer'), 'New Client Ltd');
     await userEvent.click(screen.getByLabelText('Dairy'));
     await userEvent.click(screen.getByLabelText('Oil'));
@@ -288,7 +288,7 @@ describe('Rep Portal — add customer', () => {
 
   it('refuses to save without a category, and does not write', async () => {
     const { saved } = await openRep('R1');
-    await repTab('Add Customer');
+    await repTab('Add Lead');
     await userEvent.type(screen.getByLabelText('Customer'), 'No Category Ltd');
     await userEvent.click(screen.getByText(/Save Customer/));
     expect(screen.getByText(/at least one category/i)).toBeInTheDocument();
@@ -321,7 +321,7 @@ describe('Rep Portal — contacts', () => {
 describe('Rep Portal — stage changes', () => {
   it('writes a stage change back to the blob', async () => {
     const { saved } = await openRep('R1');
-    await repTab('My Customers');
+    await repTab('My Leads');
     await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
 
     await userEvent.selectOptions(screen.getByLabelText('Stage for Acme Dairy'), 'Converted');
@@ -332,7 +332,7 @@ describe('Rep Portal — stage changes', () => {
 
   it('offers every canonical stage', async () => {
     await openRep('R1');
-    await repTab('My Customers');
+    await repTab('My Leads');
     await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
     const opts = [...screen.getByLabelText('Stage for Acme Dairy').options].map((o) => o.value);
     expect(opts).toEqual(REP_STATUSES);

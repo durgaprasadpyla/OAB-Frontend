@@ -17,6 +17,7 @@ import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
 // auto-resolving the route from the dispatch type (Pouch -> route 200 -> Printing, Pouching).
 function installFetch() {
   let cfg = { dispatchTypeId: null, routeId: null };
+  let machines = [];
   const routeDeps = (routeId) => (routeId === 200
     ? [{ seq: 1, departmentId: 1, departmentName: 'Printing' }, { seq: 2, departmentId: 5, departmentName: 'Pouching' }]
     : []);
@@ -51,12 +52,16 @@ function installFetch() {
       };
       return res({ specCode: 'A1', ...cfg });
     }
+    if (u.match(/\/api\/jss\/A\d\/machines$/) && method === 'PUT') {
+      machines = ((Array.isArray(body) ? body : body.machines) || []).map((m) => ({ ...m }));
+      return res({ saved: machines.length });
+    }
     if (u.match(/\/api\/jss\/A\d\/route-departments$/)) return res(routeDeps(cfg.routeId));
     if (u.match(/\/api\/jss\/A\d$/)) return res({
       specCode: 'A1',
       config: { specCode: 'A1', dispatchTypeId: cfg.dispatchTypeId, dispatchTypeName: cfg.dispatchTypeId ? 'Pouch' : null, routeId: cfg.routeId, routeName: cfg.routeId ? 'Print-Pouch' : null },
       routeDepartments: routeDeps(cfg.routeId),
-      machines: [],
+      machines,
     });
     if (u.match(/\/api\/bom\/A\d$/)) return res({ specCode: 'A1', baseQty: 1, baseUom: null, items: [] });
     return res({});
@@ -71,8 +76,8 @@ describe('JssPlanningPanel', () => {
     render(<JssPlanningPanel />);
 
     // pick the JSS spec (the only combobox before a spec is chosen)
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
 
     // the dispatch/route card appears
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
@@ -98,8 +103,8 @@ describe('JssPlanningPanel', () => {
 
   it('shows the Dispatch Form routes as radios and lets the QC pick one (§15)', async () => {
     render(<JssPlanningPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
 
     // pick the Dispatch Form
@@ -122,8 +127,8 @@ describe('JssPlanningPanel', () => {
   // speed with it, and a per-machine setup-time field is offered and saved.
   it('pre-fills job speed with the ideal speed and saves per-machine setup time', async () => {
     render(<JssPlanningPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
     const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
     fireEvent.change(dispatch, { target: { value: '100' } });
@@ -158,8 +163,8 @@ describe('JssPlanningPanel', () => {
   // a speed-unit choice defaulting by department (pcs/min for pouching).
   it('reads the dispatch form from the JSS, auto-picks the base UOM and offers speed units', async () => {
     render(<JssPlanningPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A2' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A2' } });
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
 
     // #1: shown read-only from the JSS — and the config auto-aligns via PUT.
@@ -222,11 +227,17 @@ describe('JssPlanningPanel', () => {
   // Change 11: BOM items are picked from a plain dropdown (no type-and-search).
   it('offers the department BOM items as a dropdown', async () => {
     render(<JssPlanningPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
     const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
     fireEvent.change(dispatch, { target: { value: '100' } });
+
+    // Issues 2.0: the BOM opens only after machines are SAVED — gate shows first.
+    await waitFor(() => expect(screen.getByText(/Save the eligible machines above first|SAVE the eligible machines/i)).toBeInTheDocument());
+    const cb = await screen.findAllByRole('checkbox');
+    fireEvent.click(cb[0]);                                    // tick CI Flexo
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
     await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
@@ -243,8 +254,8 @@ describe('JssPlanningPanel', () => {
 
   it('stage filter narrows the machines card to the selected department only', async () => {
     render(<JssPlanningPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
     await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
     const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
     fireEvent.change(dispatch, { target: { value: '100' } });

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi, jssApi, bomApi } from '../api.js';
 import { bomUOM } from '../lib/bom.js';
+import { custGroups, specGroup } from '../lib/master.js';
 
 // QC JSS planning (Stage 3): pick a JSS spec — its Dispatch Form comes FROM the
 // JSS itself (Issues 1.0 #1, no manual dropdown), which reveals the form's routes
@@ -21,6 +22,7 @@ const deptSpeedUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || 
 export default function JssPlanningPanel() {
   const { mods } = useData();
   const specs = Array.isArray(mods.jss) ? mods.jss : [];
+  const customers = Array.isArray(mods.customers) ? mods.customers : [];
 
   const [master, setMaster] = useState({ departments: [], machines: [], dispatchTypes: [], routes: [], items: [] });
   const [spec, setSpec] = useState('');
@@ -36,6 +38,11 @@ export default function JssPlanningPanel() {
   const [lines, setLines] = useState([]);  // [{ departmentId, itemId, qtyPerBase, uom, search }]
   const [setupMin, setSetupMin] = useState('');   // §22: QC-communicated job setup time
   const [deptFil, setDeptFil] = useState('all');  // stage filter for the machines card
+  // Issues 2.0: the visible JSS list and its group / customer / status / number filters.
+  const [fGroup, setFGroup] = useState('');
+  const [fCust, setFCust] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [fSpec, setFSpec] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -193,6 +200,28 @@ export default function JssPlanningPanel() {
   }
 
   const itemLabel = (it) => `${it.code}${it.name ? ' — ' + it.name : ''}`;
+  // Issues 2.0: the JSS list shown under Route and BOM — filtered, click to open.
+  const groupsList = useMemo(() => custGroups(customers), [customers]);
+  const custNames = useMemo(
+    () => [...new Set(specs.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [specs]);
+  const listRows = useMemo(() => {
+    let list = specs.slice();
+    if (fGroup) list = list.filter((j) => (specGroup(j, customers) || '') === fGroup);
+    if (fCust) list = list.filter((j) => String(j.customer || '').trim() === fCust);
+    if (fStatus) list = list.filter((j) => String(j.status || 'Active') === fStatus);
+    if (fSpec.trim()) list = list.filter((j) => String(j.spec || '').toLowerCase().includes(fSpec.trim().toLowerCase()));
+    return list;
+  }, [specs, customers, fGroup, fCust, fStatus, fSpec]);
+  function openFromList(sp) {
+    const row = specs.find((x) => String(x.spec || '').trim() === sp);
+    setSpecText(`${sp} — ${(row && (row.jobName || row.customer)) || ''}`);
+    setSpec(sp);
+  }
+  // Issues 2.0: machines first, BOM after — the BOM card opens only once at
+  // least one eligible machine has been SAVED for this JSS.
+  const machinesSaved = (jss?.machines || []).some((m) => m.eligible !== false);
+  const distinct = (arr, f) => [...new Set(arr.map((x) => String(x[f] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   // §24-30: under each route department, only the items TAGGED to that department in
   // the item master (plus untagged "others") are offered.
   // Strictly the department's OWN items — untagged catalogue items no longer
@@ -200,12 +229,20 @@ export default function JssPlanningPanel() {
   const itemsForDept = (departmentId) => (master.items || []).filter(
     (it) => String(it.departmentId ?? '') === String(departmentId));
   const itemById = (id) => (master.items || []).find((it) => String(it.id) === String(id));
-  // Change 11: a plain dropdown (no type-and-search) — picking an item also pulls
-  // its UOM in from the item master when the line has none yet.
+  // Issues 2.0: picking an item pulls its UOM straight from the item master
+  // (pieces / Kgs / …) — the line's UOM is not hand-typed. The cascading
+  // dropdown filters snap to the picked item's identity.
   function pickItem(i, id) {
     const found = itemById(id);
-    setLines((l) => l.map((x, j) => (j === i ? { ...x, itemId: found ? found.id : '', uom: x.uom || (found && found.uom) || '' } : x)));
+    setLines((l) => l.map((x, j) => (j === i ? {
+      ...x, itemId: found ? found.id : '', uom: (found && found.uom) || '',
+      _mat: found ? String(found.materialType || '') : x._mat,
+      _sub: found ? String(found.subGroup || '') : x._sub,
+      _spl: found ? String(found.specialtyName || '') : x._spl,
+    } : x)));
   }
+  // Changing a cascade filter clears the picked item so the narrowed list rules.
+  const setLineFil = (i, k, v) => setLines((l) => l.map((x, j) => (j === i ? { ...x, [k]: v, itemId: '', uom: '' } : x)));
 
   return (
     <div>
@@ -224,6 +261,51 @@ export default function JssPlanningPanel() {
           </datalist>
         </div>
       </div>
+
+      {/* Issues 2.0: the JSS list is visible here — filter it, click a row to open. */}
+      {!spec && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="fbar" style={{ flexWrap: 'wrap' }}>
+            <div className="ctitle" style={{ margin: 0 }}>JSS List <span className="tag tgr">{listRows.length}</span></div>
+            <select value={fGroup} onChange={(e) => setFGroup(e.target.value)} aria-label="Filter list by group">
+              <option value="">All Groups</option>
+              {groupsList.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+            <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Filter list by customer">
+              <option value="">All Customers</option>
+              {custNames.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter list by status">
+              <option value="">All Statuses</option>
+              {['Active', 'Sample', 'Inactive', 'Redundant'].map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <input placeholder="JSS number…" value={fSpec} onChange={(e) => setFSpec(e.target.value)}
+              aria-label="Filter list by JSS number" style={{ width: 110 }} />
+          </div>
+          <div className="tw sy" style={{ maxHeight: 320 }}>
+            <table>
+              <thead><tr><th>Spec</th><th>Group</th><th>Customer</th><th>Job Name</th><th>Form</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {listRows.length === 0 ? (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No specs match</td></tr>
+                ) : listRows.map((j) => (
+                  <tr key={j.spec} style={{ cursor: 'pointer' }} onClick={() => openFromList(String(j.spec || '').trim())}>
+                    <td style={{ fontWeight: 600, color: 'var(--g)' }}>{j.spec}</td>
+                    <td>{specGroup(j, customers) || '-'}</td>
+                    <td>{j.customer || '-'}</td>
+                    <td>{j.jobName || '-'}</td>
+                    <td>{j.dispatchForm || '-'}</td>
+                    <td>{j.status || 'Active'}</td>
+                    <td><button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 10px' }}
+                      aria-label={`Open ${j.spec}`}
+                      onClick={(e) => { e.stopPropagation(); openFromList(String(j.spec || '').trim()); }}>Open</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {loading && <div className="card"><div className="spin" /> Loading…</div>}
 
@@ -389,6 +471,8 @@ export default function JssPlanningPanel() {
             </div>
             {!routeDepts.length ? (
               <div className="al al-y">Set the route first.</div>
+            ) : !machinesSaved ? (
+              <div className="al al-b">Select and SAVE the eligible machines above first — the BOM selection opens after the machines are saved.</div>
             ) : routeDepts.map((d) => {
               const deptLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => String(l.departmentId) === String(d.departmentId));
               const deptItems = itemsForDept(d.departmentId);
@@ -402,29 +486,67 @@ export default function JssPlanningPanel() {
                   {deptLines.length === 0 ? <div className="al al-y">No items for this department.</div> : (
                     <div className="tw">
                       <table>
-                        <thead><tr><th>Item</th><th style={{ width: 120 }}>Item code</th><th style={{ width: 160 }}>Qty / base</th><th style={{ width: 120 }}>UOM</th><th style={{ width: 60 }}></th></tr></thead>
+                        <thead><tr>
+                          <th style={{ minWidth: 120 }}>Material Type</th>
+                          <th style={{ minWidth: 110 }}>Sub-Group</th>
+                          <th style={{ minWidth: 110 }}>Specialty</th>
+                          <th style={{ minWidth: 200 }}>Item</th>
+                          <th style={{ width: 110 }}>Item code</th>
+                          <th style={{ width: 80 }}>Microns</th>
+                          <th style={{ width: 130 }}>Qty / base</th>
+                          <th style={{ width: 90 }}>UOM</th>
+                          <th style={{ width: 50 }}></th>
+                        </tr></thead>
                         <tbody>
                           {deptLines.map(({ l, i }) => {
                             const sel = itemById(l.itemId);
+                            // Issues 2.0: the same cascading dropdowns as the old BOM —
+                            // Material Type → Sub-Group → Specialty narrow the item list.
+                            const byMat = l._mat ? deptItems.filter((it) => String(it.materialType || '').trim() === l._mat) : deptItems;
+                            const bySub = l._sub ? byMat.filter((it) => String(it.subGroup || '').trim() === l._sub) : byMat;
+                            const narrowed = l._spl ? bySub.filter((it) => String(it.specialtyName || '').trim() === l._spl) : bySub;
                             return (
                               <tr key={i}>
                                 <td>
-                                  {/* Change 11: dropdown of this department's items — no search. */}
+                                  <select style={{ width: '100%' }} aria-label={`Material type for ${d.departmentName} row`}
+                                    value={l._mat || ''} onChange={(e) => setLineFil(i, '_mat', e.target.value)}>
+                                    <option value="">Any</option>
+                                    {distinct(deptItems, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select style={{ width: '100%' }} aria-label={`Sub group for ${d.departmentName} row`}
+                                    value={l._sub || ''} onChange={(e) => setLineFil(i, '_sub', e.target.value)}>
+                                    <option value="">Any</option>
+                                    {distinct(byMat, 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select style={{ width: '100%' }} aria-label={`Specialty for ${d.departmentName} row`}
+                                    value={l._spl || ''} onChange={(e) => setLineFil(i, '_spl', e.target.value)}>
+                                    <option value="">Any</option>
+                                    {distinct(bySub, 'specialtyName').map((v) => <option key={v} value={v}>{v}</option>)}
+                                  </select>
+                                </td>
+                                <td>
                                   <select style={{ width: '100%' }} aria-label={`BOM item for ${d.departmentName}`}
                                     value={l.itemId || ''} onChange={(e) => pickItem(i, e.target.value)}>
                                     <option value="">— select an item —</option>
                                     {deptItems.length === 0 && (
                                       <option value="" disabled>no items tagged to {d.departmentName} — tag them in Master Data → Items</option>
                                     )}
-                                    {sel && !deptItems.some((it) => String(it.id) === String(sel.id)) && (
+                                    {sel && !narrowed.some((it) => String(it.id) === String(sel.id)) && (
                                       <option value={sel.id}>{itemLabel(sel)}</option>
                                     )}
-                                    {deptItems.map((it) => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
+                                    {narrowed.map((it) => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
                                   </select>
                                 </td>
                                 <td>{sel ? sel.code : '—'}</td>
+                                <td>{sel && sel.microns ? sel.microns : '—'}</td>
                                 <td><input type="number" step="any" value={l.qtyPerBase} onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
-                                <td><input value={l.uom} onChange={(e) => setLine(i, 'uom', e.target.value)} /></td>
+                                {/* Issues 2.0: UOM comes from the item master — not typed. */}
+                                <td><input value={l.uom} readOnly aria-label="Line UOM (from item master)"
+                                  placeholder="auto" style={{ background: 'var(--bg)' }} /></td>
                                 <td><button className="btn btn-r" onClick={() => rmLine(i)}>✕</button></td>
                               </tr>
                             );

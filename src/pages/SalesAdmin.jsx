@@ -35,7 +35,7 @@ const TABS = [
   { k: 'costs', label: '🧪 CSA & Quote' },
   { k: 'pos', label: '📦 All POs' },
   { k: 'targets', label: '🎯 Targets' },
-  { k: 'leads', label: '📈 All Active Customers' },
+  { k: 'leads', label: '📈 Leads' },
   { k: 'contacts', label: '👥 Contacts' },
   { k: 'alloc', label: '🗂 Category Allocation' },
   { k: 'reps', label: '🔐 Users & Access' },
@@ -108,7 +108,7 @@ function Overview({ sales }) {
   return (
     <>
       <div className="stats">
-        <Kpi label="Customers" value={inr(k.total)} />
+        <Kpi label="Leads" value={inr(k.total)} />
         <Kpi label="Hot 🔥" value={inr(k.hot)} color="var(--red)" />
         <Kpi label="Warm" value={inr(k.warm)} color="#c9a100" />
         <Kpi label="Cold ❄️" value={inr(k.cold)} color="#1d4e89" />
@@ -118,7 +118,7 @@ function Overview({ sales }) {
         <Kpi label="Unallocated lines" value={inr(k.unallocated)} color={k.unallocated ? 'var(--red)' : undefined} />
       </div>
       <div className="pg-sub" style={{ marginTop: -6 }}>
-        “Converted” counts customers we have received at least one PO from — evidence, not a stage label.
+        “Converted” counts leads we have received at least one PO from — evidence, not a stage label.
       </div>
 
       <div className="g2" style={{ alignItems: 'start' }}>
@@ -126,7 +126,7 @@ function Overview({ sales }) {
           <div className="ctitle">Rep summary</div>
           <div className="tw sy" style={{ maxHeight: 320 }}>
             <table>
-              <thead><tr><th>Rep</th><th style={{ textAlign: 'right' }}>Customers</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Converted</th><th style={{ textAlign: 'right' }}>Overdue</th></tr></thead>
+              <thead><tr><th>Rep</th><th style={{ textAlign: 'right' }}>Leads</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Converted</th><th style={{ textAlign: 'right' }}>Overdue</th></tr></thead>
               <tbody>
                 {workload.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No active reps</td></tr>
                   : workload.map((r) => (
@@ -171,11 +171,16 @@ function Overview({ sales }) {
   );
 }
 
-/* ─────────────────────────── All customers ─────────────────────────── */
+/* ─────────────────────────── Leads ─────────────────────────── */
 // Category / rep filters, an inline status dropdown the admin can edit (the same
 // field the rep edits on their own dashboard — sdashSetLeadStatus 9492) and an
 // Excel extract of whatever the filters currently show.
 function AllCustomers({ sales, patch }) {
+  // Issues 2.0: everything a rep enters is a LEAD. Only here — under the sadmin
+  // login — can a lead be converted into a customer; conversion writes it into
+  // the Customer Master (module 4), which is the ONLY source the sale-order
+  // screens read. Un-converted leads never reach SO creation.
+  const { mods, save } = useData();
   const [q, setQ] = useState('');
   const [stage, setStage] = useState('');
   const [cat, setCat] = useState('');
@@ -211,8 +216,34 @@ function AllCustomers({ sales, patch }) {
     finally { setBusy(false); }
   }
 
+  const normName = (v) => String(v || '').trim().toLowerCase();
+  const inMaster = (name) => (mods.customers || []).some((c) => normName(c.customer) === normName(name));
+
+  async function convertLead(lead) {
+    const name = String(lead.client_name || '').trim();
+    if (!name) return;
+    if (inMaster(name)) {
+      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: true } : l)) });
+      setMsg({ t: 'g', text: `"${name}" is already in the Customer Master — marked converted.` });
+      return;
+    }
+    if (!window.confirm('Convert lead "' + name + '" to a CUSTOMER?\n\nIt is added to the Customer Master and will appear in sale-order creation from now on.')) return;
+    setBusy(true);
+    try {
+      const row = {
+        group: lead.group || '', customer: name, dispatchLoc: lead.delivery_location || lead.deliveryLocation || '',
+        warehouseName: '', billingAddr: '', shippingAddr: '', gstin: lead.gstin || '', state: '',
+        contactPerson: '', contactPhone: '', contactEmail: '',
+      };
+      await save('customers', [...(mods.customers || []), row]);
+      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: true } : l)) });
+      setMsg({ t: 'g', text: `✅ Lead "${name}" converted to a customer.` });
+    } catch (e) { setMsg({ t: 'r', text: 'Convert failed: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+
   function exportRows() {
-    const header = ['Customer', 'Group', 'Categories', 'Status', 'Payment', 'Owners', 'Head Office', 'Delivery', 'GSTIN', 'Next follow-up'];
+    const header = ['Lead', 'Group', 'Categories', 'Status', 'Payment', 'Owners', 'Head Office', 'Delivery', 'GSTIN', 'Next follow-up'];
     const body = rows.map((l) => {
       const lc = leadCategories(l);
       const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))].filter((n) => n && n !== '—');
@@ -220,14 +251,14 @@ function AllCustomers({ sales, patch }) {
         owners.join(', ') || 'Unassigned', l.head_office || l.city || '', l.delivery_location || '',
         l.gstin || '', nextFollowUp(l, sales.interactions) || ''];
     });
-    exportAOA([header, ...body], 'Active_Customers_' + todayIso());
+    exportAOA([header, ...body], 'Leads_' + todayIso());
   }
 
   return (
     <div className="card">
       <div className="fbar" style={{ flexWrap: 'wrap' }}>
-        <div className="ctitle" style={{ margin: 0 }}>All Active Customers <span className="tag tgr">{rows.length}</span></div>
-        <input placeholder="Search customer / group / city…" value={q} aria-label="Search all customers" onChange={(e) => setQ(e.target.value)} />
+        <div className="ctitle" style={{ margin: 0 }}>Leads <span className="tag tgr">{rows.length}</span></div>
+        <input placeholder="Search lead / group / city…" value={q} aria-label="Search all leads" onChange={(e) => setQ(e.target.value)} />
         <select value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Filter all by category">
           <option value="">All categories</option>
           {cats.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -248,11 +279,12 @@ function AllCustomers({ sales, patch }) {
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
         <table>
           <thead><tr>
-            <th style={{ minWidth: 170 }}>Customer</th><th>Group</th><th>Categories</th><th>Owners</th>
+            <th style={{ minWidth: 170 }}>Lead</th><th>Group</th><th>Categories</th><th>Owners</th>
             <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th style={{ width: 140 }}>Status</th><th style={{ width: 120 }}>Next ping</th>
+            <th style={{ width: 130 }}>Customer</th>
           </tr></thead>
           <tbody>
-            {rows.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No customers match</td></tr>
+            {rows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No leads match</td></tr>
               : rows.map((l) => {
                 const lc = leadCategories(l);
                 const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))]
@@ -276,6 +308,13 @@ function AllCustomers({ sales, patch }) {
                       </select>
                     </td>
                     <td><span style={pill(FOLLOW_UP_STYLE[st.kind])}>{st.kind === 'later' ? fmtDate(st.label) : st.label}</span></td>
+                    <td style={{ textAlign: 'center' }}>
+                      {(l.converted_to_customer || inMaster(l.client_name))
+                        ? <span className="tag tg" title="In the Customer Master">✓ Customer</span>
+                        : <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
+                            aria-label={`Convert ${l.client_name} to customer`}
+                            onClick={() => convertLead(l)}>→ Customer</button>}
+                    </td>
                   </tr>
                 );
               })}
