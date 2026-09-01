@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { rmRatesApi, adminApi, ordersApi, field } from '../api.js';
 import { useApi } from '../lib/useApi.js';
@@ -11,6 +11,7 @@ import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
+import { syncDespatchMaster, storedDespatchList } from '../lib/despatchSync.js';
 import BomPanel from '../components/BomPanel.jsx';
 import KamPanel from '../components/KamPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
@@ -47,6 +48,21 @@ const TABS = [
 /** Superadmin Dashboard — native port of renderDashboard + its sub-panels. */
 export default function Dashboard() {
   const [tab, setTab] = useState('summary');
+  // Issues 2.2 §2: the despatch forms the super admin maintains under Drop-down
+  // selections must exist in the dispatch-type master, which is what QC's Add-JSS
+  // form reads. Backfilling here — on the super admin's landing page — means a list
+  // saved before this existed reaches QC without anyone opening that tab. Creates
+  // missing names only; runs once per mount and never blocks the page.
+  const { mods } = useData();
+  const sales = mods.sales;
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (syncedRef.current) return;
+    const list = storedDespatchList(sales);
+    if (!list.length) return;
+    syncedRef.current = true;
+    syncDespatchMaster(list);
+  }, [sales]);
   return (
     <div id="app">
       <div className="pg-ttl">📊 Business Dashboard</div>

@@ -1,23 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { balance, num } from '../lib/calc.js';
+import { findSpecForRow } from '../lib/master.js';
 import { dash, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import CsaPanel from '../components/CsaPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
-
-// Find the JSS spec record for an OAB row — by spec code (trimmed), else by
-// customer + jobName. (native port of pmFindJSS, legacy index.html ~4759)
-function pmFindJSS(jss, r) {
-  if (!r) return null;
-  if (r.spec) {
-    const bySpec = jss.find((j) => String(j.spec || '').trim() === String(r.spec || '').trim());
-    if (bySpec) return bySpec;
-  }
-  return jss.find((j) => j.customer === r.customer && j.jobName === r.jobName) || null;
-}
 
 // Editable date cell — no CSS rule covers td input[type=date], so size it inline
 // to match the ~26px number/text inputs the stylesheet already styles.
@@ -49,7 +39,7 @@ export default function PM() {
     ['SF', 'OT'].forEach((sheet) => {
       const arr = (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet]) || [];
       arr.filter((r) => !r.closed).forEach((r) => {
-        const j = pmFindJSS(jss, r);
+        const j = findSpecForRow(jss, r);
         const pm = pmData[r.so] || {};
         const disp = num(r.invDisp) + num(r.manDisp);
         const bal = balance(r);
