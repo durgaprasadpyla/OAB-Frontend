@@ -178,7 +178,7 @@ export default function UsersAccess() {
                           title={shown[u.id] != null ? 'Click to hide' : 'Click to reveal'}
                           aria-label={`${shown[u.id] != null ? 'Hide' : 'Show'} password for ${u.username}`}
                           onClick={() => togglePassword(u)}>
-                          {shown[u.id] != null ? shown[u.id] : '••••••••'}
+                          {shown[u.id] != null ? shown[u.id] : (u.password != null ? u.password : '••••••••')}
                         </button>
                       ) : (
                         <span title="Set before the Password column existed — reset it to make it visible" style={{ color: 'var(--i3)' }}>—</span>
@@ -198,7 +198,7 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. Delete removes the login permanently (the last active superadmin, and the account you are signed in with, cannot be deleted). The last active superadmin cannot be disabled or demoted. Click a masked password to reveal it (every reveal is audit-logged); "—" means the password was set before this feature — reset it to make it visible.</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. Delete removes the login permanently (the last active superadmin, and the account you are signed in with, cannot be deleted). The last active superadmin cannot be disabled or demoted. Passwords are read from the database and shown here (each listing is audit-logged). A password set before this feature existed cannot be recovered — it was only ever hashed — so it shows as dots until you reset that account once.</p>
       </div>
 
       {/* §36: the merged sales-user management — separate table, module-wise
