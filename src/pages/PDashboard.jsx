@@ -711,6 +711,27 @@ function ItemMaster() {
     return () => { live = false; };
   }, []);
 
+  // Departments come in AUTOMATICALLY: the normalized item master already tags
+  // items to departments (used by planning/BOM), so rows whose department is
+  // blank pick it up from there by item code. Saving persists the auto-filled
+  // values into the blob; manual choices are never overwritten.
+  const [masterDept, setMasterDept] = useState({});
+  useEffect(() => {
+    let live = true;
+    masterApi.listItems().then((items) => {
+      if (!live || !Array.isArray(items)) return;
+      const map = {};
+      items.forEach((it) => { const c = String(it.code || '').trim(); if (c && it.departmentName) map[c] = it.departmentName; });
+      setMasterDept(map);
+      setExtra((rs) => rs.map((r) => {
+        if (String(r.department || '').trim()) return r;
+        const d = map[String(r.itemCode || '').trim()];
+        return d ? { ...r, department: d } : r;
+      }));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+
   // Distinct items owned by the ASL (identity managed there → read-only reference here). (imMasterList 6795)
   const aslItems = useMemo(() => {
     const seen = new Set(); const out = [];
@@ -835,6 +856,7 @@ function ItemMaster() {
                             ? (
                               <select value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)}>
                                 <option value="">— department —</option>
+                                {r[f.k] && !depts.some((d) => d.name === r[f.k]) && <option value={r[f.k]}>{r[f.k]}</option>}
                                 {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
                               </select>
                             )
@@ -864,7 +886,7 @@ function ItemMaster() {
                 return (
                   <tr key={m.code}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{m.code}</td>
-                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || '-'}</td>)}
+                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || (f.dept && masterDept[m.code]) || '-'}</td>)}
                     <td style={{ fontSize: 11, color: 'var(--i2)' }}>{sups.length ? sups.join(', ') : <span style={{ color: '#c99a2e', fontStyle: 'italic' }}>Not linked</span>}</td>
                   </tr>
                 );

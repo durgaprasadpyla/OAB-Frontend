@@ -108,4 +108,30 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     await waitFor(() => expect(screen.queryByDisplayValue('BOPP Film')).toBeNull());   // filtered out
     expect(screen.getByDisplayValue('Ink Base')).toBeInTheDocument();                  // specialty match kept
   });
+  it('AUTO: blank departments fill themselves from the normalized item master', async () => {
+    itemsExtra = [
+      { itemCode: 'RM-001', specificMaterial: 'BOPP Film', materialType: 'BOPP', subGroup: 'Films', specialty: '', microns: '20', uom: 'KG', department: 'Printing' },
+      { itemCode: 'RM-002', specificMaterial: 'Slit Film', materialType: 'BOPP', subGroup: 'Films', specialty: '', microns: '', uom: 'KG', department: '' },
+    ];
+    const base = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/master/items')) {
+        return res(200, [{ id: 9, code: 'RM-002', name: 'Slit Film', departmentId: 2, departmentName: 'Slitting' }]);
+      }
+      return base(url, opts);
+    };
+    mount();
+    await openItemMaster();
+    // RM-002 had no department -> picked up "Slitting" from the item master
+    await waitFor(() => expect(screen.getAllByDisplayValue('Slitting').length).toBe(1));
+    // RM-001's manual choice is untouched
+    expect(screen.getByDisplayValue('Printing')).toBeInTheDocument();
+
+    // Save persists the auto-filled department into the blob
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    const items = lastSavedItems();
+    expect(items.find((r) => r.itemCode === 'RM-002').department).toBe('Slitting');
+    expect(items.find((r) => r.itemCode === 'RM-001').department).toBe('Printing');
+  });
 });
