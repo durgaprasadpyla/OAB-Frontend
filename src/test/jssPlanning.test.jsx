@@ -38,7 +38,8 @@ function installFetch() {
       { id: 201, name: 'Print-Roll', dispatchTypeId: 100, stages: [{ seq: 1, departmentId: 1, departmentName: 'Printing' }] },
     ]);
     if (u.includes('/api/master/items')) return res([
-      { id: 1000, code: 'FILM', name: 'Film XYZ', departmentId: 1, uom: 'Kgs' },
+      { id: 1000, code: 'FILM', name: 'Film XYZ', departmentId: 1, uom: 'Kgs', materialType: 'BOPP', subGroup: 'Films' },
+      { id: 1003, code: 'BLM700', name: '700', departmentId: 1, uom: 'KG', microns: '51' },
       { id: 1001, code: 'GLUE', name: 'Turbo Glue', departmentId: 5 },
       { id: 1002, code: 'MISC', name: 'Untagged Thing' },
     ]);
@@ -317,5 +318,48 @@ describe('JssPlanningPanel', () => {
     const strip2 = screen.getByLabelText('JSS figures');
     expect(strip2.textContent).toContain('250 m');
     expect(strip2.textContent).toContain('5 kg');
+  });
+  it('choosing an item keeps the narrowing the operator set', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText(/SAVE the eligible machines above first/i)).toBeInTheDocument());
+    fireEvent.click((await screen.findAllByRole('checkbox'))[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
+
+    // narrow by material type, then pick an item the master has NO material type for
+    const mat = await screen.findByLabelText('Material type for Printing row');
+    fireEvent.change(mat, { target: { value: 'BOPP' } });
+    expect(screen.getByLabelText('Material type for Printing row')).toHaveValue('BOPP');
+
+    fireEvent.change(screen.getByLabelText('BOM item for Printing'), { target: { value: '700' } });
+    // the item is selected (its code and microns arrive)…
+    await waitFor(() => expect(screen.getByLabelText('Item code for Printing')).toHaveValue('BLM700'));
+    expect(screen.getByText('51')).toBeInTheDocument();
+    // …and the narrowing the operator set is still there, not reset to Any
+    expect(screen.getByLabelText('Material type for Printing row')).toHaveValue('BOPP');
+  });
+
+  it('typing an item CODE selects the item and pulls its UOM across', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText(/SAVE the eligible machines above first/i)).toBeInTheDocument());
+    fireEvent.click((await screen.findAllByRole('checkbox'))[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
+
+    fireEvent.change(await screen.findByLabelText('Item code for Printing'), { target: { value: 'BLM700' } });
+    await waitFor(() => expect(screen.getByLabelText('BOM item for Printing')).toHaveValue('700'));
+    expect(screen.getByLabelText('Line UOM (from item master)')).toHaveValue('KG');
   });
 });
