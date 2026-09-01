@@ -52,6 +52,21 @@ export default function NewPO() {
 
   const warehouse = loc ? (getCustByLoc(mods.customers, customer, loc) || {}).warehouseName || '' : '';
 
+  // Issues 3.0 §5: the order value is quoted the way the tax invoice states it —
+  // base (taxable) value, the GST on it, and the gross. 18% is the rate the invoice
+  // document uses (InvoiceDoc / gstBreakup), so the preview and the bill agree.
+  const GST_PCT = 18;
+  const withGst = (base) => base * (1 + GST_PCT / 100);
+
+  // Issues 3.0 §6: every SO row already in the OAB carrying this PO number
+  // (case- and space-insensitive, across both sheets).
+  function poDupes(po) {
+    const key = String(po || '').trim().toLowerCase();
+    if (!key) return [];
+    return ['SF', 'OT'].flatMap((k) => ((mods.oab && mods.oab.OAB && mods.oab.OAB[k]) || []))
+      .filter((r) => String(r.poNum || '').trim().toLowerCase() === key);
+  }
+
   function onCustomer(cu) {
     setCustomer(cu);
     setSkus([]);
@@ -73,6 +88,15 @@ export default function NewPO() {
     if (!poDate) return alert('Enter PO Date');
     if (!customer) return alert('Select Customer');
     if (!loc.trim()) return alert('Select / enter Dispatch Location');
+    // Issues 3.0 §6: the same PO raised twice is the commonest duplicate-SO cause.
+    // Warn — don't block: a genuine amendment / second batch against one customer PO
+    // is legitimate, so the operator decides.
+    const dupes = poDupes(poNum);
+    if (dupes.length && !window.confirm(
+      `PO Number is already in OAB. Do you want to continue?\n\n`
+      + `PO ${poNum.trim()} is already on ${dupes.length} sales order${dupes.length > 1 ? 's' : ''}: `
+      + dupes.slice(0, 8).map((r) => r.so).join(', ') + (dupes.length > 8 ? ', …' : '')
+      + `\nCustomer: ${dupes[0].customer || '—'}`)) return;
     // Only ACTIVE specs are orderable, and only those this customer may see under the
     // group rules — a redundant or another company's spec must not appear at all.
     // (buildSKUTable / specVisibleTo)
@@ -193,7 +217,15 @@ export default function NewPO() {
         <div className="card">
           <div className="ctitle">Purchase Order Details</div>
           <div className="g4">
-            <div className="fg"><label>PO Number *</label><input value={poNum} onChange={(e) => setPoNum(e.target.value)} placeholder="e.g. OK-21631114" /></div>
+            <div className="fg"><label>PO Number *</label><input value={poNum} onChange={(e) => setPoNum(e.target.value)} placeholder="e.g. OK-21631114" />
+              {/* Issues 3.0 §6: flagged as you type as well as on Next, so a duplicate
+                  PO is obvious before any SKU work is done. */}
+              {poDupes(poNum).length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600, marginTop: 3 }}>
+                  ⚠ PO Number is already in OAB — {poDupes(poNum).map((r) => r.so).slice(0, 4).join(', ')}{poDupes(poNum).length > 4 ? ', …' : ''}
+                </div>
+              )}
+            </div>
             <div className="fg"><label>PO Date *</label><input type="date" value={poDate} onChange={(e) => setPoDate(e.target.value)} /></div>
             <div className="fg"><label>PO Expiry</label><input type="date" value={poExp} onChange={(e) => setPoExp(e.target.value)} /></div>
             {/* Read-only: the server assigns the real SO numbers atomically on submit,
@@ -283,6 +315,21 @@ export default function NewPO() {
               </tbody>
             </table>
           </div>
+          {/* Issues 3.0 §5: the order value as you build it — base (pre-GST) price,
+              the GST on it and the gross, so both figures are on screen before Review. */}
+          {(() => {
+            const chosen = skus.filter((x) => x.checked && num(x.qty) > 0);
+            const base = chosen.reduce((t, x) => t + num(x.qty) * getPM(x.spec, mods.prices).price, 0);
+            return (
+              <div className="al al-y" style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center', marginTop: 10 }}>
+                <span><strong>{chosen.length}</strong> SKU{chosen.length === 1 ? '' : 's'} selected</span>
+                <span>Total Qty: <strong>{dash(chosen.reduce((t, x) => t + num(x.qty), 0))}</strong></span>
+                <span>Base Value (without GST): <strong>{rupees(base)}</strong></span>
+                <span>GST @ {GST_PCT}%: <strong>{rupees(withGst(base) - base)}</strong></span>
+                <span>Total (with GST): <strong style={{ color: 'var(--g)' }}>{rupees(withGst(base))}</strong></span>
+              </div>
+            );
+          })()}
           <div className="act">
             <button className="btn btn-s" onClick={() => setStep(1)}>← Back</button>
             <button className="btn btn-g" onClick={goStep3}>Review →</button>
@@ -299,15 +346,19 @@ export default function NewPO() {
               <thead><tr>
                 <th>SO#</th><th>Spec</th><th style={{ minWidth: 170 }}>Job Name</th><th>Type</th>
                 <th>Customer</th><th>Location</th><th>PO#</th><th>Date</th><th style={{ textAlign: 'right' }}>Qty</th>
-                <th style={{ width: 50 }}>UOM</th><th style={{ textAlign: 'right' }}>Rate (₹)</th>
-                <th style={{ textAlign: 'right' }}>Total (₹) <span style={{ fontWeight: 400 }}>incl. 18% GST</span></th>
+                <th style={{ width: 50 }}>UOM</th>
+                <th style={{ textAlign: 'right' }}>Base Price (₹) <span style={{ fontWeight: 400 }}>per unit</span></th>
+                <th style={{ textAlign: 'right' }}>Base Value (₹) <span style={{ fontWeight: 400 }}>without GST</span></th>
+                <th style={{ textAlign: 'right' }}>Total (₹) <span style={{ fontWeight: 400 }}>with {GST_PCT}% GST</span></th>
               </tr></thead>
               <tbody>
                 {/* Rate is re-read from the Price Master here (not carried from step 2)
                     so the Confirm step is a second, independent price verification.
-                    Total = PO qty × rate × 1.18 (18% GST), matching the tax invoice. */}
+                    Issues 3.0 §5: the base (pre-GST) price and value are shown alongside
+                    the GST-inclusive total, matching how the tax invoice states them. */}
                 {selPO.map((r) => {
                   const rate = getPM(r.spec, mods.prices).price;
+                  const base = num(r.poQty) * rate;
                   return (
                     <tr key={r.so}>
                       <td><span className="so-pill">{r.so}</span></td>
@@ -320,19 +371,35 @@ export default function NewPO() {
                       <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g)' }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rate > 0 ? rupees(num(r.poQty) * rate * 1.18) : '-'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? rupees(base) : '-'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rate > 0 ? rupees(withGst(base)) : '-'}</td>
                     </tr>
                   );
                 })}
               </tbody>
+              {/* Issues 3.0 §5: the grand total is stated twice — without GST and with
+                  GST — with the tax between them, so both figures are read off directly. */}
               <tfoot>
-                <tr>
-                  <td colSpan={11} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (incl. 18% GST)</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>
-                    {rupees(selPO.reduce((t, r) => t + num(r.poQty) * getPM(r.spec, mods.prices).price * 1.18, 0))}
-                  </td>
-                </tr>
+                {(() => {
+                  const base = selPO.reduce((t, r) => t + num(r.poQty) * getPM(r.spec, mods.prices).price, 0);
+                  return (
+                    <>
+                      <tr>
+                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (without GST)</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(base)}</td>
+                      </tr>
+                      <tr>
+                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>GST @ {GST_PCT}%</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>{rupees(withGst(base) - base)}</td>
+                      </tr>
+                      <tr>
+                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (with {GST_PCT}% GST)</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rupees(withGst(base))}</td>
+                      </tr>
+                    </>
+                  );
+                })()}
               </tfoot>
             </table>
           </div>

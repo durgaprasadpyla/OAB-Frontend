@@ -32,7 +32,6 @@ export default function Invoice() {
   const [pendInv, setPendInv] = useState(null);
   const [savedLastN, setSavedLastN] = useState(null);   // numeric tail of the last saved invoice no.
   const [showProforma, setShowProforma] = useState(false);
-  const [autoPdf, setAutoPdf] = useState(false);
   // Packing list (restored — it was lost in the one-step-Generate rewrite): bag
   // ranges per invoice line, editable in the printable modal and persisted onto
   // the saved invoice so the register re-opens it with its ranges intact.
@@ -210,8 +209,12 @@ export default function Invoice() {
     finally { setPdfBusy(false); }
   }
 
-  // Re-open a register invoice into the preview (and optionally auto-download).
-  function loadRegister(entry, pdf = false) {
+  // Re-open a register invoice into the preview. Issues 3.0 §4: opening an invoice
+  // from the register NEVER writes a file — it only shows the sheet, with Save as
+  // PDF / Print sitting above it. The old ⬇ PDF button downloaded (and the browser
+  // then opened) the file just for looking at an invoice, which is not what anyone
+  // clicking "verify" wanted.
+  function loadRegister(entry) {
     const hdr = {
       ivNo: entry.no, ivDt: entry.date, po: entry.po, customer: entry.customer, placeOfSupply: entry.pos,
       billingAddr: entry.billingAddr, shippingAddr: entry.shipAddr, contactPerson: entry.contact, contactNo: entry.contactNo,
@@ -221,19 +224,11 @@ export default function Invoice() {
     setPendInv(lns.length ? lns : null);
     setH((x) => ({ ...x, ...hdr }));
     setPlItems(entry.packingList || []);   // saved bag ranges travel with the entry
-    setAutoPdf(pdf);
     // Bring the preview into view. Without this the invoice renders above the
     // register but below the current scroll position, so it looks like nothing
     // happened and users refreshed to "escape" (§16). Viewing only, not download.
-    if (!pdf) { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
   }
-
-  useEffect(() => {
-    if (autoPdf && pendInv && docRef.current) {
-      saveInvoicePdf(docRef.current, h.ivNo || 'invoice', h.customer).catch(() => { /* ignore */ });
-      setAutoPdf(false);
-    }
-  }, [autoPdf, pendInv, h.ivNo, h.customer]);
 
   return (
     <div id="app">
@@ -364,14 +359,14 @@ export default function Invoice() {
       <Register
         po={h.po}
         register={register}
-        onView={(e) => loadRegister(e, false)}
-        onPdf={(e) => loadRegister(e, true)}
+        onView={(e) => loadRegister(e)}
+        onPdf={(e) => loadRegister(e)}
         // The register's 📦 button opens the invoice and its saved packing list —
         // it must work on an invoice that is not currently in the builder. No saved
         // list yet → seed one section per invoice line (pre-filled from the spec's
         // Qty per Bag when it has one), same as Create Packing List.
         onPackingList={(e) => {
-          loadRegister(e, false);
+          loadRegister(e);
           if (!(e.packingList || []).length) {
             setPlItems(buildAutoPackingList(e.items || [], qtyPerBagOf));
           }
@@ -567,7 +562,11 @@ function Register({ po, register, onView, onPdf, onPackingList }) {
                       <CertBadge inv={e} type="fg" label="FG" onDownload={downloadCert} />
                     </td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`} onClick={() => onPdf(e)}>⬇ PDF</button>
+                      {/* Issues 3.0 §4: opens the invoice sheet for review — the Save as
+                          PDF / Print buttons above it are what actually write a file. */}
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`PDF for ${e.no}`}
+                        title="Open this invoice — then use Save as PDF or Print. Nothing is downloaded until you do."
+                        onClick={() => onPdf(e)}>📄 PDF</button>
                     </td>
                     <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                       {/* Restored: open (or start) this invoice's packing list. A green

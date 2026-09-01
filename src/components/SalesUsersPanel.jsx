@@ -89,7 +89,7 @@ export default function SalesUsersPanel({ sales, patch, showPasswords = false })
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         <div className="tw sy" style={{ maxHeight: 360 }}>
           <table>
-            <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th style={{ minWidth: 160 }}>Password</th><th style={{ minWidth: 140 }}>Modules</th><th style={{ width: 140 }}>Status</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th style={{ minWidth: 160 }}>Password</th><th style={{ minWidth: 200 }}>Modules</th><th style={{ width: 140 }}>Status</th><th style={{ textAlign: 'right' }}>Lines</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
               {filtered.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sales users match</td></tr>
                 : filtered.map((r) => {
@@ -113,10 +113,13 @@ export default function SalesUsersPanel({ sales, patch, showPasswords = false })
                           {moduleSummary(r)} ▾
                         </button>
                         {editModules === r.id && (
-                          <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          /* Issues 3.0 §3: a bordered panel on its own grid — the old
+                             bare column squeezed every caption onto its own tick. */
+                          <div className="mod-alloc" role="group" aria-label={`Modules for ${r.display_name}`}>
                             {REP_MODULES.map((m) => (
                               <label key={m.k} className="cb" style={{ fontSize: 11 }}>
-                                <input type="checkbox" checked={repModulesOf(r).includes(m.k)} onChange={() => toggleRepModule(r, m.k)} /> {m.label}
+                                <input type="checkbox" checked={repModulesOf(r).includes(m.k)} onChange={() => toggleRepModule(r, m.k)} />
+                                <span>{m.label}</span>
                               </label>
                             ))}
                           </div>
@@ -158,10 +161,13 @@ export default function SalesUsersPanel({ sales, patch, showPasswords = false })
         </div>
         <div className="fg">
           <label>Module allocation (§ which Sales Portal tabs this user gets)</label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingTop: 4 }}>
+          {/* Issues 3.0 §3: same panel as the row editor — a wrapping flex row let the
+              captions run under each other's ticks, which is what made this unreadable. */}
+          <div className="mod-alloc" role="group" aria-label="Module allocation">
             {REP_MODULES.map((m) => (
               <label key={m.k} className="cb" style={{ fontSize: 12 }}>
-                <input type="checkbox" checked={formModules.has(m.k)} onChange={() => toggleFormModule(m.k)} /> {m.label}
+                <input type="checkbox" checked={formModules.has(m.k)} onChange={() => toggleFormModule(m.k)} />
+                <span>{m.label}</span>
               </label>
             ))}
           </div>

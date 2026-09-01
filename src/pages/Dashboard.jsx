@@ -751,10 +751,16 @@ function DeleteSOs() {
   // spec's values, not the copy stored on the row when the SO was created, so a repointed
   // spec shows the right SKU here too (mirrors OabBoard's openRows enrichment).
   const jssBySpec = useMemo(() => { const m = {}; (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; }); return m; }, [mods.jss]);
-  const rows = ['SF', 'OT'].flatMap((key) => (mods.oab?.OAB?.[key] || []).map((r) => {
+  // Issues 3.0 §7: only LIVE orders are listed. A closed SO is finished business —
+  // editing or deleting one is not something this tab is for, and the closed rows
+  // (the bulk of the OAB) buried the handful that can actually be worked on.
+  const allRows = ['SF', 'OT'].flatMap((key) => (mods.oab?.OAB?.[key] || []).map((r) => {
     const j = jssBySpec[r.spec];
     return j ? { ...r, _key: key, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand, jobName: j.jobName || r.jobName } : { ...r, _key: key };
-  }))
+  }));
+  const closedCount = allRows.filter((r) => r.closed).length;
+  const rows = allRows
+    .filter((r) => !r.closed)
     .filter((r) => !q || [r.so, r.customer, r.jobName, r.spec].some((v) => String(v || '').toLowerCase().includes(q.toLowerCase())));
 
   // Delete goes through the granular server endpoint, not a whole-blob save: the
@@ -820,16 +826,21 @@ function DeleteSOs() {
   return (
     <div className="card">
       <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>Delete Sales Orders</div>
+        <div className="ctitle" style={{ margin: 0 }}>Delete / Edit Sales Orders <span className="tag tgr" style={{ fontSize: 9 }}>{rows.length} live</span></div>
         <input placeholder="Search SO / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="al al-y">Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit Spec to move an order to a different spec (its SKU, customer and sub-brand follow the new spec) or ✎ Edit PO# to correct the PO number, PO date or dispatch location — without deleting the order.</div>
+      <div className="al al-y">Only <strong>live (open)</strong> sales orders are listed{closedCount ? <> — {closedCount} closed order{closedCount === 1 ? '' : 's'} {closedCount === 1 ? 'is' : 'are'} hidden because a closed order cannot be edited or deleted here</> : null}. Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit Spec to move an order to a different spec (its SKU, customer and sub-brand follow the new spec) or ✎ Edit PO# to correct the PO number, PO date or dispatch location — without deleting the order.</div>
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
-          <thead><tr><th>SO</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>SO</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th><th></th></tr></thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+                {q ? 'No live sales orders match your search' : 'No live sales orders — every order in the OAB is closed'}
+              </td></tr>
+            )}
             {rows.map((r, i) => (
-              <tr key={i}><td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td><td>{r._key}</td><td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td><td style={{ fontSize: 11 }}>{r.customer}</td><td style={{ fontSize: 11 }}>{r.jobName}</td><td style={{ fontSize: 11 }}>{r.poNum || '-'}</td><td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td><td style={{ textAlign: 'right' }}>{dash(r.poQty)}</td><td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(num(r.invDisp) + num(r.manDisp))}</td><td>{r.closed ? <span className="tag tg" style={{ fontSize: 9 }}>Closed</span> : <span className="tag ty" style={{ fontSize: 9 }}>Open</span>}</td>
+              <tr key={i}><td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td><td>{r._key}</td><td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td><td style={{ fontSize: 11 }}>{r.customer}</td><td style={{ fontSize: 11 }}>{r.jobName}</td><td style={{ fontSize: 11 }}>{r.poNum || '-'}</td><td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td><td style={{ textAlign: 'right' }}>{dash(r.poQty)}</td><td style={{ textAlign: 'right', color: 'var(--g)' }}>{dash(num(r.invDisp) + num(r.manDisp))}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editSpec(r)}>✎ Edit Spec</button>
                   <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px', marginRight: 6 }} disabled={busy} onClick={() => editPO(r)}>✎ Edit PO#</button>
