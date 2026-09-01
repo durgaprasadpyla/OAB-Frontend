@@ -18,21 +18,24 @@ describe('Customers admin', () => {
     // wait for the ROW (not just any 'Acme' text — the Manage panel renders first)
     await screen.findByLabelText('Edit customer Acme');
 
-    // the table itself is read-only — no text inputs in its body
+    // the table itself is read-only — the only inputs in its body are the
+    // radio Edit selectors (like the Item Master)
     const table = screen.getAllByRole('table')[0];
-    expect([...table.querySelectorAll('tbody input')]).toHaveLength(0);
+    expect([...table.querySelectorAll('tbody input')].every((i) => i.type === 'radio')).toBe(true);
 
     await user.click(screen.getByLabelText('Edit customer Acme'));
     const gstin = screen.getByLabelText('Customer form GSTIN');
     expect(gstin).toHaveValue('36AB');
     await user.clear(gstin);
     await user.type(gstin, '36XYZ9');
+    // Remarks: free text saved with the customer
+    await user.type(screen.getByLabelText('Customer form Remarks'), 'Prefers morning deliveries');
     await user.click(screen.getByRole('button', { name: /Update Customer/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 4)).toBe(true));
     const cust = saved.find((s) => s.id === 4).data;
     expect(cust).toHaveLength(1);
-    expect(cust[0]).toMatchObject({ customer: 'Acme', gstin: '36XYZ9', state: 'Telangana' });
+    expect(cust[0]).toMatchObject({ customer: 'Acme', gstin: '36XYZ9', state: 'Telangana', remarks: 'Prefers morning deliveries' });
   });
 
   it('the top form adds a new customer; a blank name is refused', async () => {
