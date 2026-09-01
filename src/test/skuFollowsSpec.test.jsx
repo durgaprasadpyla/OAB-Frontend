@@ -33,7 +33,7 @@ describe('SKU name follows the current spec (stale-SKU-after-spec-change fix)', 
     const user = userEvent.setup();
     renderApp(<Dashboard />, { modules: { oab: oabModule({ SF: [staleRow] }), jss, customers: [{ customer: 'Acme' }] }, role: 'superadmin' });
 
-    await user.click(screen.getByText('🗑 Delete SOs'));
+    await user.click(screen.getByText('✏ Edit SOs'));
     expect(await screen.findByText('FRESH SKU 1335')).toBeInTheDocument();
     expect(screen.queryByText('STALE SKU 1362')).not.toBeInTheDocument();
   });
@@ -57,7 +57,7 @@ describe('SKU name follows the current spec (stale-SKU-after-spec-change fix)', 
     const reassignRow = { so: '26/900', spec: '1362', jobName: 'Old 1362 SKU', customer: 'Old Co', dispatchForm: 'Pouch', poQty: 1000, invDisp: 0, manDisp: 0, fg: 0, poDate: '2026-08-01' };
     const { saved } = renderApp(<Dashboard />, { modules: { oab: oabModule({ SF: [reassignRow] }), jss, customers: [{ customer: 'Acme' }] }, role: 'superadmin' });
 
-    await user.click(screen.getByText('🗑 Delete SOs'));
+    await user.click(screen.getByText('✏ Edit SOs'));
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('1335');
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     await user.click(await screen.findByRole('button', { name: /Edit Spec/ }));
@@ -76,7 +76,7 @@ describe('SKU name follows the current spec (stale-SKU-after-spec-change fix)', 
     const reassignRow = { so: '26/901', spec: '1362', jobName: 'Old 1362 SKU', customer: 'Old Co', dispatchForm: 'Pouch', poQty: 1000, invDisp: 0, manDisp: 0, fg: 0, poDate: '2026-08-01' };
     const { saved } = renderApp(<Dashboard />, { modules: { oab: oabModule({ SF: [reassignRow] }), jss, customers: [{ customer: 'Acme' }] }, role: 'superadmin' });
 
-    await user.click(screen.getByText('🗑 Delete SOs'));
+    await user.click(screen.getByText('✏ Edit SOs'));
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('9999');   // not in JSS
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     await user.click(await screen.findByRole('button', { name: /Edit Spec/ }));

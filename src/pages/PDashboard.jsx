@@ -301,7 +301,8 @@ const GKEY = (r) => r.company || '(unnamed supplier)';
 const ASL_ITEM_FIELDS = ['itemCode', 'materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'basicPrice', 'moq', 'leadTime', 'specialty', 'department'];
 const blankItemFields = (r) => { const n = { ...r }; ASL_ITEM_FIELDS.forEach((f) => { n[f] = ''; }); n.status = 'Active'; return n; };
 const blankSupplier = () => ({ company: '', contact: '', phone: '', contact2: '', phone2: '', email: '', address: '', pincode: '', gstn: '', speciality: '', transportCharges: '', paymentTerms: '', materialType: '', subGroup: '', microns: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', moq: '', leadTime: '', status: 'Active' });
-const supLabel = { fontSize: 9.5, color: 'var(--i3)', fontWeight: 700, display: 'block' };
+const supLabel = { fontSize: 11.5, color: 'var(--i2)', fontWeight: 700, display: 'block', marginBottom: 2 };
+const supInput = { width: '100%', fontSize: 13, height: 32 };
 
 function ASLEditor() {
   const { mods, save } = useData();
@@ -415,25 +416,6 @@ function ASLEditor() {
     flash('g', `✓ ${company} removed. Click “Save ASL” to persist.`);
   }
 
-  // Bulk: delete every item row but keep one item-less row per supplier (details + certs).
-  function clearAllItems() {
-    if (!rows.length) return;
-    if (!window.confirm(`Delete ALL ${rows.length} item row(s) from the Approved Supplier List?\n\nAll ${groups.length} supplier(s) — details and certifications — will be kept.\n\nNothing is persisted until you click “Save ASL”.`)) return;
-    setRows((rs) => {
-      const keptAt = {}; const out = [];
-      rs.forEach((r) => {
-        const c = GKEY(r);
-        if (c in keptAt) {
-          if (Array.isArray(r.certs) && r.certs.length) { const k = keptAt[c]; out[k] = { ...out[k], certs: [...arr(out[k].certs), ...r.certs] }; }
-          return;
-        }
-        keptAt[c] = out.length; out.push(blankItemFields(r));
-      });
-      return out;
-    });
-    flash('g', '✓ All items removed — suppliers kept. Click “Save ASL” to persist.');
-  }
-
   async function saveAll() {
     setBusy(true);
     try {
@@ -500,6 +482,10 @@ function ASLEditor() {
     catch (e) { flash('r', 'Save failed: ' + e.message); }
   }
 
+  // Issues 2.0: only the item CODE (picker) and the supplier commercials (price,
+  // MOQ, lead time) are editable here. The item's identity — description,
+  // material type, sub-group, microns, UOM — is owned by the Item Master tab.
+  const ASL_EDITABLE = new Set(['itemCode', 'basicPrice', 'moq', 'leadTime']);
   const itemInp = (idx, c, r) => (
     c.k === 'itemCode' ? (
       // Dropdown of known codes; picking (or typing) an existing one pulls the
@@ -507,9 +493,11 @@ function ASLEditor() {
       <input list="asl-item-codes" value={r.itemCode ?? ''} placeholder="type to search…"
         aria-label={`Item code row ${idx + 1}`}
         onChange={(e) => setItemCode(idx, e.target.value)} style={{ minWidth: c.w }} />
-    ) : (
+    ) : ASL_EDITABLE.has(c.k) ? (
       <input type={c.numeric ? 'number' : 'text'} step={c.numeric ? '0.01' : undefined} value={r[c.k] ?? ''}
         onChange={(e) => setItemCell(idx, c.k, e.target.value)} style={{ minWidth: c.w, ...(c.numeric ? rt : null) }} />
+    ) : (
+      <span title="Edit this in the Item Master tab" style={{ display: 'inline-block', minWidth: c.w, fontSize: 12, color: 'var(--i2)', padding: '4px 2px' }}>{r[c.k] || '—'}</span>
     )
   );
 
@@ -525,7 +513,6 @@ function ASLEditor() {
         </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={() => setNewOpen((o) => !o)}>{newOpen ? '✕ Cancel' : '＋ Add Supplier'}</button>
-        <button className="btn btn-s" style={{ color: 'var(--red)' }} onClick={clearAllItems} disabled={!rows.some((r) => String(r.itemCode || '').trim() || String(r.specificMaterial || '').trim())} title="Delete every item row but keep all suppliers">🗑 Clear All Items</button>
         <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save ASL'}</button>
       </div>
@@ -545,7 +532,7 @@ function ASLEditor() {
             {ASL_NEW_FIELDS.map((f) => (
               <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
                 <label style={supLabel}>{f.label}</label>
-                <input value={newSup[f.k] ?? ''} onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={{ width: '100%' }} />
+                <input value={newSup[f.k] ?? ''} onChange={(e) => setNewSup((s) => ({ ...s, [f.k]: e.target.value }))} style={supInput} />
               </div>
             ))}
           </div>
@@ -596,7 +583,7 @@ function ASLEditor() {
                   {ASL_DETAIL_FIELDS.map((f) => (
                     <div key={f.k} style={f.span ? { gridColumn: 'span ' + f.span } : undefined}>
                       <label style={supLabel}>{f.label}</label>
-                      <input value={first[f.k] ?? ''} onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={{ width: '100%' }} />
+                      <input value={first[f.k] ?? ''} onChange={(e) => setSupField(g.company, f.k, e.target.value)} style={supInput} />
                     </div>
                   ))}
                 </div>
@@ -650,7 +637,7 @@ function ASLEditor() {
                     })}
                     <tr><td colSpan={ASL_ITEM_COLS.length + 2} style={{ padding: 6 }}>
                       <button className="btn btn-s" onClick={() => addItemToGroup(g.company)}>＋ Add Item</button>
-                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Type a known Item Code to pick it from the dropdown — the row fills itself. Identity is also editable in the Item Master tab.</span>
+                      <span className="pg-sub" style={{ margin: '0 0 0 10px', display: 'inline' }}>Type a known Item Code to pick it from the dropdown — the row fills itself. The item's identity is edited only in the Item Master tab.</span>
                     </td></tr>
                   </tbody>
                 </table>
@@ -750,9 +737,41 @@ function ItemMaster() {
     [aslItems, extra],
   );
 
-  const setCell = (i, f, v) => setExtra((rs) => rs.map((r, j) => (j === i ? { ...r, [f]: v } : r)));
-  function addItem() { setExtra((rs) => [...rs, { itemCode: nextItemCode(asl, rs), specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' }]); }
-  function delItem(i) { setExtra((rs) => rs.filter((_, j) => j !== i)); }
+  // Issues 2.0: nothing is edited in the table directly. A TOP FORM (like the
+  // Add-New-Supplier page) adds items; a radio picks a row to edit in that form.
+  const blankItem = () => ({ itemCode: '', specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' });
+  const [imForm, setImForm] = useState(blankItem);
+  const [imEditIdx, setImEditIdx] = useState(-1);
+  const setImField = (k) => (e) => setImForm((f) => ({ ...f, [k]: e.target.value }));
+  function startEditItem(i) { setImForm({ ...blankItem(), ...extra[i] }); setImEditIdx(i); }
+  function cancelEditItem() { setImForm(blankItem()); setImEditIdx(-1); }
+
+  async function submitItem() {
+    const f = { ...imForm };
+    Object.keys(f).forEach((k) => { f[k] = String(f[k] ?? '').trim(); });
+    if (!f.specificMaterial && !f.itemCode) { flash('r', 'Enter at least an Item Code or a Description.'); return; }
+    if (!f.itemCode) f.itemCode = nextItemCode(asl, extra);
+    if (imEditIdx < 0 && [...aslItems.map((m) => m.code), ...extra.map((r) => r.itemCode)].includes(f.itemCode)) {
+      flash('r', 'Item code ' + f.itemCode + ' already exists — pick it with the radio to edit it.'); return;
+    }
+    const next = imEditIdx >= 0 ? extra.map((r, j) => (j === imEditIdx ? { ...r, ...f } : r)) : [f, ...extra];
+    setBusy(true);
+    try {
+      await save('purchase', { ...purchase, itemsExtra: next });
+      setExtra(next);
+      flash('g', imEditIdx >= 0 ? '✓ Item ' + f.itemCode + ' updated.' : '✓ Item ' + f.itemCode + ' added.');
+      cancelEditItem();
+    } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
+  }
+
+  async function delItem(i) {
+    const code = extra[i]?.itemCode || '(no code)';
+    if (!window.confirm('Delete item ' + code + ' from the Item Master? This cannot be undone.')) return;
+    const next = extra.filter((_, j) => j !== i);
+    setBusy(true);
+    try { await save('purchase', { ...purchase, itemsExtra: next }); setExtra(next); flash('g', '✓ Item ' + code + ' deleted.'); if (imEditIdx === i) cancelEditItem(); }
+    catch (e) { flash('r', 'Delete failed: ' + e.message); } finally { setBusy(false); }
+  }
 
   async function saveAll() {
     setBusy(true);
@@ -820,6 +839,38 @@ function ItemMaster() {
   return (
     <>
       <div className="card">
+        <div className="ctitle">{imEditIdx >= 0 ? '✏ Edit Item — ' + (extra[imEditIdx]?.itemCode || '') : '＋ Add New Item'}</div>
+        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        <div className="g4">
+          <div className="fg">
+            <label>Item Code</label>
+            <input value={imForm.itemCode} onChange={setImField('itemCode')} readOnly={imEditIdx >= 0}
+              placeholder={'auto: ' + nextItemCode(asl, extra)} aria-label="Item form code" />
+          </div>
+          {IM_FIELDS.map((f) => (
+            <div className="fg" key={f.k}>
+              <label>{f.label}</label>
+              {f.dept && depts.length ? (
+                <select value={imForm[f.k] ?? ''} onChange={setImField(f.k)} aria-label="Item form department">
+                  <option value="">— department —</option>
+                  {imForm[f.k] && !depts.some((d) => d.name === imForm[f.k]) && <option value={imForm[f.k]}>{imForm[f.k]}</option>}
+                  {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                </select>
+              ) : (
+                <input value={imForm[f.k] ?? ''} onChange={setImField(f.k)} aria-label={'Item form ' + f.label} />
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="act">
+          <button className="btn btn-g" onClick={submitItem} disabled={busy}>
+            {busy ? 'Saving…' : (imEditIdx >= 0 ? '💾 Update Item' : '＋ Add Item')}
+          </button>
+          {imEditIdx >= 0 && <button className="btn btn-s" onClick={cancelEditItem} disabled={busy}>Cancel</button>}
+        </div>
+      </div>
+
+      <div className="card">
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>🗂 Item Master <span className="tag tgr">{extra.length}</span></div>
           <input placeholder="Search item…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -838,32 +889,21 @@ function ItemMaster() {
             <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={busy}
               onChange={(e) => { importXlsx(e.target.files && e.target.files[0]); e.target.value = ''; }} />
           </label>
-          <button className="btn btn-s" onClick={addItem}>＋ New Item Code</button>
           <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save'}</button>
         </div>
-        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 0 }}>Read-only — pick a row with its radio button to load it into the form above for editing.</p>
         <div className="tw sy" style={{ maxHeight: 360 }}>
           <table>
-            <thead><tr><th>Code</th>{IM_FIELDS.map((f) => <th key={f.k}>{f.label}</th>)}<th></th></tr></thead>
+            <thead><tr><th style={{ width: 40 }}>Edit</th><th>Code</th>{IM_FIELDS.map((f) => <th key={f.k}>{f.label}</th>)}<th></th></tr></thead>
             <tbody>
-              {extraRows.length === 0 ? <tr><td colSpan={IM_FIELDS.length + 2} style={emptyTd}>No catalog-only items — use “＋ New Item Code”.</td></tr> : extraRows.map(({ r, i }) => (
-                <tr key={i}>
+              {extraRows.length === 0 ? <tr><td colSpan={IM_FIELDS.length + 3} style={emptyTd}>No catalog-only items — add one in the form above.</td></tr> : extraRows.map(({ r, i }) => (
+                <tr key={i} style={imEditIdx === i ? { background: 'var(--gl)' } : undefined}>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="radio" name="im-edit-sel" checked={imEditIdx === i} onChange={() => startEditItem(i)}
+                      aria-label={'Edit item ' + (r.itemCode || i)} />
+                  </td>
                   <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{r.itemCode}</td>
-                  {IM_FIELDS.map((f) => (
-                    <td key={f.k}>
-                      {f.dept
-                        ? (depts.length
-                            ? (
-                              <select value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)}>
-                                <option value="">— department —</option>
-                                {r[f.k] && !depts.some((d) => d.name === r[f.k]) && <option value={r[f.k]}>{r[f.k]}</option>}
-                                {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
-                              </select>
-                            )
-                            : <input value={r[f.k] ?? ''} placeholder="department" onChange={(e) => setCell(i, f.k, e.target.value)} />)
-                        : <input value={r[f.k] ?? ''} onChange={(e) => setCell(i, f.k, e.target.value)} />}
-                    </td>
-                  ))}
+                  {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 12 }}>{r[f.k] || '-'}</td>)}
                   <td style={{ textAlign: 'center' }}>
                     <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => delItem(i)} title="Delete item code">✕</button>
                   </td>

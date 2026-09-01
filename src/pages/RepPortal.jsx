@@ -72,9 +72,9 @@ const TABS = [
   { k: 'visit', label: '📋 Log Visit' },
   { k: 'po', label: '🧾 Enter PO' },
   { k: 'targets', label: '🎯 My Targets' },
-  { k: 'customers', label: '📈 My Customers' },
+  { k: 'customers', label: '📈 My Leads' },
   { k: 'contacts', label: '📇 My Contacts' },
-  { k: 'add', label: '➕ Add Customer' },
+  { k: 'add', label: '➕ Add Lead' },
   { k: 'sku', label: '📦 SKUs' },
   { k: 'nego', label: '💬 Negotiations' },
 ];
@@ -869,7 +869,7 @@ function AddCustomer({ sales, save, repId, onDone }) {
           buildInteraction(lead.id, repId, { type: 'Follow-up scheduled', outcome: form.remarks, followUp: form.followUp })];
       }
       await patchSales(save, patch);
-      setMsg({ t: 'g', text: '✅ Customer saved. Add contacts from My Contacts.' });
+      setMsg({ t: 'g', text: '✅ Lead saved. Add contacts from My Contacts.' });
       setForm({ groupSel: '', groupNew: '', custSel: '__new__', custNew: '', paymentType: '', headOffice: '', deliveryLocation: '', gstin: '', categories: [], dispatchForms: {}, stage: 'To Approach', followUp: '', remarks: '' });
       setTimeout(onDone, 700);
     } catch (e) {
@@ -879,7 +879,7 @@ function AddCustomer({ sales, save, repId, onDone }) {
 
   return (
     <div className="card">
-      <div className="ctitle">➕ Add Customer</div>
+      <div className="ctitle">➕ Add Lead</div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
         Pick or add a group, then pick or add the customer. New customers are allocated to you for the
         categories you tick. Add contacts afterwards from My Contacts.

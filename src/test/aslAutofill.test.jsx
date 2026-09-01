@@ -65,17 +65,21 @@ describe('ASL — item code type-to-search + auto-fill', () => {
     await userEvent.type(codeInput, 'blm001');
     await waitFor(() => expect(screen.getByLabelText('Item code row 2')).toHaveValue('BLM001'));
     const tr = screen.getByLabelText('Item code row 2').closest('tr');
+    // Issues 2.0: identity fields are READ-ONLY text on the suppliers tab (the
+    // Item Master owns them) — auto-fill still shows the picked identity.
+    const cells = [...tr.querySelectorAll('td')].map((td) => td.textContent);
+    expect(cells.join(' ')).toContain('BOPP');
+    expect(cells.join(' ')).toContain('Films');
+    expect(cells.join(' ')).toContain('20');
+    expect(cells.join(' ')).toContain('BOPP Plain Film');
+    expect(cells.join(' ')).toContain('KG');
+    // only code + commercials remain editable; commercials stay empty
     const inputs = [...tr.querySelectorAll('input')];
-    // [code, materialType, subGroup, microns, description, uom, basicPrice, moq, leadTime]
-    expect(inputs[1]).toHaveValue('BOPP');
-    expect(inputs[2]).toHaveValue('Films');
-    expect(inputs[3]).toHaveValue('20');
-    expect(inputs[4]).toHaveValue('BOPP Plain Film');
-    expect(inputs[5]).toHaveValue('KG');
-    // supplier-specific commercials are NOT copied from the other supplier
-    expect(inputs[6]).toHaveValue(null);
-    expect(inputs[7]).toHaveValue('');
-    expect(inputs[8]).toHaveValue('');
+    // [code, basicPrice, moq, leadTime]
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1]).toHaveValue(null);
+    expect(inputs[2]).toHaveValue('');
+    expect(inputs[3]).toHaveValue('');
   });
 
   it('an unknown code just types through without touching other fields', async () => {
@@ -84,7 +88,9 @@ describe('ASL — item code type-to-search + auto-fill', () => {
     await userEvent.type(codeInput, 'NEW-42');
     expect(codeInput).toHaveValue('NEW-42');
     const tr = codeInput.closest('tr');
-    expect([...tr.querySelectorAll('input')][4]).toHaveValue('');   // description untouched
+    // description cell (read-only) untouched — still the em-dash placeholder
+    const descCell = [...tr.querySelectorAll('td')][4];
+    expect(descCell.textContent).toBe('—');
   });
 });
 

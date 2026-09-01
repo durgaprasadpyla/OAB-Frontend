@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { pouchWeightQC } from '../lib/calc.js';
 import { custGroups, custsInGroup, specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
-import BomPanel from '../components/BomPanel.jsx';
+import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
 import CertificatePanel from '../components/CertificatePanel.jsx';
@@ -21,7 +21,7 @@ const STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
 const BLANK = {
   group: '', customer: '', subBrand: '', jobName: '', jobType: '', material: '',
   mic: '', gsm: '', filmWidth: '', ups: '', width: '', height: '',
-  gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', machineRunOn: '', status: 'Active', printLoc: '',
+  gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', status: 'Active',
 };
 
 // Status -> legacy .tag colour class.
@@ -61,6 +61,22 @@ export default function QC() {
   const [tab, setTab] = useState('spec');
   const [msg, setMsg] = useState(null); // { type: 'g' | 'r', text }
   const [busy, setBusy] = useState(false);
+  // Issues 2.0: All-Specs filters — group / customer / status / JSS number.
+  const [fGroup, setFGroup] = useState('');
+  const [fCust, setFCust] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [fSpec, setFSpec] = useState('');
+
+  // Issues 2.0: the Dispatch Form options come from the Super Admin dashboard's
+  // Drop-down Selections → despatch types (falling back to the legacy list only
+  // when the master is empty/unreachable).
+  const [dispatchTypes, setDispatchTypes] = useState([]);
+  useEffect(() => {
+    let live = true;
+    masterApi.listDispatchTypes().then((d) => { if (live && Array.isArray(d)) setDispatchTypes(d.filter((t) => t.active !== false)); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const dispatchOptions = dispatchTypes.length ? dispatchTypes.map((t) => t.name) : DISPATCH_FORMS;
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -69,6 +85,17 @@ export default function QC() {
   // cascading Customer picker. (legacy qcPopulateGroups / qcPopulateCustomers)
   const groups = useMemo(() => custGroups(customers), [customers]);
   const custOptions = useMemo(() => custsInGroup(customers, form.group), [customers, form.group]);
+
+  // Issues 2.0: Add New Group / Add New Customer right on the JSS form. The new
+  // name is stored on the spec (the Customer Master itself is Super Admin's).
+  function addNewGroup() {
+    const g = window.prompt('New group name:');
+    if (g && g.trim()) setForm((f) => ({ ...f, group: g.trim() }));
+  }
+  function addNewCustomer() {
+    const c = window.prompt('New customer name' + (form.group ? ' (group ' + form.group + ')' : '') + ':');
+    if (c && c.trim()) setForm((f) => ({ ...f, customer: c.trim() }));
+  }
 
   // Auto spec code = 'A' + (max numeric suffix among existing /^A(\d+)$/ specs) + 1.
   const nextSpec = useMemo(() => {
@@ -94,11 +121,32 @@ export default function QC() {
   // Search over spec / customer / job name / material; newest first.
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const list = jss.slice().reverse();
+    let list = jss.slice().reverse();
+    if (fGroup) list = list.filter((j) => (specGroup(j, customers) || '') === fGroup);
+    if (fCust) list = list.filter((j) => String(j.customer || '').trim() === fCust);
+    if (fStatus) list = list.filter((j) => String(j.status || 'Active') === fStatus);
+    if (fSpec.trim()) list = list.filter((j) => String(j.spec || '').toLowerCase().includes(fSpec.trim().toLowerCase()));
     if (!s) return list;
     return list.filter((j) =>
       [j.spec, j.customer, j.jobName, j.material].some((v) => String(v || '').toLowerCase().includes(s)));
-  }, [jss, q]);
+  }, [jss, q, fGroup, fCust, fStatus, fSpec, customers]);
+
+  // Distinct customers across the JSS list, for the Customer filter dropdown.
+  const jssCustomerNames = useMemo(
+    () => [...new Set(jss.map((j) => String(j.customer || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [jss]);
+
+  // Issues 2.0: QC may change ONLY the status of a JSS, straight from the list.
+  async function setSpecStatus(spec, status) {
+    const next = JSON.parse(JSON.stringify(jss));
+    const row = next.find((j) => j.spec === spec);
+    if (!row) return;
+    row.status = status;
+    setBusy(true);
+    try { await save('jss', next); setMsg({ type: 'g', text: 'Status of ' + spec + ' → ' + status + '.' }); }
+    catch (e) { setMsg({ type: 'r', text: 'Status change failed: ' + e.message }); }
+    finally { setBusy(false); }
+  }
 
   async function addSpec() {
     const group = form.group.trim();
@@ -127,7 +175,6 @@ export default function QC() {
       customer,
       subBrand: form.subBrand.trim(),
       jobName,
-      printLoc: form.printLoc.trim(),
       mic: form.mic || '',
       gsm: parseFloat(form.gsm) || '',
       material,
@@ -137,7 +184,6 @@ export default function QC() {
       height: parseFloat(form.height) || '',
       gusset: String(form.gusset).trim(),
       dispatchForm,
-      machineRunOn: form.machineRunOn.trim(),
       status: form.status,
     };
     // Manual pouch weight wins; otherwise fall back to the derived figure.
@@ -182,18 +228,9 @@ export default function QC() {
   if (tab === 'planning') {
     return (
       <div id="app">
-        <div className="pg-ttl">QC — JSS Planning</div>
+        <div className="pg-ttl">QC — Route and BOM</div>
         <QcTabs tab={tab} setTab={setTab} />
         <JssPlanningPanel />
-      </div>
-    );
-  }
-  if (tab === 'bom') {
-    return (
-      <div id="app">
-        <div className="pg-ttl">QC</div>
-        <QcTabs tab={tab} setTab={setTab} />
-        <BomPanel />
       </div>
     );
   }
@@ -239,19 +276,29 @@ export default function QC() {
           <Field label="Spec Code" value={nextSpec} readOnly />
           <div className="fg">
             <label>Group</label>
-            <select value={form.group} onChange={set('group')} aria-label="Group">
-              <option value="">— No group —</option>
-              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-            </select>
+            <div style={{ display: 'flex', gap: 5 }}>
+              <select value={form.group} onChange={set('group')} aria-label="Group" style={{ flex: 1 }}>
+                <option value="">— No group —</option>
+                {form.group && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
+                {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+              <button type="button" className="btn btn-s" onClick={addNewGroup} title="Add a new group"
+                aria-label="Add new group" style={{ height: 32, padding: '0 8px', flexShrink: 0 }}>＋ New</button>
+            </div>
           </div>
           <div className="fg">
             <label>Customer *</label>
-            <input
-              list="qc-cust-options"
-              value={form.customer}
-              onChange={set('customer')}
-              placeholder={form.group ? 'Pick or type a company' : 'Pick or type (or leave to whole group)'}
-            />
+            <div style={{ display: 'flex', gap: 5 }}>
+              <input
+                list="qc-cust-options"
+                value={form.customer}
+                onChange={set('customer')}
+                placeholder={form.group ? 'Pick or type a company' : 'Pick or type (or leave to whole group)'}
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="btn btn-s" onClick={addNewCustomer} title="Add a new customer"
+                aria-label="Add new customer" style={{ height: 32, padding: '0 8px', flexShrink: 0 }}>＋ New</button>
+            </div>
             <datalist id="qc-cust-options">
               {custOptions.map((c) => <option key={c} value={c} />)}
             </datalist>
@@ -266,7 +313,8 @@ export default function QC() {
           <div className="fg">
             <label>Dispatch Form *</label>
             <select value={form.dispatchForm} onChange={set('dispatchForm')}>
-              {DISPATCH_FORMS.map((o) => <option key={o} value={o}>{o}</option>)}
+              {form.dispatchForm && !dispatchOptions.includes(form.dispatchForm) && <option value={form.dispatchForm}>{form.dispatchForm}</option>}
+              {dispatchOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
         </div>
@@ -303,8 +351,6 @@ export default function QC() {
         </div>
 
         <div className="g4">
-          <Field label="Machine Run On" value={form.machineRunOn} onChange={set('machineRunOn')} />
-          <Field label="Print Loc" value={form.printLoc} onChange={set('printLoc')} />
           <div className="fg">
             <label>Status</label>
             <select value={form.status} onChange={set('status')}>
@@ -322,13 +368,27 @@ export default function QC() {
 
       <div className="card">
         <div className="ctitle">All Specs ({filtered.length})</div>
-        <div className="fbar">
+        <div className="fbar" style={{ flexWrap: 'wrap' }}>
           <input
             placeholder="Search spec / customer / job / material"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            style={{ minWidth: '260px' }}
+            style={{ minWidth: '220px' }}
           />
+          <select value={fGroup} onChange={(e) => setFGroup(e.target.value)} aria-label="Filter by group">
+            <option value="">All Groups</option>
+            {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Filter by customer">
+            <option value="">All Customers</option>
+            {jssCustomerNames.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter by status">
+            <option value="">All Statuses</option>
+            {STATUSES.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <input placeholder="JSS number…" value={fSpec} onChange={(e) => setFSpec(e.target.value)}
+            aria-label="Filter by JSS number" style={{ width: 110 }} />
           <div style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={exportExcel} disabled={!jss.length}>Export JSS Excel</button>
         </div>
@@ -338,6 +398,7 @@ export default function QC() {
             <thead>
               <tr>
                 <th>Spec</th>
+                <th>Group</th>
                 <th>Customer</th>
                 <th>Sub Brand</th>
                 <th>Job Name</th>
@@ -353,7 +414,7 @@ export default function QC() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
+                  <td colSpan={12} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
                     No specs found
                   </td>
                 </tr>
@@ -361,6 +422,7 @@ export default function QC() {
                 filtered.map((j, i) => (
                   <tr key={(j.spec || '') + '-' + (j.sno != null ? j.sno : i)}>
                     <td style={{ fontWeight: 600, color: 'var(--g)' }}>{j.spec || '-'}</td>
+                    <td>{specGroup(j, customers) || '-'}</td>
                     <td>{j.customer || '-'}</td>
                     <td>{j.subBrand || '-'}</td>
                     <td>{j.jobName || '-'}</td>
@@ -370,7 +432,15 @@ export default function QC() {
                     <td style={{ textAlign: 'right' }}>{j.height || '-'}</td>
                     <td style={{ textAlign: 'right' }}>{j.pouchWeight != null && j.pouchWeight !== '' ? parseFloat(j.pouchWeight).toFixed(2) : '-'}</td>
                     <td>{j.dispatchForm || '-'}</td>
-                    <td><span className={'tag ' + tagClass(j.status)}>{j.status || 'Active'}</span></td>
+                    <td>
+                      {/* Issues 2.0: QC changes ONLY the status, right here. */}
+                      <select className={'tag ' + tagClass(j.status)} value={j.status || 'Active'} disabled={busy}
+                        aria-label={'Status of ' + j.spec}
+                        onChange={(e) => setSpecStatus(j.spec, e.target.value)}
+                        style={{ border: '1px solid var(--bd)', borderRadius: 6, fontSize: 11, padding: '2px 4px' }}>
+                        {STATUSES.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </td>
                   </tr>
                 ))
               )}
@@ -385,8 +455,7 @@ export default function QC() {
 // Labels and order match production's QC tab bar (qcSwitch).
 const QC_TABS = [
   { k: 'spec', label: '➕ Add JSS Spec' },
-  { k: 'planning', label: '🗺 JSS Planning' },
-  { k: 'bom', label: '🧱 BOM (legacy)' },
+  { k: 'planning', label: '🗺 Route and BOM' },
   { k: 'cert', label: '📄 Certificates (COA / Food Grade)' },
   { k: 'capa', label: '🛠 CAPA' },
   { k: 'csa', label: '🧪 CSA Reports' },
