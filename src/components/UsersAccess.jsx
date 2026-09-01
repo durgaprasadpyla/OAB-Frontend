@@ -102,6 +102,24 @@ export default function UsersAccess() {
     } catch (e) { flash('r', e.message || 'Could not fetch the password'); }
   }
 
+  // Issues 3.0 §1: the superadmin must be able to remove accounts they created —
+  // Disable only parks an account, it stays in the list forever. Deletion is
+  // permanent (server-side guards keep the last active superadmin and the caller's
+  // own account safe), so it asks twice: confirm, then type the username.
+  async function delUser(u) {
+    if (!window.confirm(`Delete the user "${u.username}" (${roleLabel(u.role)})?\n\nThis permanently removes the login. It cannot be undone — use Disable instead if you only want to park the account.`)) return;
+    const typed = window.prompt(`Type the username "${u.username}" to confirm deletion:`);
+    if (typed == null) return;
+    if (typed.trim().toLowerCase() !== u.username.toLowerCase()) { flash('r', 'Username did not match — nothing was deleted'); return; }
+    setBusy(true);
+    try {
+      await usersApi.remove(u.id);
+      setShown((s) => { const n = { ...s }; delete n[u.id]; return n; });
+      flash('g', `User "${u.username}" deleted`);
+      await load();
+    } catch (e) { flash('r', e.message); await load(); } finally { setBusy(false); }
+  }
+
   async function resetPw(u) {
     const pw = window.prompt(`New password for ${u.username} (min 4 characters):`);
     if (pw == null) return;
@@ -170,7 +188,9 @@ export default function UsersAccess() {
                       <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px' }} onClick={() => resetPw(u)} disabled={busy}>Reset PW</button>{' '}
                       <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px', color: u.disabled ? 'var(--g)' : 'var(--red)', borderColor: u.disabled ? undefined : '#F5A8A0' }} onClick={() => toggleDisabled(u)} disabled={busy}>
                         {u.disabled ? 'Enable' : 'Disable'}
-                      </button>
+                      </button>{' '}
+                      <button className="btn btn-s" style={{ height: 24, fontSize: 10, padding: '0 7px', color: 'var(--red)', borderColor: '#F5A8A0' }}
+                        aria-label={`Delete ${u.username}`} onClick={() => delUser(u)} disabled={busy}>Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -178,7 +198,7 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. The last active superadmin cannot be disabled or demoted. Click a masked password to reveal it (every reveal is audit-logged); "—" means the password was set before this feature — reset it to make it visible.</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. Delete removes the login permanently (the last active superadmin, and the account you are signed in with, cannot be deleted). The last active superadmin cannot be disabled or demoted. Click a masked password to reveal it (every reveal is audit-logged); "—" means the password was set before this feature — reset it to make it visible.</p>
       </div>
 
       {/* §36: the merged sales-user management — separate table, module-wise

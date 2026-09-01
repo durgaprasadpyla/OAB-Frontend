@@ -34,12 +34,15 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     // Prefer the human reason the backend puts in the error body (Spring's
-    // {"message": "..."} / our {"error": "..."} shapes) over a raw JSON dump, so a
-    // banner reads "A department named 'printing' already exists", not "HTTP 409".
+    // {"message": "..."} / {"detail": "..."} / our {"error": "..."} shapes) over a raw
+    // JSON dump, so a banner reads "A department named 'printing' already exists", not
+    // "HTTP 409". `detail` is the RFC-7807 field Spring uses when problemdetails are on
+    // (application.properties) — without it a ResponseStatusException's reason, e.g.
+    // "You cannot delete the account you are signed in with", surfaced as raw JSON.
     let reason = '';
     try {
       const j = JSON.parse(t);
-      if (j && typeof j === 'object') reason = j.message || j.error || '';
+      if (j && typeof j === 'object') reason = j.message || j.error || j.detail || '';
     } catch { /* not JSON — fall through to the raw text */ }
     const err = new Error(reason ? String(reason).slice(0, 300)
       : 'HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : ''));
@@ -105,6 +108,8 @@ export const usersApi = {
   update: (id, body) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'PUT', body }),
   // Click-to-reveal for the superadmin Password column (audited server-side).
   revealPassword: (id) => api('/api/admin/users/' + encodeURIComponent(id) + '/password'),
+  // Issues 3.0 §1 — permanently remove an account (superadmin only, audited).
+  remove: (id) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'DELETE' }),
 };
 
 // Superadmin observability & maintenance: server-computed rollups (/api/summary),

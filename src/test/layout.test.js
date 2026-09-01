@@ -33,3 +33,33 @@ describe('form grids can shrink', () => {
     expect(css).toMatch(/select,\s*input,\s*textarea\s*\{[^}]*min-width:\s*0/);
   });
 });
+
+// Issues 3.0 §3. `.cb` is the 14x14 CHECKBOX rule, but several screens put it on the
+// <label> wrapping the box (sales-user module allocation, Daily Board, Master Data).
+// A 14x14 label cannot hold its caption, so the text spilled over the tick and the
+// module list was unreadable. jsdom does no layout, so assert the CSS contract.
+describe('checkbox rows stay legible', () => {
+  it('a label carrying .cb is a row, not a 14px box', () => {
+    const rule = css.split('\n').find((l) => l.startsWith('label.cb{'));
+    expect(rule, 'no label.cb rule — .cb would squeeze the caption onto the tick').toBeTruthy();
+    expect(rule).toMatch(/width:auto/);
+    expect(rule).toMatch(/height:auto/);
+    expect(rule).toMatch(/display:inline-flex/);
+    expect(rule).toMatch(/white-space:nowrap/);
+  });
+
+  it('the box inside such a label keeps its own 14px size', () => {
+    const rule = css.split('\n').find((l) => l.startsWith('label.cb>input{'));
+    expect(rule).toBeTruthy();
+    expect(rule).toMatch(/width:14px/);
+    expect(rule).toMatch(/height:14px/);
+    expect(rule).toMatch(/flex:none/);
+  });
+
+  it('the sales-user module allocation panel is a grid with room per column', () => {
+    const rule = css.split('\n').find((l) => l.startsWith('.mod-alloc{'));
+    expect(rule).toBeTruthy();
+    expect(rule).toMatch(/display:grid/);
+    expect(rule).toMatch(/minmax\(150px/);
+  });
+});

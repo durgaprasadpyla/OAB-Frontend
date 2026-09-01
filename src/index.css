@@ -68,6 +68,17 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
 .sl{font-size:10px;color:var(--i3);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .sv{font-size:20px;font-weight:700}.sv.red{color:var(--red)}.sv.grn{color:var(--g)}
 .cb{width:14px;height:14px;accent-color:var(--g);cursor:pointer}
+/* Issues 3.0 §3: .cb is a 14x14 BOX rule, but several screens put it on the <label>
+   that wraps the box (Sales-user module allocation, Daily Board, Master Data). That
+   squeezed the label to 14x14 and the caption spilled over the tick, which is what
+   made the module list unreadable. On a label it means "a checkbox row": the box
+   keeps its size, the caption sits beside it and never wraps under it. */
+label.cb{width:auto;height:auto;display:inline-flex;align-items:center;gap:6px;line-height:1.35;white-space:nowrap;overflow:visible}
+label.cb>input{flex:none;width:14px;height:14px;margin:0;accent-color:var(--g);cursor:pointer}
+/* Issues 3.0 §3: the sales-user module-allocation list — a proper bordered panel on a
+   fixed column grid, so every module reads cleanly instead of stacking on top of the
+   ticks in a cramped table cell. */
+.mod-alloc{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 14px;min-width:180px;margin-top:6px;padding:8px 10px;background:var(--wh);border:1px solid var(--bd);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 /* Hide the native up/down spinner arrows on the KAM & Targets numeric fields — typing
    a number should never accidentally get bumped by a stray arrow click. */
 input.kam-numinput::-webkit-inner-spin-button,input.kam-numinput::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
