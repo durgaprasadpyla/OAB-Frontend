@@ -131,12 +131,18 @@ export default function PlanReadiness() {
     const d = draftFor(so);
     setErr('');
     if (!d.pick) { setErr(`Choose a readiness option for ${so}`); return; }
-    const jobQty = num(row.poQty);
+    // Issues 2.4 §4: Partial is captured in METRES, so it is bounded by the order's
+    // metres — not by its piece count. Showing "of 50600" against a 12,650 m job read
+    // as though 50,600 metres could be entered, when 50,600 is the number of pouches.
+    const jobMetres = num(row.totalMt);
     if (d.pick === 'READY') {
       if (d.mode === 'PARTIAL') {
         const q = num(d.meters);
         if (!(q > 0)) { setErr(`Enter the metres ready for ${so} (must be greater than 0)`); return; }
-        if (jobQty > 0 && q > jobQty + 1e-9) { setErr(`${so}: metres ready cannot exceed the job quantity (${jobQty})`); return; }
+        if (jobMetres > 0 && q > jobMetres + 1e-9) {
+          setErr(`${so}: metres ready cannot exceed the ${Math.round(jobMetres).toLocaleString('en-IN')} m this order runs to`);
+          return;
+        }
       } else if (d.mode !== 'COMPLETE') { setErr(`Choose Entire SO or Partial SO for ${so}`); return; }
     } else {
       if (!d.date) { setErr(`${so}: enter the tentative date it will be ready`); return; }
@@ -265,8 +271,13 @@ export default function PlanReadiness() {
                           </select>
                         )}
                         {d.pick === 'READY' && d.mode === 'PARTIAL' && (
-                          <input type="number" step="any" min="0" placeholder={`metres (of ${r.poQty})`} value={d.meters}
-                            onChange={(e) => setDraftFor(r.so, { meters: e.target.value })} style={{ width: 130, height: 28 }} />
+                          <input type="number" step="any" min="0"
+                            max={r.totalMt ? Math.round(r.totalMt) : undefined}
+                            aria-label={`Metres ready for ${r.so}`}
+                            title={r.totalMt ? `This order runs to ${Math.round(r.totalMt).toLocaleString('en-IN')} metres` : undefined}
+                            placeholder={r.totalMt ? `metres (of ${Math.round(r.totalMt).toLocaleString('en-IN')} m)` : 'metres ready'}
+                            value={d.meters}
+                            onChange={(e) => setDraftFor(r.so, { meters: e.target.value })} style={{ width: 150, height: 28 }} />
                         )}
                         {d.pick && d.pick !== 'READY' && (
                           <input type="date" aria-label={`Tentative ready date for ${r.so}`} title="Tentative ready date"

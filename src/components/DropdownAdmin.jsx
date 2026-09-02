@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
-import { masterApi } from '../api.js';
+import { masterApi, storesApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
 import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
 
@@ -57,6 +57,18 @@ export default function DropdownAdmin() {
     } catch (e) { setMachErr(e && e.message ? e.message : 'Could not reach the Machine master'); }
   }, []);
   useEffect(() => { if (role === 'superadmin') loadMachines(); }, [loadMachines, role]);
+
+  // Store locations (Issues 2.4 §13) — the racks the stores desk puts material away in.
+  const [locs, setLocs] = useState([]);
+  const [locErr, setLocErr] = useState('');
+  const loadLocs = useCallback(async () => {
+    setLocErr('');
+    try {
+      const r = await storesApi.locations(1);
+      setLocs(Array.isArray(r) ? r : []);
+    } catch (e) { setLocErr(e && e.message ? e.message : 'Could not reach the store-location master'); }
+  }, []);
+  useEffect(() => { if (role === 'superadmin') loadLocs(); }, [loadLocs, role]);
 
   const def = DEFS.find((d) => d.key === sel) || DEFS[0];
   // The QC Add-JSS Dispatch Form reads the normalized dispatch-type master, so
@@ -141,7 +153,9 @@ export default function DropdownAdmin() {
                 >
                   <td>
                     <div style={{ fontWeight: 700, fontSize: 12.5, color: d.key === sel ? 'var(--g)' : 'var(--ink)' }}>
-                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master === 'machine' ? machines.filter((x) => x.active !== false).length : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
+                      {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master === 'machine' ? machines.filter((x) => x.active !== false).length
+                        : d.master === 'storeloc' ? locs.filter((x) => x.active !== false).length
+                          : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
                       {!d.master && ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 1 }}>{d.where}</div>
@@ -155,6 +169,8 @@ export default function DropdownAdmin() {
 
       {def.master === 'machine' ? (
         <MachinesPanel machines={machines} departments={depts} reload={loadMachines} error={machErr} />
+      ) : def.master === 'storeloc' ? (
+        <StoreLocationsPanel locations={locs} reload={loadLocs} error={locErr} />
       ) : def.master ? (
         <DepartmentsPanel depts={depts} reload={loadDepts} error={deptErr} loaded={deptLoaded} />
       ) : (
@@ -222,6 +238,91 @@ export default function DropdownAdmin() {
         <button className="btn btn-s" style={{ marginTop: 8 }} onClick={addRow}>＋ Add</button>
       </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Store locations editor (Issues 2.4 §13) — the racks and bays the stores desk puts
+ * received material away in (A2, CG, B3, AG, U2, …).
+ *
+ * Backed by the normalized store_location master rather than the sales blob: the
+ * stores role cannot read that blob, so a list kept there would never reach the GRN
+ * screen — exactly how the despatch forms went missing. A location already stamped
+ * on stock is retired rather than deleted, so those units keep reading correctly.
+ */
+function StoreLocationsPanel({ locations, reload, error }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
+  const list = Array.isArray(locations) ? locations : [];
+  const active = list.filter((d) => d.active !== false);
+
+  async function add() {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    try { await storesApi.createLocation({ name: n }); setName(''); flash('g', `Added “${n}”.`); await reload(); }
+    catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function rename(d, next) {
+    const n = String(next || '').trim();
+    if (!n || n === d.name) return;
+    try { await storesApi.updateLocation(d.id, { name: n }); await reload(); }
+    catch (e) { flash('r', e.message || 'Rename failed'); }
+  }
+  async function toggle(d) {
+    try { await storesApi.updateLocation(d.id, { active: d.active === false }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+  async function remove(d) {
+    if (!window.confirm(`Delete store location “${d.name}”?
+
+If material is already put away there it is retired instead, so those units keep reading correctly.`)) return;
+    try {
+      const r = await storesApi.deleteLocation(d.id);
+      flash('g', (r && r.message) ? r.message : `Deleted “${d.name}”.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Delete failed'); }
+  }
+
+  return (
+    <div className="card">
+      <div className="ctitle">Store Locations <span className="tag tgr">{active.length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>The racks and bays offered on the Stores GRN screen when material is put away. Typed locations produced three spellings of the same rack, so this list is the only source.</div>
+      {error && (
+        <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>Couldn’t load the store-location master — {error}.</span>
+          <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={reload}>Retry</button>
+        </div>
+      )}
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="fbar">
+        <input placeholder="New location (e.g. A2)" value={name} aria-label="New store location"
+          onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+        <button className="btn btn-g" onClick={add} disabled={busy || !name.trim()}>＋ Add</button>
+      </div>
+      <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
+        <table>
+          <thead><tr><th>Location</th><th style={{ width: 170 }}>Actions</th></tr></thead>
+          <tbody>
+            {list.length === 0 ? (
+              <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+                {error ? 'Store locations unavailable — see the message above.' : 'No locations yet — add one above.'}
+              </td></tr>
+            ) : list.map((d) => (
+              <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
+                <td><input defaultValue={d.name} aria-label={`Store location ${d.name}`} onBlur={(e) => rename(d, e.target.value)} /></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
+                  <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete store location ${d.name}`} onClick={() => remove(d)}>🗑 Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

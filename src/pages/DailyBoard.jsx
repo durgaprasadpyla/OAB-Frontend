@@ -87,6 +87,22 @@ export default function DailyBoard({ embedded = false }) {
     } catch (e) { throw e; }
   }
   async function removeJob(jobId) { try { await planningApi.unassign(jobId); flash('Removed'); await load(); } catch (e) { setErr(e.message); } }
+
+  /**
+   * Issues 2.4 §5 — the PPC's own start time for one job. Blank hands the job back
+   * to the shift queue. Reloads, because everything behind it on that machine moves.
+   */
+  async function setStart(job, value) {
+    const next = String(value || '').trim();
+    const now = job.startTime || '';
+    if (next === now && job.startMin != null) return;      // unchanged
+    if (!next && job.startMin == null) return;             // still following the queue
+    try {
+      await planningApi.setJobStart(job.id, next);
+      flash(next ? `${job.so} starts at ${next}` : `${job.so} follows the shift queue again`);
+      await load();
+    } catch (e) { setErr(e.message); }
+  }
   async function moveWithin(machineId, jobIds) { try { await planningApi.reorder({ machineId, date, jobIds }); await load(); } catch (e) { setErr(e.message); } }
   const bump = (machineId, jobId, dir) => {
     const ids = jobsFor(machineId).map((j) => j.id);
@@ -131,10 +147,12 @@ export default function DailyBoard({ embedded = false }) {
         </div>
       </div>
 
-      <div className="g2" style={{ marginTop: 12, alignItems: 'start' }}>
-        {/* Ready-to-Plan pool. §81: a fully planned SO drops out of the pool; a
-            partially planned one stays with its balance metres visible. */}
-        <div className="card">
+      {/* Issues 2.4 §6: machines FIRST, the pool underneath. Side by side, the
+          pouching machines sat below the fold of their own scroller, so dragging an
+          order onto one meant scrolling the right-hand column while holding the
+          card. Stacked, the drop targets are all on one page and the drag is short. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+        <div className="card" style={{ order: 2 }}>
           {(() => {
             const open = pool.filter((p) => !p.fullyPlanned);
             const done = pool.length - open.length;
@@ -158,11 +176,11 @@ export default function DailyBoard({ embedded = false }) {
               </>
             );
           })()}
-          <div className="pg-sub" style={{ marginTop: 8 }}>Tip: drag a card onto a machine →</div>
+          <div className="pg-sub" style={{ marginTop: 8 }}>Tip: drag a card onto a machine above ↑</div>
         </div>
 
         {/* Machine columns by department */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, order: 1 }}>
           {Object.entries(machinesByDept).map(([deptId, list]) => (
             <div className="card" key={deptId}>
               <div className="ctitle">{deptName(deptId)}</div>
@@ -218,8 +236,22 @@ export default function DailyBoard({ embedded = false }) {
                                     <button className="btn btn-r" onClick={() => removeJob(j.id)}>✕</button>
                                   </span>
                                 </div>
-                                {/* §80: the pre-defined start/end from the shift queue. */}
-                                {(j.startTime || j.endTime) && <div className="pg-sub" style={{ margin: 0 }}>🕐 {j.startTime}–{j.endTime}</div>}
+                                {/* §80: the start/end from the shift queue — but every stage
+                                    of a route was anchored to the same shift start, so a roll
+                                    appeared to enter StayFresh at 08:00 while it was still on
+                                    the press. Issues 2.4 §5: the PPC types the real start and
+                                    the rest of this machine's queue follows on from it. */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                                  <span className="pg-sub" style={{ margin: 0 }}>🕐</span>
+                                  <input type="time" defaultValue={j.startTime || ''}
+                                    key={j.id + '|' + (j.startMin == null ? 'auto' : j.startMin)}
+                                    aria-label={`Start time for ${j.so} on ${mc.code}`}
+                                    title={j.startMin == null ? 'Follows the shift queue — type a time to set it yourself' : 'Set by the PPC — clear it to follow the shift queue'}
+                                    onBlur={(e) => setStart(j, e.target.value)}
+                                    style={{ height: 22, fontSize: 10, width: 92, padding: '0 4px', borderColor: j.startMin != null ? 'var(--blu)' : undefined }} />
+                                  <span className="pg-sub" style={{ margin: 0 }}>–{j.endTime || '—'}</span>
+                                  {j.startMin != null && <span className="tag tb" style={{ fontSize: 8 }}>set</span>}
+                                </div>
                               </div>
                             ))}
                           </div>

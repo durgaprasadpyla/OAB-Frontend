@@ -26,6 +26,10 @@ export const DROPDOWN_DEFS = [
   // machines the Machines tab, the JSS and the PPC boards use. Adding one pulls
   // its department in from the Departments list above.
   { key: 'machinesMaster', label: 'Machines', where: 'Machines tab · JSS · PPC boards', type: 'list', master: 'machine' },
+  // Issues 2.4 §13: the racks the stores desk puts received material away in. Backed
+  // by the normalized store_location master rather than the sales blob, because the
+  // stores role cannot read that blob — the trap the despatch forms fell into.
+  { key: 'storeLocations', label: 'Store Locations', where: 'Stores — GRN put-away', type: 'list', master: 'storeloc' },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.

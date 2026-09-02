@@ -181,7 +181,11 @@ export default function UsersAccess() {
                           {shown[u.id] != null ? shown[u.id] : (u.password != null ? u.password : '••••••••')}
                         </button>
                       ) : (
-                        <span title="Set before the Password column existed — reset it to make it visible" style={{ color: 'var(--i3)' }}>—</span>
+                        // Issues 2.4: a hash cannot be read back, so an account provisioned
+                        // before this column existed has nothing to show — but it fills itself
+                        // in the next time that user signs in, without changing their password.
+                        <span title={`No stored copy yet for ${u.username} — it is captured automatically the next time they sign in. Reset PW to make it visible now.`}
+                          style={{ color: 'var(--i3)', fontSize: 11 }}>— <span style={{ fontSize: 9 }}>after next sign-in</span></span>
                       )}
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -198,7 +202,7 @@ export default function UsersAccess() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. Delete removes the login permanently (the last active superadmin, and the account you are signed in with, cannot be deleted). The last active superadmin cannot be disabled or demoted. Passwords are read from the database and shown here (each listing is audit-logged). A password set before this feature existed cannot be recovered — it was only ever hashed — so it shows as dots until you reset that account once.</p>
+        <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 8 }}>Phone is editable inline (saves when you click away). Disabled users cannot sign in. Delete removes the login permanently (the last active superadmin, and the account you are signed in with, cannot be deleted). The last active superadmin cannot be disabled or demoted. Passwords are read from the database and shown here (each listing is audit-logged). A password set before this feature existed cannot be recovered — it was only ever hashed. Those accounts show “— after next sign-in”: the copy is captured automatically the next time that person signs in, and nothing about their password changes. Reset PW makes one visible immediately.</p>
       </div>
 
       {/* §36: the merged sales-user management — separate table, module-wise

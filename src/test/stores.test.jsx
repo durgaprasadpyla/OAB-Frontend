@@ -155,6 +155,10 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     await user.click(screen.getByText(/GRN/));
     await screen.findByText('📥 New goods receipt');
 
+    // Issues 2.4 §9/§12: the supplier is named once, on the receipt, and it decides
+    // which items may be received against it — so it comes first.
+    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Cosmos Films' } });
+    await waitFor(() => expect(screen.getByLabelText('Item for line 1')).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: '1' } });
     fireEvent.change(screen.getByLabelText('Quantity line 1'), { target: { value: '400' } });
     fireEvent.change(screen.getByLabelText('Supplier code line 1'), { target: { value: 'CF-1234' } });
@@ -169,8 +173,9 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     expect(post.body.lines[0]).toMatchObject({
       itemId: 1, qty: 400, supplierCode: 'CF-1234', internalCode: 'BLMU-9', location: 'Rack C3', price: 120, expiryDate: '2027-06-30',
     });
-    // the supplier came from the item↔supplier mapping, not typed
+    // §12: one GRN, one supplier — carried from the header onto every line.
     expect(post.body.lines[0].supplier).toBe('Cosmos Films');
+    expect(post.body.supplier).toBe('Cosmos Films');
   });
 
   it('issues from the oldest roll and returns a split roll as two new rolls', async () => {

@@ -589,16 +589,23 @@ export default function JssPlanningPanel() {
                             const sel = itemById(l.itemId);
                             // Issues 2.0: the same cascading dropdowns as the old BOM —
                             // Material Type → Sub-Group → Specialty narrow the item list.
-                            // These three read as columns of the row, but they were pure
-                            // filter state — never saved, and never restored. So every
-                            // save reloaded the BOM and left every row showing "Any",
-                            // which is what the business kept reporting. Where the
-                            // operator has not deliberately set one, show the CHOSEN
-                            // ITEM's own identity: that survives a reload, because it
-                            // comes from the item master.
-                            const rowMat = l._mat !== undefined ? l._mat : String((sel && sel.materialType) || '');
-                            const rowSub = l._sub !== undefined ? l._sub : String((sel && sel.subGroup) || '');
-                            const rowSpl = l._spl !== undefined ? l._spl : String((sel && sel.specialtyName) || '');
+                            //
+                            // Once a row HAS an item, these three read that item's own
+                            // identity from the master — full stop. They were filter state
+                            // first and a fallback second, so any stale '' left behind by a
+                            // narrowing step (or by re-picking through the Item Code box)
+                            // still won, and the row came back "Any / Any / Any" after a
+                            // save. The operator reads them as columns of the row, so the
+                            // row's item is the only thing that may decide them; the filter
+                            // is what narrows the list while no item is chosen yet.
+                            const pick = (fromItem, filter) => {
+                              const v = String(fromItem || '').trim();
+                              if (sel && v) return v;
+                              return filter !== undefined ? filter : '';
+                            };
+                            const rowMat = pick(sel && sel.materialType, l._mat);
+                            const rowSub = pick(sel && sel.subGroup, l._sub);
+                            const rowSpl = pick(sel && sel.specialtyName, l._spl);
                             const byMat = rowMat ? deptItems.filter((it) => String(it.materialType || '').trim() === rowMat) : deptItems;
                             const bySub = rowSub ? byMat.filter((it) => String(it.subGroup || '').trim() === rowSub) : byMat;
                             const narrowed = rowSpl ? bySub.filter((it) => String(it.specialtyName || '').trim() === rowSpl) : bySub;
