@@ -18,6 +18,7 @@ import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
 function installFetch() {
   let cfg = { dispatchTypeId: null, routeId: null };
   let machines = [];
+  let savedBom = [];
   const routeDeps = (routeId) => (routeId === 200
     ? [{ seq: 1, departmentId: 1, departmentName: 'Printing' }, { seq: 2, departmentId: 5, departmentName: 'Pouching' }]
     : []);
@@ -64,7 +65,8 @@ function installFetch() {
       routeDepartments: routeDeps(cfg.routeId),
       machines,
     });
-    if (u.match(/\/api\/bom\/A\d$/)) return res({ specCode: 'A1', baseQty: 1, baseUom: null, items: [] });
+    if (u.match(/\/api\/bom\/A\d$/) && method === 'PUT') { savedBom = (body.items || []).map((x) => ({ ...x })); return res({ ok: true }); }
+    if (u.match(/\/api\/bom\/A\d$/)) return res({ specCode: 'A1', baseQty: 1, baseUom: null, items: savedBom });
     return res({});
   });
 }
@@ -393,5 +395,32 @@ describe('JssPlanningPanel', () => {
     fireEvent.change(screen.getByLabelText('BOM item for Printing'), { target: { value: 'Film XYZ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save BOM' }));
     await waitFor(() => expect(screen.getByText(/BOM saved — 1 line/)).toBeInTheDocument());
+  });
+  // "Even on the computer, the selection is still Any Any upon saving." The
+  // Material Type / Sub-Group boxes were filter state that the server never
+  // stored, so a save reloaded the BOM and blanked them. They now read the
+  // chosen item's own identity, which survives the round trip.
+  it('keeps the material type and sub-group visible after the BOM is saved', async () => {
+    render(<JssPlanningPanel />);
+    await waitFor(() => expect(screen.getByLabelText('JSS Spec')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('JSS Spec'), { target: { value: 'A1' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    const dispatch = screen.getAllByRole('combobox').find((c) => within(c).queryByRole('option', { name: 'Pouch' }));
+    fireEvent.change(dispatch, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText(/SAVE the eligible machines above first/i)).toBeInTheDocument());
+    fireEvent.click((await screen.findAllByRole('checkbox'))[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save machines' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '＋ Add item' }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: '＋ Add item' })[0]);
+
+    fireEvent.change(await screen.findByLabelText('BOM item for Printing'), { target: { value: 'Film XYZ' } });
+    fireEvent.change(screen.getByLabelText('Qty per base for Printing'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save BOM' }));
+    await waitFor(() => expect(screen.getByText(/BOM saved — 1 line/)).toBeInTheDocument());
+
+    // after the save + reload the row still shows the item's identity, not "Any"
+    await waitFor(() => expect(screen.getByLabelText('Material type for Printing row')).toHaveValue('BOPP'));
+    expect(screen.getByLabelText('Sub group for Printing row')).toHaveValue('Films');
+    expect(screen.getByLabelText('Item code for Printing')).toHaveValue('FILM');
   });
 });
