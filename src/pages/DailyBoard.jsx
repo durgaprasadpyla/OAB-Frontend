@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { planningApi, masterApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
@@ -23,6 +23,14 @@ export default function DailyBoard({ embedded = false }) {
   const [msg, setMsg] = useState('');
   const [warn, setWarn] = useState(null);      // { machineId, date } over-booked notice
   const [drop, setDrop] = useState(null);       // pending SO->machine drop (assign modal)
+  // Issues 2.5 — drag/drop feedback. `dragging` is what is currently in the user's
+  // hand ({kind:'so'|'job', ...}); `hover` is the "machineId|shift" zone under the
+  // pointer. Both are UI-only: a drag that is dropped nowhere leaves no trace.
+  const [dragging, setDragging] = useState(null);
+  const [hover, setHover] = useState('');
+  // A drop fires dragend + drop, and the modal's Plan it can be double-clicked; this
+  // guard makes an assign/move idempotent per gesture so the SO cannot be planned twice.
+  const busy = useRef(false);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
@@ -44,47 +52,121 @@ export default function DailyBoard({ embedded = false }) {
     && (shift ? (j.shift || 'A') === shift : true)).sort((a, b) => (a.seqOrder || 0) - (b.seqOrder || 0));
   const capFor = (machineId) => (board.capacity || []).find((c) => String(c.machineId) === String(machineId) && c.date === date);
 
-  // ── drag/drop ──
+  // ── drag/drop ──────────────────────────────────────────────────────────────
+  // The payload travels on the dataTransfer (so a drop works even across a re-render)
+  // AND in `dragging` state, which is what drives the highlighting: dataTransfer is
+  // deliberately unreadable during dragover, so it cannot tell us what is in flight.
   const dragData = (e) => { try { return JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return null; } };
-  const startDragSo = (e, so) => e.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'so', so }));
-  const startDragJob = (e, jobId) => e.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'job', jobId }));
-  const allow = (e) => e.preventDefault();
+  function startDrag(e, payload) {
+    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'move';
+    setDragging(payload);
+  }
+  const startDragSo = (e, so) => startDrag(e, { kind: 'so', so });
+  const startDragJob = (e, jobId) => startDrag(e, { kind: 'job', jobId });
+  const endDrag = () => { setDragging(null); setHover(''); };
+
+  // Which machines may accept what is currently being dragged.
+  //  · an SO  → any machine eligible on its JSS at a route stage still to be planned
+  //             (routeProgress, served by /api/planning/pool)
+  //  · a job  → any machine in the same department as the job
+  // Nothing in hand → every zone is neutral, so the board looks exactly as before.
+  const dropTargetIds = useMemo(() => {
+    if (!dragging) return null;
+    if (dragging.kind === 'so') {
+      const p = (pool || []).find((x) => x.so === dragging.so);
+      const stages = (p && p.routeProgress) || [];
+      const ids = new Set();
+      stages.filter((st) => Number(st.remaining) > 0)
+        .forEach((st) => (st.eligibleMachineIds || []).forEach((id) => ids.add(String(id))));
+      return ids;
+    }
+    const job = (board.jobs || []).find((j) => String(j.id) === String(dragging.jobId));
+    if (!job) return null;
+    return new Set((machines || [])
+      .filter((mc) => String(mc.departmentId) === String(job.departmentId))
+      .map((mc) => String(mc.id)));
+  }, [dragging, pool, board.jobs, machines]);
+
+  const canDropOn = (machineId) => dropTargetIds == null || dropTargetIds.has(String(machineId));
+
+  // Why a machine is dimmed, in the planner's own terms. Only ever shown while a card
+  // is in hand, so the board is unchanged at rest.
+  const whyNot = (mc) => {
+    if (!dragging || canDropOn(mc.id)) return '';
+    if (dragging.kind === 'job') return 'different department';
+    const p = (pool || []).find((x) => x.so === dragging.so);
+    const stage = ((p && p.routeProgress) || []).find((st) => String(st.departmentId) === String(mc.departmentId));
+    if (!stage) return 'not a stage for this order';
+    if (Number(stage.remaining) <= 0) return 'already fully planned';
+    return 'not eligible on this JSS';
+  };
+
+  // A zone only accepts the drop when the machine can take what is in hand — so the
+  // browser shows the no-drop cursor over the rest instead of swallowing the gesture.
+  function allowOn(e, machine, shift) {
+    if (!canDropOn(machine.id)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const key = machine.id + '|' + shift;
+    setHover((h) => (h === key ? h : key));
+  }
+  const leaveZone = (machine, shift) => setHover((h) => (h === machine.id + '|' + shift ? '' : h));
 
   async function onDropMachine(e, machine, shift) {
     e.preventDefault();
     e.stopPropagation();
-    const d = dragData(e);
+    const d = dragData(e) || dragging;
+    endDrag();
     if (!d) return;
+    // Repeated drop events from one gesture (and a drop landing while the previous
+    // save is still in flight) must not raise a second request.
+    if (busy.current) return;
     if (d.kind === 'job') {
       // Move between machines AND between shifts is plain drag-and-drop (§78).
+      busy.current = true;
       try { const r = await planningApi.move({ jobId: d.jobId, machineId: machine.id, planDate: date, shift });
         if (r.capacity?.overbooked) setWarn({ machineId: machine.id, name: machine.name });
         flash(`Job moved to ${machine.code} · Shift ${shift}`); await load();
       } catch (e2) { setErr(e2.message); }
+      finally { busy.current = false; }
       return;
     }
     if (d.kind === 'so') {
       // Need the department (this machine's) + the SO's remaining there.
+      busy.current = true;
       try {
         const sp = await planningApi.soPlan(d.so);
         const dept = (sp.departments || []).find((x) => String(x.departmentId) === String(machine.departmentId));
-        if (!dept) { setErr(`SO ${d.so}'s route has no ${machine.name}'s department`); return; }
+        if (!dept) { setErr(`SO ${d.so} does not pass through ${deptName(machine.departmentId)} — its route is ${(sp.departments || []).map((x) => x.departmentName).join(' → ') || '(not set)'}`); return; }
         const eligible = (dept.machines || []).some((x) => String(x.machineId) === String(machine.id));
-        if (!eligible) { setErr(`${machine.code} is not eligible for SO ${d.so} at ${dept.departmentName}`); return; }
+        if (!eligible) { setErr(`${machine.code} is not eligible for SO ${d.so} at ${dept.departmentName} — set it on the JSS (QC → Machines)`); return; }
+        if (!(Number(dept.remaining) > 0)) {
+          setErr(`SO ${d.so} is already fully planned at ${dept.departmentName} — nothing left to plan there.`);
+          return;
+        }
         setDrop({ so: d.so, machine, department: dept, remaining: Number(dept.remaining), shift });
       } catch (e2) { setErr(e2.message); }
+      finally { busy.current = false; }
     }
   }
 
+  // The modal's Plan it. Guarded so a double-click cannot raise two assigns; the
+  // error is re-thrown so DropForm keeps the form open and shows it (the SO stays in
+  // the pool, exactly where it was, when the server refuses).
   async function doAssign(qty) {
     const { so, machine, department, shift } = drop;
+    if (busy.current) return;
+    busy.current = true;
     try {
       const r = await planningApi.assign({ so, departmentId: department.departmentId, machineId: machine.id, planDate: date, plannedQty: qty, shift });
       setDrop(null);
       if (r.capacity?.overbooked) setWarn({ machineId: machine.id, name: machine.name });
-      flash(r.capacity?.overbooked ? 'Assigned — machine is over-booked' : 'Assigned');
+      flash(r.capacity?.overbooked
+        ? `${so} planned on ${machine.code} · Shift ${shift} — machine is over-booked`
+        : `${so} planned on ${machine.code} · Shift ${shift}`);
       await load();
-    } catch (e) { throw e; }
+    } finally { busy.current = false; }
   }
   async function removeJob(jobId) { try { await planningApi.unassign(jobId); flash('Removed'); await load(); } catch (e) { setErr(e.message); } }
 
@@ -161,15 +243,38 @@ export default function DailyBoard({ embedded = false }) {
                 <div className="ctitle">Ready to Plan <span className="tag ty">{open.length}</span></div>
                 {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned.</div> : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {open.map((p) => (
-                      <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
-                        style={{ border: '1px solid var(--bd)', borderRadius: 8, padding: '8px 10px', cursor: 'grab', background: 'var(--gl)' }}>
-                        <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
-                        <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
-                        <span className="tag ty">ready {p.readyQty}</span>
-                        {p.remainingQty != null && <span className="tag tr" style={{ marginLeft: 4 }}>balance {p.remainingQty}</span>}
-                      </div>
-                    ))}
+                    {open.map((p) => {
+                      const stages = p.routeProgress || [];
+                      const doneN = stages.filter((st) => st.planned).length;
+                      const held = dragging && dragging.kind === 'so' && dragging.so === p.so;
+                      return (
+                        <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)} onDragEnd={endDrag}
+                          style={{ border: '1px solid ' + (held ? 'var(--g)' : 'var(--bd)'), borderRadius: 8, padding: '8px 10px',
+                            cursor: 'grab', background: 'var(--gl)', opacity: held ? 0.45 : 1 }}>
+                          <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
+                          <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
+                          <span className="tag ty">ready {p.readyQty}</span>
+                          {/* Issues 2.5: an SO stays here until EVERY department on its route
+                              is planned. The old card showed only a "balance" (ready x stages
+                              minus planned) — a number matching no physical quantity — so after
+                              a successful drop it looked like nothing had happened. Now the card
+                              names the stages still to plan. */}
+                          {stages.length > 0 && (
+                            <div style={{ marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                              <span className="pg-sub" style={{ margin: 0 }}>Planned {doneN} of {stages.length} stages:</span>
+                              {stages.map((st) => (
+                                <span key={st.departmentId} className={'tag ' + (st.planned ? 'tg' : 'ty')}
+                                  title={st.planned
+                                    ? `${st.departmentName}: planned in full (${st.plannedQty})`
+                                    : `${st.departmentName}: ${st.remaining} still to plan — drag this card onto one of its machines`}>
+                                  {st.planned ? '✓ ' : '⏳ '}{st.departmentName}{st.planned ? '' : ` ${st.remaining}`}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {done > 0 && <div className="pg-sub" style={{ marginTop: 6 }}>✅ {done} sale order(s) fully planned — removed from the pool.</div>}
@@ -190,12 +295,31 @@ export default function DailyBoard({ embedded = false }) {
                   const used = mins(cap?.usedMinutes), capM = mins(cap?.capMinutes) || mins((mc.functionalHoursPerDay || 12) * 60);
                   const over = cap?.overbooked;
                   const pct = capM > 0 ? Math.min(100, Math.round((used / capM) * 100)) : 0;
+                  // Issues 2.5: while something is being dragged the card says plainly
+                  // whether it can take it — a valid machine lifts, an invalid one dims.
+                  const ok = canDropOn(mc.id);
+                  const armed = !!dragging;
+                  const cardHot = armed && ok && hover.startsWith(mc.id + '|');
                   return (
                     <div key={mc.id}
-                      style={{ flex: '1 1 240px', minWidth: 220, border: '1px solid ' + (over ? 'var(--red)' : 'var(--bd)'), borderRadius: 10, padding: 8, background: 'var(--wh)' }}>
+                      // Dropping on the card body (the header, the capacity bar, the gap
+                      // between the shifts) used to do nothing at all — silently, which is
+                      // what made a near-miss look like a broken drop. It now lands on
+                      // Shift A, the same as the zone the pointer was heading for.
+                      onDragOver={(e) => allowOn(e, mc, 'A')}
+                      onDragLeave={() => leaveZone(mc, 'A')}
+                      onDrop={(e) => onDropMachine(e, mc, 'A')}
+                      aria-label={`Machine ${mc.code}`}
+                      style={{ flex: '1 1 240px', minWidth: 220, borderRadius: 10, padding: 8,
+                        border: '1px solid ' + (cardHot ? 'var(--g)' : over ? 'var(--red)' : 'var(--bd)'),
+                        outline: cardHot ? '2px solid var(--g)' : 'none',
+                        background: cardHot ? 'var(--gl)' : 'var(--wh)',
+                        opacity: armed && !ok ? 0.42 : 1,
+                        transition: 'opacity .12s, background .12s' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <b>{mc.code}</b><span className="pg-sub">{mc.name}</span>
                       </div>
+                      {armed && !ok && <div className="pg-sub" style={{ margin: '2px 0 0', fontStyle: 'italic' }}>{whyNot(mc)}</div>}
                       <div style={{ height: 8, borderRadius: 4, background: '#eef1f6', margin: '6px 0', overflow: 'hidden' }}>
                         <div style={{ width: pct + '%', height: '100%', background: over ? 'var(--red)' : 'var(--g)' }} />
                       </div>
@@ -208,7 +332,7 @@ export default function DailyBoard({ embedded = false }) {
                           <div style={{ marginBottom: 6 }}>
                             <div className="pg-sub" style={{ margin: '0 0 3px', fontWeight: 600 }}>⏳ Waiting here</div>
                             {w.map((p) => (
-                              <span key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)}
+                              <span key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)} onDragEnd={endDrag}
                                 title={`${p.spec} · ${p.jobName || ''} — drag onto a shift to plan`}
                                 className="tag ty" style={{ display: 'inline-block', margin: '0 4px 4px 0', cursor: 'grab', padding: '3px 7px' }}>
                                 {p.so}
@@ -220,12 +344,28 @@ export default function DailyBoard({ embedded = false }) {
                       {/* §77-78: one drop zone per shift; drag between them to re-shift a job. */}
                       {SHIFTS.map((sh) => {
                         const jobs = jobsFor(mc.id, sh.k);
+                        const hot = hover === mc.id + '|' + sh.k && ok;
                         return (
-                          <div key={sh.k} onDragOver={allow} onDrop={(e) => onDropMachine(e, mc, sh.k)}
-                            style={{ border: '1px dashed var(--bd)', borderRadius: 8, padding: 6, marginBottom: 6, background: sh.k === 'B' ? '#f4f4fb' : 'transparent' }}>
+                          <div key={sh.k}
+                            onDragOver={(e) => allowOn(e, mc, sh.k)}
+                            onDragEnter={(e) => allowOn(e, mc, sh.k)}
+                            onDragLeave={() => leaveZone(mc, sh.k)}
+                            onDrop={(e) => onDropMachine(e, mc, sh.k)}
+                            aria-label={`${mc.code} Shift ${sh.k}`}
+                            style={{ borderRadius: 8, padding: 6, marginBottom: 6, minHeight: 54,
+                              // Issues 2.5: the zone under the pointer is unmistakable — a solid
+                              // green frame on a tinted ground, instead of the dashed grey it
+                              // wore whether or not the drop would land.
+                              border: hot ? '2px solid var(--g)' : '1px dashed var(--bd)',
+                              background: hot ? 'var(--gl)' : sh.k === 'B' ? '#f4f4fb' : 'transparent',
+                              transition: 'background .12s, border-color .12s' }}>
                             <div className="pg-sub" style={{ marginBottom: 4, fontWeight: 600 }}>{sh.k === 'A' ? '🌞' : '🌙'} {sh.label}</div>
-                            {jobs.length === 0 ? <div className="pg-sub" style={{ margin: 0, fontStyle: 'italic' }}>Drop an SO here</div> : jobs.map((j) => (
-                              <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)}
+                            {jobs.length === 0 ? (
+                              <div className="pg-sub" style={{ margin: 0, fontStyle: 'italic', color: hot ? 'var(--g)' : undefined, fontWeight: hot ? 700 : undefined }}>
+                                {hot ? '⤵ Release to plan here' : 'Drop an SO here'}
+                              </div>
+                            ) : jobs.map((j) => (
+                              <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)} onDragEnd={endDrag}
                                 title={j.changed ? 'Changed after the plan was saved' : undefined}
                                 style={{ border: j.changed ? '2px solid #c9a100' : '1px solid var(--bd)', borderRadius: 8, padding: '6px 8px', marginBottom: 6, cursor: 'grab', background: j.changed ? '#fff8e1' : 'var(--gl)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
