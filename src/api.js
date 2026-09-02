@@ -227,6 +227,8 @@ export const jssApi = {
 
 // ── Department-wise BOM (Stage 3: /api/bom/**) ───────────────────────────────
 export const bomApi = {
+  // Every saved BOM with its lines — the one store QC's Route and BOM writes to.
+  list: () => api('/api/bom'),
   get: (spec) => api('/api/bom/' + encodeURIComponent(spec)),
   set: (spec, body) => api('/api/bom/' + encodeURIComponent(spec), { method: 'PUT', body }),
 };
