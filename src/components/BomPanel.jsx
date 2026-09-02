@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
-import { masterApi } from '../api.js';
+import { masterApi, bomApi } from '../api.js';
 import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO } from '../lib/bom.js';
@@ -47,7 +47,36 @@ function buildItemMaster(purchase) {
 export default function BomPanel() {
   const { mods, save } = useData();
   const { user } = useAuth();
-  const bom = mods.bom || {};
+
+  // The recipes QC saves under Route and BOM live in the planning tables, not in
+  // this screen's own module. Reading only the module meant a BOM entered in QC
+  // never showed here at all — the business hit exactly that. Both are shown: the
+  // planning store is the live one, the module keeps whatever was captured here
+  // before, and a spec present in both prefers the planning store.
+  const [planned, setPlanned] = useState({});
+  const [plannedErr, setPlannedErr] = useState('');
+  const loadPlanned = useCallback(async () => {
+    try {
+      const list = await bomApi.list();
+      const m = {};
+      (Array.isArray(list) ? list : []).forEach((b) => {
+        if (!b || !b.specCode) return;
+        m[String(b.specCode).trim()] = {
+          baseQty: b.baseQty, baseUOM: b.baseUom, savedBy: b.savedBy, savedAt: b.savedAt,
+          items: (b.items || []).map((it) => ({
+            itemCode: it.itemCode, itemDescription: it.itemName, materialType: it.materialType || '',
+            subGroup: it.subGroup || '', microns: it.microns || '', uom: it.uom || '',
+            qtyPerBase: it.qtyPerBase, departmentName: it.departmentName || '',
+          })),
+        };
+      });
+      setPlanned(m);
+    } catch (e) { setPlannedErr(e.message || 'Could not read the planning BOMs'); }
+  }, []);
+  useEffect(() => { loadPlanned(); }, [loadPlanned]);
+
+  // The module this screen has always edited, with the planning store layered over it.
+  const bom = useMemo(() => ({ ...(mods.bom || {}), ...planned }), [mods.bom, planned]);
 
   // QC cannot read the purchase blob (module 6 stays purchase/padmin/superadmin —
   // it carries supplier pricing), so in the QC login the catalogue above is empty
