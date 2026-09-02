@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { stockApi } from '../api.js';
+import { stockApi, bomApi } from '../api.js';
 import { inr } from '../lib/format.js';
 import { calcMetres } from '../lib/calc.js';
 import { custGroupOf } from '../lib/master.js';
@@ -8,8 +8,9 @@ import { exportAOA } from '../lib/xlsx.js';
 import { today } from '../lib/format.js';
 import {
   bomOpenSOList, bomFilterSOList, bomFilterOptions,
-  bomMaterialForSO, bomMaterialForSOList,
+  bomMaterialForSOList, bomMaterialForSOByDept, plannedBomMap,
 } from '../lib/bom.js';
+import { exportSoBomExcel, exportSoBomPDF } from '../lib/bomExport.js';
 
 // Raw Material Requirement — read-only view over the BOMs (module 13) and the
 // open sale orders (module 1). Shows what to buy: aggregated across everything
@@ -24,8 +25,21 @@ const FILTER_KINDS = [
 
 export default function RawMaterialPanel() {
   const { mods } = useData();
-  const bom = mods.bom || {};
   const customers = mods.customers || [];
+
+  // The BOMs QC saves under Route and BOM live in the planning tables, not in
+  // module 13 — and only those carry the department each line belongs to. This
+  // screen read the module alone, so a QC-entered BOM showed here as "No BOM".
+  // Both are used, the planning store winning where a spec is in both.
+  const [planned, setPlanned] = useState({});
+  useEffect(() => {
+    let live = true;
+    bomApi.list()
+      .then((list) => { if (live) setPlanned(plannedBomMap(list)); })
+      .catch(() => { /* planning store unreachable — the module still renders */ });
+    return () => { live = false; };
+  }, []);
+  const bom = useMemo(() => ({ ...(mods.bom || {}), ...planned }), [mods.bom, planned]);
 
   const [sel, setSel] = useState({ group: new Set(), customer: new Set(), spec: new Set() });
   const [picked, setPicked] = useState(() => new Set());   // "sheet|so" keys
@@ -192,8 +206,21 @@ export default function RawMaterialPanel() {
   );
 }
 
+const BTN = { height: 22, fontSize: 10, padding: '0 6px' };
+
 function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
-  const items = open ? bomMaterialForSO(bom, row.spec, row.bal) : [];
+  const groups = open ? bomMaterialForSOByDept(bom, row.spec, row.bal) : [];
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+
+  async function download(kind) {
+    setErr(''); setBusy(kind);
+    try {
+      const ok = kind === 'xls' ? exportSoBomExcel(bom, row) : await exportSoBomPDF(bom, row);
+      if (!ok) setErr('This spec has no BOM lines to download.');
+    } catch (e) { setErr((kind === 'xls' ? 'Excel' : 'PDF') + ' error: ' + (e && e.message ? e.message : String(e))); }
+    finally { setBusy(''); }
+  }
   return (
     <>
       <tr style={row.hasBOM ? undefined : { opacity: 0.55 }}>
@@ -210,27 +237,45 @@ function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
         <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(row.bal)}</td>
         <td style={{ textAlign: 'right' }}>{row.mtrs ? inr(row.mtrs) + ' m' : '-'}</td>
         <td style={{ textAlign: 'center' }}>
-          {row.hasBOM
-            ? <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 8px' }} onClick={onToggle} aria-label={`${open ? 'Hide' : 'View'} material for ${row.so}`}>{open ? 'Hide' : 'View'}</button>
-            : <span style={{ fontSize: 10, color: '#c99a2e', fontStyle: 'italic' }}>No BOM</span>}
+          {row.hasBOM ? (
+            <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+              <button className="btn btn-s" style={BTN} onClick={onToggle} aria-label={`${open ? 'Hide' : 'View'} material for ${row.so}`}>{open ? 'Hide' : 'View'}</button>
+              <button className="btn btn-s" style={BTN} disabled={!!busy} onClick={() => download('xls')}
+                title="Department-wise BOM for this sale order, as Excel"
+                aria-label={`Download department-wise BOM for ${row.so} as Excel`}>{busy === 'xls' ? '…' : '⬇ XLS'}</button>
+              <button className="btn btn-s" style={BTN} disabled={!!busy} onClick={() => download('pdf')}
+                title="Department-wise BOM for this sale order, as PDF"
+                aria-label={`Download department-wise BOM for ${row.so} as PDF`}>{busy === 'pdf' ? '…' : '⬇ PDF'}</button>
+            </div>
+          ) : <span style={{ fontSize: 10, color: '#c99a2e', fontStyle: 'italic' }}>No BOM</span>}
         </td>
       </tr>
+      {(err || busy) && (
+        <tr><td colSpan={8} style={{ padding: '2px 20px 6px', fontSize: 11, color: err ? 'var(--red)' : 'var(--i3)' }}>
+          {err || 'Preparing the download…'}
+        </td></tr>
+      )}
       {open && (
         <tr><td colSpan={8} style={{ padding: '8px 20px', background: 'var(--bg)' }}>
-          {items.length ? (
-            <table style={{ width: '100%' }}>
-              <thead><tr><th style={{ textAlign: 'left' }}>Item Code</th><th style={{ textAlign: 'left' }}>Description</th><th style={{ textAlign: 'right' }}>Required</th></tr></thead>
-              <tbody>
-                {items.map((m, i) => (
-                  <tr key={i}>
-                    <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.itemCode}</td>
-                    <td style={{ fontSize: 11 }}>{m.itemDescription}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(m.required, 2)} {m.uom || ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <span style={{ color: 'var(--i3)', fontSize: 11 }}>No material rows in this BOM.</span>}
+          {groups.length ? groups.map((g) => (
+            <div key={g.department} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--b1)', marginBottom: 2 }}>
+                {g.department} <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— {g.items.length} item(s)</span>
+              </div>
+              <table style={{ width: '100%' }}>
+                <thead><tr><th style={{ textAlign: 'left' }}>Item Code</th><th style={{ textAlign: 'left' }}>Description</th><th style={{ textAlign: 'right' }}>Required</th></tr></thead>
+                <tbody>
+                  {g.items.map((m, i) => (
+                    <tr key={i}>
+                      <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.itemCode}</td>
+                      <td style={{ fontSize: 11 }}>{m.itemDescription}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(m.required, 2)} {m.uom || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )) : <span style={{ color: 'var(--i3)', fontSize: 11 }}>No material rows in this BOM.</span>}
         </td></tr>
       )}
     </>
