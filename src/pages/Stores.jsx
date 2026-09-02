@@ -431,7 +431,7 @@ function Grn({ flash }) {
    * could group them, so this is now a closed list: the approved-supplier list
    * the Purchase Admin keeps, plus anyone already named on a purchase order.
    */
-  const supplierOptions = useMemo(() => {
+  const allSuppliers = useMemo(() => {
     const names = new Set();
     asl.forEach((r) => { const v = String(r.company || '').trim(); if (v) names.add(v); });
     pos.forEach((p) => { const v = String(p.supplier || '').trim(); if (v) names.add(v); });
@@ -462,15 +462,46 @@ function Grn({ flash }) {
   useEffect(() => { load(); }, [load]);
 
   const distinct = (arr, f) => [...new Set(arr.map((x) => String(x[f] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const narrowed = useMemo(() => items.filter((it) => (
+
+  /** The items matching the material / sub-group / speciality pickers alone. */
+  const byFilters = useMemo(() => items.filter((it) => (
     (!fMat || String(it.materialType || '') === fMat)
     && (!fSub || String(it.subGroup || '') === fSub)
     && (!fSpec || String(it.specialtyName || '') === fSpec)
+  )), [items, fMat, fSub, fSpec]);
+
+  const narrowed = useMemo(() => byFilters.filter((it) => (
     // §12: one GRN covers one supplier, so once that supplier is chosen only the
     // items they are approved for can be received against it.
-    && (!itemCodesForSupplier || !itemCodesForSupplier.size
-      || itemCodesForSupplier.has(String(it.code || '').trim().toLowerCase()))
-  )), [items, fMat, fSub, fSpec, itemCodesForSupplier]);
+    !itemCodesForSupplier || !itemCodesForSupplier.size
+      || itemCodesForSupplier.has(String(it.code || '').trim().toLowerCase())
+  )), [byFilters, itemCodesForSupplier]);
+
+  /**
+   * Issues 2.6 — the supplier list narrows to the material, instead of the other way
+   * round. "Under the supplier drop-down I have some 175 suppliers. In order to have a
+   * limited supplier list, I will select the item, specialty and sub group first."
+   * So: pick material → sub-group → speciality, and the picker offers only the
+   * companies the approved-supplier list says supply those items.
+   *
+   * With nothing picked it stays the full list, and if the ASL has no company against
+   * the chosen material it falls back to the full list rather than stranding the desk
+   * with an empty box — the receipt still has to be booked.
+   */
+  const suppliersNarrowed = useMemo(() => {
+    if (!fMat && !fSub && !fSpec) return null;
+    const codes = new Set(byFilters.map((it) => String(it.code || '').trim().toLowerCase()).filter(Boolean));
+    if (!codes.size) return null;
+    const names = new Set();
+    asl.forEach((r) => {
+      if (!codes.has(String(r.itemCode || '').trim().toLowerCase())) return;
+      const v = String(r.company || '').trim();
+      if (v) names.add(v);
+    });
+    return names.size ? [...names].sort((a, b) => a.localeCompare(b)) : null;
+  }, [asl, byFilters, fMat, fSub, fSpec]);
+
+  const supplierOptions = suppliersNarrowed || allSuppliers;
 
   const itemById = (id) => items.find((i) => String(i.id) === String(id)) || null;
   /** The suppliers this item is approved from — the ASL mapping the P Dashboard keeps. */
@@ -534,28 +565,68 @@ function Grn({ flash }) {
           <strong> Purchase Admin</strong> to add it to the Item Master first. If the item came from a supplier it is not
           mapped to, <strong>call the Super Admin to get the association done</strong>.
         </div>
+        {/* Issues 2.6 — the material comes FIRST. Narrowing by material type, sub-group
+            and speciality cuts the 175-name supplier list down to the companies that
+            actually supply it, and cuts the item list down at the same time. */}
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>① What arrived</div>
         <div className="g4">
-          <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
-          {/* §10: PO generation is not automated yet, so this is a plain note — type
-              the number if there is one, leave it blank if there is not. It becomes a
-              picker once POs are raised in the app. */}
-          <div className="fg"><label>Against PO <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
-            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
-              placeholder="PO number, if any" aria-label="Purchase order" />
+          <div className="fg"><label>Material Type</label>
+            <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type filter">
+              <option value="">Any material</option>{distinct(items, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <div className="fg"><label>Sub Group</label>
+            <select value={fSub} onChange={(e) => setFSub(e.target.value)} aria-label="Sub group filter">
+              <option value="">Any sub-group</option>{distinct(items.filter((i) => !fMat || i.materialType === fMat), 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          {/* §14: the same intelligent narrowing as the stock filters — speciality
+              lists only what the chosen material and sub-group actually come in. */}
+          <div className="fg"><label>Speciality</label>
+            <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Speciality filter">
+              <option value="">Any speciality</option>
+              {distinct(items.filter((i) => (!fMat || i.materialType === fMat) && (!fSub || i.subGroup === fSub)), 'specialtyName')
+                .map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
           </div>
           {/* §9: chosen, never typed — and it decides which items this GRN can receive. */}
-          <div className="fg"><label>Supplier</label>
+          <div className="fg"><label>Supplier *</label>
             <select value={head.supplier} aria-label="Supplier"
               onChange={(e) => { setHead({ ...head, supplier: e.target.value }); setLines([blankLine()]); }}>
-              <option value="">— select a supplier —</option>
+              <option value="">{supplierOptions.length ? '— select a supplier —' : '— no suppliers on file —'}</option>
               {supplierOptions.map((sup) => <option key={sup} value={sup}>{sup}</option>)}
               {/* a supplier already on this GRN but no longer on the approved list still reads correctly */}
               {head.supplier && !supplierOptions.includes(head.supplier) && <option value={head.supplier}>{head.supplier}</option>}
             </select>
+            <div className="pg-sub" style={{ margin: '3px 0 0' }}>
+              {!allSuppliers.length
+                ? 'The approved-supplier list is empty — the Purchase Admin adds suppliers on the P Dashboard.'
+                : suppliersNarrowed
+                  ? `${suppliersNarrowed.length} of ${allSuppliers.length} suppliers ${suppliersNarrowed.length === 1 ? 'supplies' : 'supply'} this material.`
+                  : (fMat || fSub || fSpec)
+                    ? `No approved supplier on file for this material — showing all ${allSuppliers.length}.`
+                    : `All ${allSuppliers.length} suppliers — narrow the material above to shorten this list.`}
+            </div>
+          </div>
+        </div>
+
+        <div className="ctitle" style={{ fontSize: 11, margin: '10px 0 2px' }}>② The paperwork</div>
+        <div className="g4">
+          <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
+          {/* §10: PO generation is not automated yet, so this is a plain note — type
+              the number if there is one, leave it blank if there is not. The supplier's
+              own PO numbers are offered, so it is picked rather than remembered. */}
+          <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
+            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
+              list="grn-po-numbers" placeholder="PO number, if any" aria-label="Purchase order" />
+            <datalist id="grn-po-numbers">
+              {pos.filter((p) => !head.supplier || String(p.supplier || '').trim().toLowerCase() === String(head.supplier).trim().toLowerCase())
+                .map((p) => <option key={p.poNum} value={p.poNum} />)}
+            </datalist>
           </div>
           <div className="fg"><label>GRN Date</label><input type="date" value={head.grnDate} onChange={(e) => setHead({ ...head, grnDate: e.target.value })} aria-label="GRN date" /></div>
-          <div className="fg"><label>Invoice No.</label><input value={head.invoiceNo} onChange={(e) => setHead({ ...head, invoiceNo: e.target.value })} aria-label="Invoice number" /></div>
           <div className="fg"><label>Invoice Date</label><input type="date" value={head.invoiceDate} onChange={(e) => setHead({ ...head, invoiceDate: e.target.value })} aria-label="Invoice date" /></div>
+          <div className="fg"><label>Invoice No.</label><input value={head.invoiceNo} onChange={(e) => setHead({ ...head, invoiceNo: e.target.value })} aria-label="Invoice number" /></div>
         </div>
 
         {chosenPo && (
@@ -566,23 +637,6 @@ function Grn({ flash }) {
             ))}
           </div>
         )}
-
-        <div className="fbar" style={{ flexWrap: 'wrap', marginTop: 6 }}>
-          <span className="pg-sub" style={{ margin: 0 }}>Narrow the item list:</span>
-          <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type filter">
-            <option value="">Any material</option>{distinct(items, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select value={fSub} onChange={(e) => setFSub(e.target.value)} aria-label="Sub group filter">
-            <option value="">Any sub-group</option>{distinct(items.filter((i) => !fMat || i.materialType === fMat), 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-          {/* §14: the same intelligent narrowing as the stock filters — speciality
-              lists only what the chosen material and sub-group actually come in. */}
-          <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Speciality filter">
-            <option value="">Any speciality</option>
-            {distinct(items.filter((i) => (!fMat || i.materialType === fMat) && (!fSub || i.subGroup === fSub)), 'specialtyName')
-              .map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-        </div>
 
         <div className="tw"><table>
           <thead><tr>
