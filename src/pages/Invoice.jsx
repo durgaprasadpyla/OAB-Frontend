@@ -30,6 +30,10 @@ export default function Invoice() {
   const [lines, setLines] = useState({});   // { [so]: {checked, qty, rate} }
   const [posOptions, setPosOptions] = useState([]);   // Place-of-Supply choices for the picked PO
   const [pendInv, setPendInv] = useState(null);
+  // Issues 2.6 — the sheet in view is either a DRAFT being checked (Back to Edit /
+  // Confirm and Update OAB) or an invoice already on the register (print / PDF).
+  // `pendSaved` is what tells the two apart.
+  const [pendSaved, setPendSaved] = useState(false);
   const [savedLastN, setSavedLastN] = useState(null);   // numeric tail of the last saved invoice no.
   const [showProforma, setShowProforma] = useState(false);
   // Packing list (restored — it was lost in the one-step-Generate rewrite): bag
@@ -95,13 +99,13 @@ export default function Invoice() {
   const setLine = (so, patch) => setLines((l) => ({ ...l, [so]: { ...l[so], ...patch } }));
 
   /**
-   * Generate = validate + SAVE in one step. The server recomputes total/GST/margin,
-   * bumps invDisp and consumes FG in one transaction (client amounts are ignored),
-   * honours a manually-entered number when it's ahead of the counter and jumps the
-   * counter past it. On success the saved invoice is shown with only Save as PDF /
-   * Print / Close — there is no separate Confirm step any more.
+   * Issues 2.6 — Generate builds the sheet and shows it for CHECKING; it no longer
+   * saves. The business asked for the legacy two-step back: read the numbers on the
+   * rendered invoice, go Back to Edit to correct a quantity, then Confirm and Update
+   * OAB — and only that last click writes anything. Validation runs here so a draft
+   * can never be reviewed in a state the server would refuse.
    */
-  async function generate() {
+  function generate() {
     if (busy) return;
     if (!h.ivNo.trim()) return alert('Enter Invoice Number');
     if (register.some((inv) => inv.no === h.ivNo.trim())) return alert('Invoice number ' + h.ivNo + ' already exists.');
@@ -128,6 +132,38 @@ export default function Invoice() {
         poDate: r.poDate || '', dispLoc: r.dispLoc || '',
       });
     }
+    // Nothing is written yet — this only puts the sheet on screen to be checked.
+    setPendInv(out);
+    setPendSaved(false);
+    window.scrollTo({ top: docRef.current ? docRef.current.offsetTop : 0, behavior: 'smooth' });
+  }
+
+  /**
+   * Issues 2.6 — Back to Edit. Drops the draft sheet and returns to the builder with
+   * every quantity, rate and header field exactly as they were, so a correction is a
+   * two-click round trip. Only ever offered on a draft: an invoice already on the
+   * register cannot be un-issued this way.
+   */
+  function backToEdit() {
+    setPendInv(null);
+    setPendSaved(false);
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+  }
+
+  /**
+   * Issues 2.6 — Confirm and Update OAB: the one click that writes. The server
+   * recomputes total/GST/margin, bumps invDisp and consumes FG in one transaction
+   * (client amounts are ignored), honours a manually-entered number when it is ahead
+   * of the counter and jumps the counter past it.
+   */
+  async function confirmInvoice() {
+    if (busy || !pendInv || pendSaved) return;
+    // Re-check the number at the moment of writing: the register may have moved on
+    // while the draft was being read.
+    if (register.some((inv) => inv.no === h.ivNo.trim())) {
+      flash('Invoice number ' + h.ivNo + ' already exists — go Back to Edit and change it.', 'r');
+      return;
+    }
     setBusy(true);
     try {
       const header = {
@@ -138,7 +174,7 @@ export default function Invoice() {
         transporter: h.transporter, dcNo: h.dcNo, vehicle: h.vehicle, driver: h.driver,
         paymentTerms: h.paymentTerms, freight: num(h.freight), gstType: h.gstType,
       };
-      const lineItems = out.map((p) => ({
+      const lineItems = pendInv.map((p) => ({
         so: p.so, spec: p.spec, jobName: p.jobName, qty: p.qty, rate: p.rate,
         fgToUse: p.fgToUse, dispatchForm: p.dispatchForm,
       }));
@@ -149,10 +185,10 @@ export default function Invoice() {
       const m = /(\d+)$/.exec(newNo);
       setSavedLastN(m ? parseInt(m[1], 10) : null);
       if (newNo !== h.ivNo) set({ ivNo: newNo });   // the sheet shows the number that was actually saved
+      setPendSaved(true);
       flash('✅ Invoice ' + newNo + ' saved — dispatched qty updated.');
-      setPendInv(out);
-      window.scrollTo({ top: docRef.current ? docRef.current.offsetTop : 0, behavior: 'smooth' });
     } catch (e) {
+      // The draft stays on screen exactly as it was, so Confirm can be retried.
       flash('Save failed: ' + e.message, 'r');
     } finally {
       setBusy(false);
@@ -162,6 +198,7 @@ export default function Invoice() {
   /** Close the invoice view and reset the builder for the next invoice. */
   function closePreview() {
     setPendInv(null);
+    setPendSaved(false);
     setLines({});
     setPlItems([]);
     setShowPL(false);
@@ -224,6 +261,7 @@ export default function Invoice() {
     setPendInv(lns.length ? lns : null);
     setH((x) => ({ ...x, ...hdr }));
     setPlItems(entry.packingList || []);   // saved bag ranges travel with the entry
+    setPendSaved(true);                   // it is on the register, so it is not a draft
     // Bring the preview into view. Without this the invoice renders above the
     // register but below the current scroll position, so it looks like nothing
     // happened and users refreshed to "escape" (§16). Viewing only, not download.
@@ -345,13 +383,31 @@ export default function Invoice() {
 
       {pendInv && (
         <div style={{ marginTop: 8 }}>
-          {/* The invoice is already saved by Generate — only output actions remain. */}
+          {/* Issues 2.6: a DRAFT is read, corrected and only then written. Once it is on
+              the register the same sheet carries the output actions instead. */}
+          {!pendSaved ? (
+            <>
+              <div className="al al-y" style={{ maxWidth: 820, margin: '0 auto 10px' }}>
+                <strong>Nothing has been saved yet.</strong> Check the quantities and rates on the invoice below.
+                Use <strong>Back to Edit</strong> to correct anything, then <strong>Confirm and Update OAB</strong> to
+                issue it and post the dispatched quantity.
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+                <button className="btn btn-s" onClick={backToEdit} disabled={busy}>← Back to Edit</button>
+                <button className="btn btn-g" onClick={confirmInvoice} disabled={busy}>
+                  {busy ? 'Saving…' : '✓ Confirm and Update OAB'}
+                </button>
+                <button className="btn btn-r" onClick={closePreview} disabled={busy}>✕ Discard</button>
+              </div>
+            </>
+          ) : (
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn btn-g" onClick={savePDF} disabled={pdfBusy}>{pdfBusy ? 'Generating PDF…' : '⬇ Save as PDF'}</button>
             <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
             <button className="btn btn-s" style={{ background: 'var(--gl)', color: 'var(--g)', border: '1px solid var(--g)' }} onClick={openPackingList}>📦 Create Packing List</button>
             <button className="btn btn-r" onClick={closePreview}>✕ Close — back to Invoices</button>
           </div>
+          )}
           <InvoiceDoc ref={docRef} header={h} lines={pendInv} />
         </div>
       )}

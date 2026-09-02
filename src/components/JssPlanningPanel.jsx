@@ -297,6 +297,19 @@ export default function JssPlanningPanel() {
   // Changing a cascade filter clears the picked item so the narrowed list rules.
   const setLineFil = (i, k, v) => setLines((l) => l.map((x, j) => (j === i ? { ...x, [k]: v, itemId: '', uom: '' } : x)));
 
+  /**
+   * Issues 2.6 — close the open spec and show the JSS list again. The list only
+   * renders when nothing is open, and the only way back used to be emptying the
+   * search box by hand, so the QC left for another tab and came back just to pick
+   * the next spec. Offered at the top and again under Save BOM, which is where the
+   * job actually ends.
+   */
+  function backToList() {
+    setSpec('');
+    setSpecText('');
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+  }
+
   return (
     <div>
       <div className="pg-sub">Configure the route, eligible machines (speed &amp; changeover) and the department-wise BOM for a JSS. Pick the Dispatch Form, then choose one of its routes.</div>
@@ -305,7 +318,12 @@ export default function JssPlanningPanel() {
 
       <div className="card">
         <div className="fg" style={{ maxWidth: 460 }}>
-          <label>JSS Spec {spec && <span className="tag tb" style={{ marginLeft: 6 }}>{spec} open</span>}</label>
+          <label>JSS Spec {spec && <span className="tag tb" style={{ marginLeft: 6 }}>{spec} open</span>}
+            {spec && (
+              <button className="btn btn-s" style={{ marginLeft: 8, height: 20, fontSize: 10, padding: '0 7px' }}
+                onClick={backToList}>← Back to JSS list</button>
+            )}
+          </label>
           <input list="jss-spec-search" value={specText} aria-label="JSS Spec"
             placeholder="— type a spec no. or job name to search —"
             onChange={(e) => onSpecText(e.target.value)} />
@@ -507,7 +525,11 @@ export default function JssPlanningPanel() {
           <div className="card" style={{ marginTop: 12 }}>
             <div className="fbar" style={{ justifyContent: 'space-between' }}>
               <div className="ctitle" style={{ margin: 0 }}>Department-wise BOM</div>
-              <button className="btn btn-g" onClick={saveBom} disabled={!routeDepts.length}>Save BOM</button>
+              <span style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-g" onClick={saveBom} disabled={!routeDepts.length}>Save BOM</button>
+                {/* Issues 2.6: straight back to the list to pick the next spec. */}
+                <button className="btn btn-s" onClick={backToList}>← Back to JSS list</button>
+              </span>
             </div>
             <div className="g3">
               <div className="fg"><label>Base quantity</label><input type="number" step="any" value={baseQty} onChange={(e) => setBaseQty(e.target.value)} /></div>

@@ -93,7 +93,7 @@ describe('Daily Update — manual dispatch breakdown', () => {
 });
 
 describe('Invoice flow', () => {
-  it('generates a tax invoice — Generate saves it into OAB + register directly', async () => {
+  it('Generate shows the sheet for checking and saves nothing until Confirm', async () => {
     const user = userEvent.setup();
     const oab = oabModule({ SF: [{ so: '26/1', spec: 'A1', customer: 'Acme', jobName: 'Pouch A', jobType: 'StayFresh', dispLoc: 'Hyderabad', poNum: 'PO1', poDate: '2026-07-01', poQty: 1000, invDisp: 0, manDisp: 0, fg: 0, dispatchForm: 'pouch', width: 100 }], lastInvNo: 222 });
     const { saved } = renderApp(<Invoice />, { modules: { jss, prices, customers, oab } });
@@ -103,23 +103,40 @@ describe('Invoice flow', () => {
     await user.type(fieldByLabel(/Transporter Name/), 'TransCo');
     await user.click(screen.getByRole('checkbox'));               // the single SKU
     await user.type(inputAfterText(/Invoice Qty/), '200');        // rate pre-fills to 75
-    // Generate now validates AND saves in one step (no separate Confirm button).
     await user.click(screen.getByRole('button', { name: /Generate Invoice/ }));
 
-    // A4 doc: 200 × 75 = 15000 taxable, +18% GST = 17,700 total.
+    // A4 doc: 200 x 75 = 15000 taxable, +18% GST = 17,700 total.
     expect(await screen.findByText('TAX INVOICE')).toBeInTheDocument();
     expect(screen.getAllByText(/17,700/).length).toBeGreaterThan(0);
-    // only the output actions remain on the saved-invoice view — incl. the packing
-    // list (restored on the business's request after the one-step-Generate rewrite)
-    expect(screen.queryByRole('button', { name: /Confirm & Update OAB/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Back to Edit/ })).toBeNull();
-    expect(screen.getByRole('button', { name: /Create Packing List/ })).toBeInTheDocument();
 
-    await waitFor(() => expect(saved.some((s) => s.id === 1)).toBe(true));
-    expect(saved.find((s) => s.id === 1).endpoint).toBe('/api/invoices'); // server-authoritative invoice endpoint
-    const mod = saved.find((s) => s.id === 1).data;
+    // Issues 2.6: this is a DRAFT. Nothing is written, and the sheet carries the two
+    // buttons the business asked for instead of the output actions.
+    expect(screen.getByText(/Nothing has been saved yet/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Back to Edit/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm and Update OAB/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create Packing List/ })).toBeNull();
+    expect(saved.some((x) => x.id === 1)).toBe(false);
+
+    // Back to Edit returns to the builder with the quantity intact...
+    await user.click(screen.getByRole('button', { name: /Back to Edit/ }));
+    await waitFor(() => expect(screen.queryByText('TAX INVOICE')).toBeNull());
+    expect(inputAfterText(/Invoice Qty/)).toHaveValue(200);
+    expect(saved.some((x) => x.id === 1)).toBe(false);
+
+    // ...and only Confirm writes.
+    await user.click(screen.getByRole('button', { name: /Generate Invoice/ }));
+    await screen.findByText('TAX INVOICE');
+    await user.click(screen.getByRole('button', { name: /Confirm and Update OAB/ }));
+
+    await waitFor(() => expect(saved.some((x) => x.id === 1)).toBe(true));
+    expect(saved.find((x) => x.id === 1).endpoint).toBe('/api/invoices'); // server-authoritative invoice endpoint
+    const mod = saved.find((x) => x.id === 1).data;
     expect(mod.INV_REG[0]).toMatchObject({ qty: 200, amount: 15000, po: 'PO1' });
     expect(mod.INV_REG[0].items[0]).toMatchObject({ spec: 'A1', rate: 75, qty: 200 });
     expect(mod.OAB.SF[0].invDisp).toBe(200);
+
+    // once issued the same sheet carries the output actions instead
+    await screen.findByRole('button', { name: /Create Packing List/ });
+    expect(screen.queryByRole('button', { name: /Confirm and Update OAB/ })).toBeNull();
   });
 });

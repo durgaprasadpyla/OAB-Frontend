@@ -58,11 +58,19 @@ beforeEach(() => {
     if (u.includes('/api/stores/txns')) return res(200, []);
     if (u.includes('/api/stores/po-eta')) return res(200, []);
     if (u.includes('/api/master/items')) return res(200, [
-      { id: 1, code: 'FILM-BOPP20', name: 'BOPP Film 20mic', uom: 'Kg', materialType: 'BOPP', subGroup: 'Films' },
+      { id: 1, code: 'FILM-BOPP20', name: 'BOPP Film 20mic', uom: 'Kg', materialType: 'BOPP', subGroup: 'Films', specialtyName: 'High Barrier' },
+      { id: 2, code: 'INK-CYAN', name: 'Cyan Ink', uom: 'Kg', materialType: 'Ink', subGroup: 'Chemicals', specialtyName: 'Surface' },
+      { id: 3, code: 'INK-WHITE', name: 'White Ink', uom: 'Kg', materialType: 'Ink', subGroup: 'Chemicals', specialtyName: 'Reverse' },
     ]);
     if (u.includes('/rest/v1/oab_data')) {
       return res(200, [{ id: 6, data: JSON.stringify({
-        asl: [{ company: 'Cosmos Films', itemCode: 'FILM-BOPP20' }],
+        asl: [
+          { company: 'Cosmos Films', itemCode: 'FILM-BOPP20' },
+          { company: 'Siegwerk India', itemCode: 'INK-CYAN' },
+          { company: 'Flint Group', itemCode: 'INK-CYAN' },
+          { company: 'Sun Chemical', itemCode: 'INK-WHITE' },
+          { company: 'Unmapped Traders' },
+        ],
         pos: [{ poNum: 'BLM/PUR/2026-2027/7', poDate: '2026-08-20', supplier: 'Cosmos Films', status: 'Open',
                 items: [{ item: 'BOPP Film 20mic', qty: 500, unit: 'Kg', rate: 120, receivedQty: 0 }] }],
       }), version: 1 }]);
@@ -176,6 +184,84 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // §12: one GRN, one supplier — carried from the header onto every line.
     expect(post.body.lines[0].supplier).toBe('Cosmos Films');
     expect(post.body.supplier).toBe('Cosmos Films');
+  });
+
+  // ── Issues 2.6: the client could not raise a GRN at all ──────────────────
+  //
+  //  "while adding a GRN supplier drop down is empty … without selecting a supplier
+  //   I will not be able to add any item"  — the list is the approved-supplier list,
+  //   which lives in module 6; the stores role could not read it (403) so the box
+  //   came back empty and the whole screen was unusable. The read is now granted
+  //   (AuthzService), and the picker narrows to the material instead of the reverse:
+  //
+  //  "Under the supplier drop-down I have some 175 suppliers. In order to have a
+  //   limited supplier list, I will select the item, specialty and subgroup first."
+
+  const openGrn = async (user) => {
+    mount();
+    await user.click(screen.getByText(/GRN/));
+    await screen.findByText('📥 New goods receipt');
+  };
+  const supplierNames = () => [...screen.getByLabelText('Supplier').options].slice(1).map((o) => o.text);
+
+  it('fills the supplier picker from the approved-supplier list', async () => {
+    const user = userEvent.setup();
+    await openGrn(user);
+    expect(supplierNames()).toEqual(['Cosmos Films', 'Flint Group', 'Siegwerk India', 'Sun Chemical', 'Unmapped Traders']);
+    expect(screen.getByText(/All 5 suppliers/)).toBeInTheDocument();
+  });
+
+  it('narrows the supplier list down to the companies that supply the chosen material', async () => {
+    const user = userEvent.setup();
+    await openGrn(user);
+    // material first…
+    fireEvent.change(screen.getByLabelText('Material type filter'), { target: { value: 'Ink' } });
+    await waitFor(() => expect(supplierNames()).toEqual(['Flint Group', 'Siegwerk India', 'Sun Chemical']));
+    expect(screen.getByText(/3 of 5 suppliers supply this material/)).toBeInTheDocument();
+    // …then speciality cuts it to the one company on that item
+    fireEvent.change(screen.getByLabelText('Speciality filter'), { target: { value: 'Reverse' } });
+    await waitFor(() => expect(supplierNames()).toEqual(['Sun Chemical']));
+    expect(screen.getByText(/1 of 5 suppliers supplies this material/)).toBeInTheDocument();
+  });
+
+  it('falls back to every supplier when the approved list has none for that material', async () => {
+    const user = userEvent.setup();
+    await openGrn(user);
+    // BOPP's only approved supplier is on FILM-BOPP20; pick a speciality nothing maps to
+    fireEvent.change(screen.getByLabelText('Material type filter'), { target: { value: 'BOPP' } });
+    await waitFor(() => expect(supplierNames()).toEqual(['Cosmos Films']));
+    fireEvent.change(screen.getByLabelText('Speciality filter'), { target: { value: 'High Barrier' } });
+    await waitFor(() => expect(supplierNames()).toEqual(['Cosmos Films']));
+    // an item with no ASL row at all → the desk still gets the full list, never an
+    // empty box: the receipt has to be booked either way.
+    fireEvent.change(screen.getByLabelText('Material type filter'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Speciality filter'), { target: { value: 'Surface' } });
+    await waitFor(() => expect(supplierNames()).toEqual(['Flint Group', 'Siegwerk India']));
+  });
+
+  it('narrows the items to that supplier once one is chosen, and suggests their PO', async () => {
+    const user = userEvent.setup();
+    await openGrn(user);
+    // the item box stays shut until a supplier is named (§12: one GRN, one supplier)
+    expect(screen.getByLabelText('Item for line 1')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Material type filter'), { target: { value: 'Ink' } });
+    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Siegwerk India' } });
+    await waitFor(() => expect(screen.getByLabelText('Item for line 1')).not.toBeDisabled());
+    const itemNames = [...screen.getByLabelText('Item for line 1').options].slice(1).map((o) => o.text);
+    expect(itemNames).toEqual(['INK-CYAN — Cyan Ink']);
+  });
+
+  it('offers the header fields in the order the receipt is worked: material, then paperwork', async () => {
+    const user = userEvent.setup();
+    await openGrn(user);
+    const order = ['Material type filter', 'Sub group filter', 'Speciality filter', 'Supplier',
+      'GRN number', 'Purchase order', 'GRN date', 'Invoice date', 'Invoice number']
+      .map((l) => screen.getByLabelText(l));
+    for (let i = 1; i < order.length; i++) {
+      // eslint-disable-next-line no-bitwise
+      const after = order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING;
+      expect(after, `${order[i].getAttribute('aria-label')} should come after ${order[i - 1].getAttribute('aria-label')}`).toBeTruthy();
+    }
   });
 
   it('issues from the oldest roll and returns a split roll as two new rolls', async () => {
