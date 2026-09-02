@@ -589,30 +589,43 @@ export default function JssPlanningPanel() {
                             const sel = itemById(l.itemId);
                             // Issues 2.0: the same cascading dropdowns as the old BOM —
                             // Material Type → Sub-Group → Specialty narrow the item list.
-                            const byMat = l._mat ? deptItems.filter((it) => String(it.materialType || '').trim() === l._mat) : deptItems;
-                            const bySub = l._sub ? byMat.filter((it) => String(it.subGroup || '').trim() === l._sub) : byMat;
-                            const narrowed = l._spl ? bySub.filter((it) => String(it.specialtyName || '').trim() === l._spl) : bySub;
+                            // These three read as columns of the row, but they were pure
+                            // filter state — never saved, and never restored. So every
+                            // save reloaded the BOM and left every row showing "Any",
+                            // which is what the business kept reporting. Where the
+                            // operator has not deliberately set one, show the CHOSEN
+                            // ITEM's own identity: that survives a reload, because it
+                            // comes from the item master.
+                            const rowMat = l._mat !== undefined ? l._mat : String((sel && sel.materialType) || '');
+                            const rowSub = l._sub !== undefined ? l._sub : String((sel && sel.subGroup) || '');
+                            const rowSpl = l._spl !== undefined ? l._spl : String((sel && sel.specialtyName) || '');
+                            const byMat = rowMat ? deptItems.filter((it) => String(it.materialType || '').trim() === rowMat) : deptItems;
+                            const bySub = rowSub ? byMat.filter((it) => String(it.subGroup || '').trim() === rowSub) : byMat;
+                            const narrowed = rowSpl ? bySub.filter((it) => String(it.specialtyName || '').trim() === rowSpl) : bySub;
                             return (
                               <tr key={i}>
                                 <td>
                                   <select style={{ width: '100%' }} aria-label={`Material type for ${d.departmentName} row`}
-                                    value={l._mat || ''} onChange={(e) => setLineFil(i, '_mat', e.target.value)}>
+                                    value={rowMat} onChange={(e) => setLineFil(i, '_mat', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(deptItems, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
+                                    {rowMat && !distinct(deptItems, 'materialType').includes(rowMat) && <option value={rowMat}>{rowMat}</option>}
                                   </select>
                                 </td>
                                 <td>
                                   <select style={{ width: '100%' }} aria-label={`Sub group for ${d.departmentName} row`}
-                                    value={l._sub || ''} onChange={(e) => setLineFil(i, '_sub', e.target.value)}>
+                                    value={rowSub} onChange={(e) => setLineFil(i, '_sub', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(byMat, 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
+                                    {rowSub && !distinct(byMat, 'subGroup').includes(rowSub) && <option value={rowSub}>{rowSub}</option>}
                                   </select>
                                 </td>
                                 <td>
                                   <select style={{ width: '100%' }} aria-label={`Specialty for ${d.departmentName} row`}
-                                    value={l._spl || ''} onChange={(e) => setLineFil(i, '_spl', e.target.value)}>
+                                    value={rowSpl} onChange={(e) => setLineFil(i, '_spl', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(bySub, 'specialtyName').map((v) => <option key={v} value={v}>{v}</option>)}
+                                    {rowSpl && !distinct(bySub, 'specialtyName').includes(rowSpl) && <option value={rowSpl}>{rowSpl}</option>}
                                   </select>
                                 </td>
                                 <td>
