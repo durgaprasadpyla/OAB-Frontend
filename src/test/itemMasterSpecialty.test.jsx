@@ -66,8 +66,10 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     expect(dept.tagName).toBe('SELECT');
     expect(dept).toHaveValue('Printing');
     expect(within(dept).getByRole('option', { name: 'Slitting' })).toBeInTheDocument();
-    // change specialty in the form → Update Item saves it
-    fireEvent.change(screen.getByLabelText('Item form Specialty'), { target: { value: 'Metallized' } });
+    // Issues 3.1: Specialty is a picker — 'Metallized' is not in the catalog yet, so it
+    // comes in through "＋ Add new specialty…" and the text field that reveals.
+    fireEvent.change(screen.getByLabelText('Item form Specialty'), { target: { value: '__new__' } });
+    fireEvent.change(screen.getByLabelText('New Specialty'), { target: { value: 'Metallized' } });
     fireEvent.click(screen.getByRole('button', { name: /Update Item/ }));
     await waitFor(() => expect(saved.length).toBeGreaterThan(0));
     expect(lastSavedItems()[0]).toMatchObject({ specialty: 'Metallized', department: 'Printing' });
@@ -78,8 +80,12 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     mount();
     await openItemMaster();
     fireEvent.change(screen.getByLabelText('Item form Description'), { target: { value: 'Hotmelt' } });
-    fireEvent.change(screen.getByLabelText('Item form Sub Group'), { target: { value: 'Adhesives' } });
-    fireEvent.change(screen.getByLabelText('Item form Specialty'), { target: { value: 'Solvent-free' } });
+    // Issues 3.1: an empty catalog has nothing to pick, so both taxonomy values arrive
+    // through the dropdown's own "＋ Add new …" entry.
+    fireEvent.change(screen.getByLabelText('Item form Sub Group'), { target: { value: '__new__' } });
+    fireEvent.change(screen.getByLabelText('New Sub Group'), { target: { value: 'Adhesives' } });
+    fireEvent.change(screen.getByLabelText('Item form Specialty'), { target: { value: '__new__' } });
+    fireEvent.change(screen.getByLabelText('New Specialty'), { target: { value: 'Solvent-free' } });
     await userEvent.selectOptions(await screen.findByLabelText('Item form department'), 'Slitting');
     fireEvent.click(screen.getByRole('button', { name: /Add Item/ }));
     await waitFor(() => expect(saved.length).toBeGreaterThan(0));
@@ -95,6 +101,8 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     expect(await screen.findByText('Legacy Film')).toBeInTheDocument();   // renders without error
     fireEvent.click(screen.getByLabelText('Edit item RM-OLD'));
     expect(screen.getByLabelText('Item form Specialty')).toHaveValue('');   // no crash on undefined
+    // …and a legacy value the picker's list does not contain is still selected, not lost.
+    expect(screen.getByLabelText('Item form Material Type')).toHaveValue('PET');
   });
 
   it('SEARCH: filtering by a Specialty term finds the item', async () => {
