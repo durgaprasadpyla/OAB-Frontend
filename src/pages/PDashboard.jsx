@@ -673,15 +673,26 @@ function ASLEditor() {
 // Enhancements 2.0 §1 + §11: Specialty is a per-item field on THIS Padmin Item Master
 // (positioned right after Sub Group), and Department is a dropdown at the END (after
 // UOM) sourced from the production Department master. (Not a separate Super Admin tab.)
+//
+// Issues 3.1: the taxonomy fields (Material Type / Sub Group / Specialty / UOM) are
+// PICKERS over the values already in the catalog, with "＋ Add new …" inside the
+// dropdown — the same shape as Customers' Add-new-group / Add-new-customer. Typing
+// them free-hand is what produced "PRINTING" vs "Printing" and FILM/AF BOPP drifting
+// apart. `pick` names the option list; Description and Microns stay free text (they
+// are the item's own name and a number), Department is already a master dropdown.
 const IM_FIELDS = [
   { k: 'specificMaterial', label: 'Description' },
-  { k: 'materialType', label: 'Material Type' },
-  { k: 'subGroup', label: 'Sub Group' },
-  { k: 'specialty', label: 'Specialty' },                 // §11: after Sub Group
+  { k: 'materialType', label: 'Material Type', pick: true },
+  { k: 'subGroup', label: 'Sub Group', pick: true },
+  { k: 'specialty', label: 'Specialty', pick: true },     // §11: after Sub Group
   { k: 'microns', label: 'Microns' },
-  { k: 'uom', label: 'UOM' },
+  { k: 'uom', label: 'UOM', pick: true },
   { k: 'department', label: 'Department', dept: true },   // §11: at the end, after UOM (dropdown)
 ];
+/** The picker fields, in form order. */
+const IM_PICKS = IM_FIELDS.filter((f) => f.pick).map((f) => f.k);
+/** Sentinel the pickers use for "＋ Add new …" (same token CustomersAdmin uses). */
+const NEW = '__new__';
 
 // Header-key matcher for Excel import: case/space/punctuation-insensitive. (imImportExcel pick 12261)
 function pickCol(o, names) {
@@ -755,19 +766,71 @@ function ItemMaster() {
     [aslItems, extra],
   );
 
+  // Issues 3.1 — the Add/Edit form's pickers.
+  // Every row in the catalog (ASL-owned + catalogue-only) is the source of truth for
+  // what already exists, so an item added with a brand-new value simply makes that
+  // value available to the next one. No extra master list to keep in step.
+  const allRows = useMemo(() => [...aslItems.map((m) => m.ref), ...extra], [aslItems, extra]);
+  const distinct = (key) => [...new Set(allRows.map((r) => String(r[key] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const specialties = useMemo(() => distinct('specialty'), [allRows]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const uoms = useMemo(() => distinct('uom'), [allRows]);                // eslint-disable-line react-hooks/exhaustive-deps
+  // Which sub-groups live under each material type (FILM → AF BOPP, …), so the
+  // Sub Group picker narrows to the chosen material instead of listing the lot.
+  const subGroupsByMat = useMemo(() => {
+    const m = new Map();
+    allRows.forEach((r) => {
+      const sg = String(r.subGroup || '').trim();
+      if (!sg) return;
+      const mt = String(r.materialType || '').trim();
+      if (!m.has(mt)) m.set(mt, new Set());
+      m.get(mt).add(sg);
+    });
+    return m;
+  }, [allRows]);
+
   // Issues 2.0: nothing is edited in the table directly. A TOP FORM (like the
   // Add-New-Supplier page) adds items; a radio picks a row to edit in that form.
   const blankItem = () => ({ itemCode: '', specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' });
   const [imForm, setImForm] = useState(blankItem);
   const [imEditIdx, setImEditIdx] = useState(-1);
+  // Issues 3.1: the text typed into a picker that is sitting on "＋ Add new …".
+  const blankNew = () => ({ materialType: '', subGroup: '', specialty: '', uom: '' });
+  const [imNew, setImNew] = useState(blankNew);
   const setImField = (k) => (e) => setImForm((f) => ({ ...f, [k]: e.target.value }));
-  function startEditItem(i) { setImForm({ ...blankItem(), ...extra[i] }); setImEditIdx(i); }
-  function cancelEditItem() { setImForm(blankItem()); setImEditIdx(-1); }
+  function startEditItem(i) { setImForm({ ...blankItem(), ...extra[i] }); setImNew(blankNew()); setImEditIdx(i); }
+  function cancelEditItem() { setImForm(blankItem()); setImNew(blankNew()); setImEditIdx(-1); }
+
+  // Options behind each picker. Sub Group narrows to the chosen Material Type; with
+  // none chosen (or a brand-new one being typed) it offers every sub-group there is.
+  const formSubGroups = useMemo(() => {
+    const mt = String(imForm.materialType || '').trim();
+    if (!mt || mt === NEW) return subGroups;
+    return [...(subGroupsByMat.get(mt) || [])].sort((a, b) => a.localeCompare(b));
+  }, [imForm.materialType, subGroups, subGroupsByMat]);
+  const pickOptions = (k) => (k === 'materialType' ? matTypes : k === 'subGroup' ? formSubGroups : k === 'specialty' ? specialties : uoms);
+
+  // Changing the Material Type drops a Sub Group that does not belong under the new
+  // one — otherwise the row silently saves an impossible pair (FILM / Adhesives).
+  function setImMaterialType(v) {
+    setImForm((f) => {
+      const mt = String(v || '').trim();
+      const allowed = mt && mt !== NEW ? subGroupsByMat.get(mt) : null;
+      const keepSub = !allowed || !f.subGroup || f.subGroup === NEW || allowed.has(f.subGroup);
+      return { ...f, materialType: v, subGroup: keepSub ? f.subGroup : '' };
+    });
+  }
 
   async function submitItem() {
     const f = { ...imForm };
+    // Issues 3.1: a picker parked on "＋ Add new …" stores the sentinel, not a value —
+    // swap in what was typed beside it before anything else looks at the row.
+    IM_PICKS.forEach((k) => { if (f[k] === NEW) f[k] = imNew[k]; });
     Object.keys(f).forEach((k) => { f[k] = String(f[k] ?? '').trim(); });
     if (!f.specificMaterial) { flash('r', 'Enter a Description for the item.'); return; }
+    // "Add new" with nothing typed is a slip, not a deliberately blank field — saying so
+    // beats silently writing an empty Material Type onto the item.
+    const empty = IM_FIELDS.find((x) => x.pick && imForm[x.k] === NEW && !f[x.k]);
+    if (empty) { flash('r', 'Enter the new ' + empty.label + ', or pick an existing one.'); return; }
     // The code is always system-assigned: next free number for a new item, the
     // row's own code (unchanged) when editing.
     f.itemCode = imEditIdx >= 0 ? String(extra[imEditIdx]?.itemCode || '').trim() || nextItemCode(asl, extra) : nextItemCode(asl, extra);
@@ -875,6 +938,28 @@ function ItemMaster() {
                   {imForm[f.k] && !depts.some((d) => d.name === imForm[f.k]) && <option value={imForm[f.k]}>{imForm[f.k]}</option>}
                   {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
                 </select>
+              ) : f.pick ? (
+                /* Issues 3.1: pick from what the catalog already uses, or add a new one
+                   from inside the same dropdown (as on Customers). */
+                <>
+                  <select value={imForm[f.k] ?? ''} aria-label={'Item form ' + f.label}
+                    onChange={f.k === 'materialType' ? (e) => setImMaterialType(e.target.value) : setImField(f.k)}>
+                    <option value="">— select {f.label.toLowerCase()} —</option>
+                    {/* An imported/legacy value that is not in the list must stay selected. */}
+                    {imForm[f.k] && imForm[f.k] !== NEW && !pickOptions(f.k).includes(imForm[f.k]) && <option value={imForm[f.k]}>{imForm[f.k]}</option>}
+                    {pickOptions(f.k).map((v) => <option key={v} value={v}>{v}</option>)}
+                    <option value={NEW}>＋ Add new {f.label.toLowerCase()}…</option>
+                  </select>
+                  {imForm[f.k] === NEW && (
+                    <input placeholder={'New ' + f.label.toLowerCase()} value={imNew[f.k]} aria-label={'New ' + f.label}
+                      style={{ marginTop: 6 }} onChange={(e) => setImNew((n) => ({ ...n, [f.k]: e.target.value }))} />
+                  )}
+                  {f.k === 'subGroup' && imForm.materialType && imForm.materialType !== NEW && (
+                    <div style={{ fontSize: 11, color: 'var(--i3)', marginTop: 3 }}>
+                      {formSubGroups.length ? 'Sub groups under ' + imForm.materialType : 'No sub group under ' + imForm.materialType + ' yet — add one'}
+                    </div>
+                  )}
+                </>
               ) : (
                 <input value={imForm[f.k] ?? ''} onChange={setImField(f.k)} aria-label={'Item form ' + f.label} />
               )}
