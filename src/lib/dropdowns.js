@@ -30,6 +30,10 @@ export const DROPDOWN_DEFS = [
   // by the normalized store_location master rather than the sales blob, because the
   // stores role cannot read that blob — the trap the despatch forms fell into.
   { key: 'storeLocations', label: 'Store Locations', where: 'Stores — GRN put-away', type: 'list', master: 'storeloc' },
+  // Issues 2.6: the units an item is measured in. Backed by the normalized uom
+  // master for the same reason as Departments and Store Locations — the PAdmin
+  // Item Master, which is where the picker is used, cannot read the sales blob.
+  { key: 'uoms', label: 'UOM', where: 'PAdmin — Item Master · Stores GRN', type: 'list', master: 'uom' },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.
@@ -42,6 +46,14 @@ export const DROPDOWN_DEFS = [
   { key: 'responsible', label: 'CSA Responsible Persons', where: 'QC — CSA report', type: 'list' },
   { key: 'substrates', label: 'CSA Substrates', where: 'QC · PM · Quote', type: 'substrate', store: 'substrate_options' },
 ];
+
+/**
+ * Issues 2.6 — the four units the business kept when the free-text list was cleaned
+ * up (it had grown KG / Kgs / NO'S / NO'S / BOX / LTR / MTR / ROLL). Offered until
+ * the Super Admin saves their own list in the uom master, so the picker is never
+ * empty and never shows the old duplicates.
+ */
+export const UOM_DEFAULTS = ['Kg', 'Lt', 'Mtr', "No's"];
 
 export const DD_DEFAULTS = {
   categories: REP_CATEGORIES,

@@ -25,12 +25,16 @@ const ITEMS = [
 let itemsExtra;
 let asl;
 let saved;
+// Issues 2.6: UOM no longer comes from the catalog rows — it is the units master
+// (Dashboard → Drop-down selections → UOM). Empty here, so the four defaults show.
+let uomMaster;
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_role', 'padmin');
   saved = [];
   asl = [];
+  uomMaster = [];
   itemsExtra = ITEMS.map((r) => ({ ...r }));
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -38,6 +42,7 @@ beforeEach(() => {
     const body = opts.body ? JSON.parse(opts.body) : {};
     if (u.includes('/api/auth/me')) return res(200, { username: 'padmin', role: 'padmin' });
     if (u.includes('/api/master/departments')) return res(200, [{ id: 1, name: 'Printing', active: true }]);
+    if (u.includes('/api/master/uoms')) return res(200, uomMaster);
     if (u.includes('/rest/v1/oab_data')) {
       if (method === 'GET') return res(200, [{ id: 6, data: JSON.stringify({ asl, pos: [], priceHistory: [], counter: 0, itemsExtra }), version: 1 }]);
       saved.push(body);
@@ -66,8 +71,10 @@ describe('Issues 3.1 — Item Master taxonomy pickers', () => {
       .toEqual(['— select material type —', 'FILM', 'INK', '＋ Add new material type…']);
     expect(opts(screen.getByLabelText('Item form Specialty')))
       .toEqual(['— select specialty —', 'Metallized', 'UV Cure', '＋ Add new specialty…']);
+    // Issues 2.6: the units master is the source — not KG/LTR scraped off the rows.
+    // Nothing saved in the master yet, so the four standard units are offered.
     expect(opts(screen.getByLabelText('Item form UOM')))
-      .toEqual(['— select uom —', 'KG', 'LTR', '＋ Add new uom…']);
+      .toEqual(['— select uom —', 'Kg', 'Lt', 'Mtr', "No's", '＋ Add new uom…']);
     // Description and Microns are the item's own name and a number — still free text.
     expect(screen.getByLabelText('Item form Description').tagName).toBe('INPUT');
     expect(screen.getByLabelText('Item form Microns').tagName).toBe('INPUT');
@@ -116,12 +123,12 @@ describe('Issues 3.1 — Item Master taxonomy pickers', () => {
     pick('Item form Material Type', 'FILM');
     pick('Item form Sub Group', 'AF BOPP');
     pick('Item form Specialty', 'Metallized');
-    pick('Item form UOM', 'KG');
+    pick('Item form UOM', 'Kg');
     fireEvent.click(screen.getByRole('button', { name: /Add Item/ }));
 
     await waitFor(() => expect(saved.length).toBeGreaterThan(0));
     expect(lastSavedItems()[0]).toMatchObject({
-      specificMaterial: '900 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialty: 'Metallized', uom: 'KG',
+      specificMaterial: '900 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialty: 'Metallized', uom: 'Kg',
     });
   });
 
@@ -168,7 +175,9 @@ describe('Issues 3.1 — Item Master taxonomy pickers', () => {
     await openItemMaster();
 
     expect(opts(screen.getByLabelText('Item form Material Type'))).toContain('PAPER');
-    expect(opts(screen.getByLabelText('Item form UOM'))).toContain('REAM');
+    // UOM is a master now (Issues 2.6), so it is NOT scraped from the ASL row — only
+    // the taxonomy fields are. The unit list stays the Super Admin's.
+    expect(opts(screen.getByLabelText('Item form UOM'))).not.toContain('REAM');
     pick('Item form Material Type', 'PAPER');
     expect(opts(screen.getByLabelText('Item form Sub Group')))
       .toEqual(['— select sub group —', 'Kraft', '＋ Add new sub group…']);
@@ -182,7 +191,10 @@ describe('Issues 3.1 — Item Master taxonomy pickers', () => {
     expect(screen.getByLabelText('Item form Material Type')).toHaveValue('FILM');
     expect(screen.getByLabelText('Item form Sub Group')).toHaveValue('AF BOPP');
     expect(screen.getByLabelText('Item form Specialty')).toHaveValue('Metallized');
+    // Issues 2.6: KG is not on the master, but the row already carries it — so it is
+    // still offered and still selected. Opening an old row never changes its unit.
     expect(screen.getByLabelText('Item form UOM')).toHaveValue('KG');
+    expect(opts(screen.getByLabelText('Item form UOM'))).toContain('KG');
 
     // Re-point it to an existing sibling sub group and save.
     pick('Item form Sub Group', 'PET');

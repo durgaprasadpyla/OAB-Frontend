@@ -217,6 +217,33 @@ describe('JssPlanningPanel', () => {
     await waitFor(() => expect(screen.queryByText('Dispatch Type & Route')).not.toBeInTheDocument());
   });
 
+  /**
+   * Issues 2.6 — "After I create a BOM I should be able to go back to the JSS list,
+   * whereas now I have to go back to some other tab and only then I'm able to go to
+   * the JSS list." The list only renders while nothing is open, and the only way to
+   * close a spec was emptying the search box by hand.
+   */
+  it('offers a way back to the JSS list once a spec is open', async () => {
+    render(<JssPlanningPanel />);
+    const box = await screen.findByLabelText('JSS Spec');
+    // no spec open — the list is showing, so there is nothing to go back to
+    await screen.findByText(/JSS List/);
+    expect(screen.queryByRole('button', { name: /Back to JSS list/ })).toBeNull();
+
+    fireEvent.change(box, { target: { value: 'a2 — map pouch 500g' } });
+    await waitFor(() => expect(screen.getByText('Dispatch Type & Route')).toBeInTheDocument());
+    expect(screen.queryByText(/JSS List/)).toBeNull();
+
+    // offered at the top of the open spec and again beside Save BOM, where the job ends
+    const backs = screen.getAllByRole('button', { name: /Back to JSS list/ });
+    expect(backs.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(backs[0]);
+
+    await waitFor(() => expect(screen.getByText(/JSS List/)).toBeInTheDocument());
+    expect(screen.queryByText('Dispatch Type & Route')).toBeNull();
+    expect(screen.getByLabelText('JSS Spec')).toHaveValue('');   // the search box is cleared too
+  });
+
   // Issues 1.0 #4: opening the panel refreshes the normalized items from the
   // Padmin catalogue so department-tagged items reach the BOM picker.
   it('syncs the item master from the purchase catalogue on open', async () => {

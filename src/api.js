@@ -180,6 +180,12 @@ export const changePassword = (currentPassword, newPassword) =>
 // are superadmin-only, item writes purchase/padmin/superadmin, stock writes add
 // stores — all enforced server-side (403 surfaces as err.code='forbidden').
 export const masterApi = {
+  // Issues 2.6: the units-of-measure master — the Item Master / GRN pickers read it,
+  // the Super Admin edits it under Dashboard → Drop-down selections → UOM.
+  listUoms: (p) => api('/api/master/uoms' + qs(p)),
+  createUom: (body) => api('/api/master/uoms', { method: 'POST', body }),
+  updateUom: (id, body) => api('/api/master/uoms/' + encodeURIComponent(id), { method: 'PUT', body }),
+  deleteUom: (id) => api('/api/master/uoms/' + encodeURIComponent(id), { method: 'DELETE' }),
   listDepartments: (p) => api('/api/master/departments' + qs(p)),
   createDepartment: (body) => api('/api/master/departments', { method: 'POST', body }),
   updateDepartment: (id, body) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'PUT', body }),

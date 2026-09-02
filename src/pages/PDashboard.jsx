@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi } from '../api.js';
+import { UOM_DEFAULTS } from '../lib/dropdowns.js';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
@@ -773,7 +774,6 @@ function ItemMaster() {
   const allRows = useMemo(() => [...aslItems.map((m) => m.ref), ...extra], [aslItems, extra]);
   const distinct = (key) => [...new Set(allRows.map((r) => String(r[key] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const specialties = useMemo(() => distinct('specialty'), [allRows]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const uoms = useMemo(() => distinct('uom'), [allRows]);                // eslint-disable-line react-hooks/exhaustive-deps
   // Which sub-groups live under each material type (FILM → AF BOPP, …), so the
   // Sub Group picker narrows to the chosen material instead of listing the lot.
   const subGroupsByMat = useMemo(() => {
@@ -792,6 +792,31 @@ function ItemMaster() {
   // Add-New-Supplier page) adds items; a radio picks a row to edit in that form.
   const blankItem = () => ({ itemCode: '', specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' });
   const [imForm, setImForm] = useState(blankItem);
+  /**
+   * Issues 2.6 — UOM comes from the units MASTER, not from whatever the item rows
+   * happen to carry. Built from the rows, the picker offered KG, Kgs, NO'S, NO'S,
+   * BOX, LTR, MTR and ROLL together, and no stock report could add them up. The
+   * Super Admin keeps the list under Dashboard → Drop-down selections → UOM;
+   * until anything is saved there the four standard units are offered.
+   *
+   * A unit already stamped on an item stays selectable even if it is off the list,
+   * so opening an old row never silently changes its unit.
+   */
+  const [uomMaster, setUomMaster] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    masterApi.listUoms()
+      .then((r) => { if (alive) setUomMaster(Array.isArray(r) ? r.map((u) => u.name).filter(Boolean) : []); })
+      .catch(() => { /* master not provisioned yet — the defaults below carry it */ });
+    return () => { alive = false; };
+  }, []);
+  const uoms = useMemo(() => {
+    const master = uomMaster.length ? uomMaster : UOM_DEFAULTS;
+    const inUse = String(imForm.uom || '').trim();
+    const all = inUse && !master.some((u) => u.toLowerCase() === inUse.toLowerCase())
+      ? [...master, inUse] : master;
+    return [...new Set(all)];
+  }, [uomMaster, imForm.uom]);
   const [imEditIdx, setImEditIdx] = useState(-1);
   // Issues 3.1: the text typed into a picker that is sitting on "＋ Add new …".
   const blankNew = () => ({ materialType: '', subGroup: '', specialty: '', uom: '' });
