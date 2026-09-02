@@ -111,7 +111,33 @@ function OnHand({ flash }) {
   }
 
   // The five filters the doc asks for, each offering only what the data holds.
-  const opts = (key) => [...new Set(rows.map((r) => String(r[key] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  /**
+   * Issues 2.4 §14 — the filters narrow each other.
+   *
+   * Every dropdown used to list every value in the catalogue, so picking FILM +
+   * AF BOPP still offered all twenty microns when that combination only comes in
+   * 35 and 51. Each list is now built from the rows that pass the OTHER filters,
+   * so what is offered is what actually exists. The value already chosen stays in
+   * its own list (otherwise the box would appear to clear itself), and microns
+   * sort as numbers — 100 does not belong before 12.
+   */
+  const opts = (key) => {
+    const others = { fMat, fSub, fSpec, fMic, fDept };
+    others[{ materialType: 'fMat', subGroup: 'fSub', specialtyName: 'fSpec', microns: 'fMic', departmentName: 'fDept' }[key]] = '';
+    const pool = rows.filter((r) => (
+      (!others.fMat || String(r.materialType || '') === others.fMat)
+      && (!others.fSub || String(r.subGroup || '') === others.fSub)
+      && (!others.fSpec || String(r.specialtyName || '') === others.fSpec)
+      && (!others.fMic || String(r.microns || '') === others.fMic)
+      && (!others.fDept || String(r.departmentName || '') === others.fDept)
+    ));
+    const chosen = { materialType: fMat, subGroup: fSub, specialtyName: fSpec, microns: fMic, departmentName: fDept }[key];
+    const set = new Set(pool.map((r) => String(r[key] || '').trim()).filter(Boolean));
+    if (chosen) set.add(chosen);
+    const list = [...set];
+    const numeric = list.every((v) => v !== '' && Number.isFinite(Number(v)));
+    return numeric ? list.sort((a, b) => Number(a) - Number(b)) : list.sort((a, b) => a.localeCompare(b));
+  };
   const visible = useMemo(() => {
     const t = q.trim().toLowerCase();
     return rows.filter((r) => {
@@ -380,6 +406,9 @@ function PurchaseOrders({ flash }) {
 
 const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: '', supplierCode: '', internalCode: '', widthMm: '', expiryDate: '', status: 'MOVING' });
 
+// §12: the supplier is a property of the GRN, not of each line — one GRN is one
+// SKU from one supplier on one despatch.
+
 function Grn({ flash }) {
   const { mods } = useData();
   const [items, setItems] = useState([]);
@@ -394,11 +423,40 @@ function Grn({ flash }) {
 
   const pos = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.pos) ? mods.purchase.pos : []), [mods.purchase]);
   const asl = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.asl) ? mods.purchase.asl : []), [mods.purchase]);
+  const [locations, setLocations] = useState([]);
+
+  /**
+   * Issues 2.4 §9 — every supplier the business buys from, for the header picker.
+   * Typed suppliers produced three spellings of the same company and no report
+   * could group them, so this is now a closed list: the approved-supplier list
+   * the Purchase Admin keeps, plus anyone already named on a purchase order.
+   */
+  const supplierOptions = useMemo(() => {
+    const names = new Set();
+    asl.forEach((r) => { const v = String(r.company || '').trim(); if (v) names.add(v); });
+    pos.forEach((p) => { const v = String(p.supplier || '').trim(); if (v) names.add(v); });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [asl, pos]);
+
+  /** The item codes this supplier is approved for (§12) — empty = no mapping on file. */
+  const itemCodesForSupplier = useMemo(() => {
+    const sup = String(head.supplier || '').trim().toLowerCase();
+    if (!sup) return null;
+    const codes = new Set();
+    asl.forEach((r) => {
+      if (String(r.company || '').trim().toLowerCase() !== sup) return;
+      const c = String(r.itemCode || '').trim().toLowerCase();
+      if (c) codes.add(c);
+    });
+    return codes;
+  }, [asl, head.supplier]);
 
   const load = useCallback(async () => {
     try {
       const [its, gs] = await Promise.all([masterApi.listItems(), storesApi.grns()]);
       setItems(its || []); setGrns(gs || []);
+      // §13: put-away racks come from the Super Admin's list, not free text.
+      try { setLocations(await storesApi.locations() || []); } catch { /* not provisioned yet — the box stays a text field */ }
     } catch (e) { flash('r', e.message); }
   }, [flash]);
   useEffect(() => { load(); }, [load]);
@@ -408,7 +466,11 @@ function Grn({ flash }) {
     (!fMat || String(it.materialType || '') === fMat)
     && (!fSub || String(it.subGroup || '') === fSub)
     && (!fSpec || String(it.specialtyName || '') === fSpec)
-  )), [items, fMat, fSub, fSpec]);
+    // §12: one GRN covers one supplier, so once that supplier is chosen only the
+    // items they are approved for can be received against it.
+    && (!itemCodesForSupplier || !itemCodesForSupplier.size
+      || itemCodesForSupplier.has(String(it.code || '').trim().toLowerCase()))
+  )), [items, fMat, fSub, fSpec, itemCodesForSupplier]);
 
   const itemById = (id) => items.find((i) => String(i.id) === String(id)) || null;
   /** The suppliers this item is approved from — the ASL mapping the P Dashboard keeps. */
@@ -426,19 +488,17 @@ function Grn({ flash }) {
 
   function pickItem(i, id) {
     const it = itemById(id);
-    const sups = suppliersForItem(id);
-    setLine(i, {
-      itemId: id,
-      uom: (it && it.uom) || '',
-      // Supplier comes from the item↔supplier mapping; a single match fills itself.
-      supplier: sups.length === 1 ? sups[0] : '',
-    });
+    // §11: the UOM is the item master's, and is shown read-only — a hand-typed unit
+    // on a receipt silently changes what the stock figure means.
+    setLine(i, { itemId: id, uom: (it && it.uom) || '' });
   }
 
   // The PO the stores person must physically check before receiving.
-  const chosenPo = useMemo(() => pos.find((p) => String(p.poNum || '') === String(head.poNum || '')) || null, [pos, head.poNum]);
+  // A typed PO number still pulls up its lines to check against, when it matches one.
+  const chosenPo = useMemo(() => pos.find((p) => String(p.poNum || '').trim().toLowerCase() === String(head.poNum || '').trim().toLowerCase()) || null, [pos, head.poNum]);
 
   async function submit() {
+    if (!String(head.supplier || '').trim()) { flash('r', 'Choose the supplier this material came from.'); return; }
     const usable = lines.filter((l) => l.itemId && num(l.qty) > 0);
     if (!usable.length) { flash('r', 'Add at least one line with an item and a quantity.'); return; }
     setBusy(true);
@@ -449,7 +509,8 @@ function Grn({ flash }) {
           itemId: Number(l.itemId), qty: Number(l.qty), uom: l.uom || undefined,
           price: l.price === '' ? undefined : Number(l.price),
           location: l.location || undefined, supplierCode: l.supplierCode || undefined,
-          supplier: l.supplier || undefined,
+          // §12: one supplier for the whole receipt.
+          supplier: head.supplier || undefined,
           internalCode: l.internalCode || undefined,
           widthMm: l.widthMm === '' ? undefined : Number(l.widthMm),
           expiryDate: l.expiryDate || undefined, status: l.status || 'MOVING',
@@ -475,16 +536,23 @@ function Grn({ flash }) {
         </div>
         <div className="g4">
           <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
-          <div className="fg"><label>Against PO</label>
-            <select value={head.poNum} onChange={(e) => {
-              const po = pos.find((p) => String(p.poNum) === e.target.value);
-              setHead({ ...head, poNum: e.target.value, supplier: po ? po.supplier || '' : head.supplier });
-            }} aria-label="Purchase order">
-              <option value="">— select a PO —</option>
-              {pos.map((p) => <option key={p.poNum} value={p.poNum}>{p.poNum} — {p.supplier}</option>)}
+          {/* §10: PO generation is not automated yet, so this is a plain note — type
+              the number if there is one, leave it blank if there is not. It becomes a
+              picker once POs are raised in the app. */}
+          <div className="fg"><label>Against PO <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
+            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
+              placeholder="PO number, if any" aria-label="Purchase order" />
+          </div>
+          {/* §9: chosen, never typed — and it decides which items this GRN can receive. */}
+          <div className="fg"><label>Supplier</label>
+            <select value={head.supplier} aria-label="Supplier"
+              onChange={(e) => { setHead({ ...head, supplier: e.target.value }); setLines([blankLine()]); }}>
+              <option value="">— select a supplier —</option>
+              {supplierOptions.map((sup) => <option key={sup} value={sup}>{sup}</option>)}
+              {/* a supplier already on this GRN but no longer on the approved list still reads correctly */}
+              {head.supplier && !supplierOptions.includes(head.supplier) && <option value={head.supplier}>{head.supplier}</option>}
             </select>
           </div>
-          <div className="fg"><label>Supplier</label><input value={head.supplier} onChange={(e) => setHead({ ...head, supplier: e.target.value })} aria-label="Supplier" /></div>
           <div className="fg"><label>GRN Date</label><input type="date" value={head.grnDate} onChange={(e) => setHead({ ...head, grnDate: e.target.value })} aria-label="GRN date" /></div>
           <div className="fg"><label>Invoice No.</label><input value={head.invoiceNo} onChange={(e) => setHead({ ...head, invoiceNo: e.target.value })} aria-label="Invoice number" /></div>
           <div className="fg"><label>Invoice Date</label><input type="date" value={head.invoiceDate} onChange={(e) => setHead({ ...head, invoiceDate: e.target.value })} aria-label="Invoice date" /></div>
@@ -507,47 +575,64 @@ function Grn({ flash }) {
           <select value={fSub} onChange={(e) => setFSub(e.target.value)} aria-label="Sub group filter">
             <option value="">Any sub-group</option>{distinct(items.filter((i) => !fMat || i.materialType === fMat), 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
+          {/* §14: the same intelligent narrowing as the stock filters — speciality
+              lists only what the chosen material and sub-group actually come in. */}
           <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Speciality filter">
-            <option value="">Any speciality</option>{distinct(items, 'specialtyName').map((v) => <option key={v} value={v}>{v}</option>)}
+            <option value="">Any speciality</option>
+            {distinct(items.filter((i) => (!fMat || i.materialType === fMat) && (!fSub || i.subGroup === fSub)), 'specialtyName')
+              .map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
 
         <div className="tw"><table>
           <thead><tr>
-            <th style={{ minWidth: 220 }}>Item *</th><th style={{ minWidth: 150 }}>Supplier</th><th>Supplier Label Code</th>
+            <th style={{ minWidth: 220 }}>Item *</th><th>Supplier Label Code</th>
             <th>Internal Code</th><th style={{ width: 110 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
             <th style={{ width: 110 }}>Width (mm)</th><th style={{ width: 110 }}>Price</th><th style={{ width: 140 }}>Location</th>
             <th style={{ width: 140 }}>Expiry</th><th style={{ width: 40 }}></th>
           </tr></thead>
           <tbody>
             {lines.map((l, i) => {
-              const sups = suppliersForItem(l.itemId);
-              const unmapped = l.itemId && sups.length === 0;
+              // §12: warn when the chosen item is not on the approved list for THIS
+              // supplier — the receipt is still allowed, the association just needs doing.
+              const sups = suppliersForItem(l.itemId).map((x) => x.toLowerCase());
+              const unmapped = !!l.itemId && !!head.supplier && !sups.includes(String(head.supplier).toLowerCase());
               return (
                 <tr key={i}>
                   <td>
-                    <select value={l.itemId} onChange={(e) => pickItem(i, e.target.value)} aria-label={`Item for line ${i + 1}`} style={{ width: '100%' }}>
-                      <option value="">— select an item —</option>
+                    <select value={l.itemId} onChange={(e) => pickItem(i, e.target.value)} aria-label={`Item for line ${i + 1}`} style={{ width: '100%' }}
+                      disabled={!head.supplier}>
+                      <option value="">{head.supplier ? '— select an item —' : '— choose a supplier first —'}</option>
                       {narrowed.map((it) => <option key={it.id} value={it.id}>{it.code} — {it.name}</option>)}
                     </select>
-                  </td>
-                  <td>
-                    <input list={`grn-sup-${i}`} value={l.supplier || ''} onChange={(e) => setLine(i, { supplier: e.target.value })}
-                      aria-label={`Supplier for line ${i + 1}`} placeholder={sups.length ? 'pick / type' : 'not mapped'} />
-                    <datalist id={`grn-sup-${i}`}>{sups.map((s) => <option key={s} value={s} />)}</datalist>
                     {unmapped && (
                       <div style={{ fontSize: 9.5, color: '#B7770D', marginTop: 2 }}>
-                        New item for this supplier — call the Super Admin to get the association done.
+                        Not mapped to {head.supplier} — call the Super Admin to get the association done.
                       </div>
                     )}
                   </td>
                   <td><input value={l.supplierCode} onChange={(e) => setLine(i, { supplierCode: e.target.value })} aria-label={`Supplier code line ${i + 1}`} /></td>
                   <td><input value={l.internalCode} placeholder="auto" onChange={(e) => setLine(i, { internalCode: e.target.value })} aria-label={`Internal code line ${i + 1}`} /></td>
                   <td><input type="number" step="any" min="0" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label={`Quantity line ${i + 1}`} /></td>
-                  <td><input value={l.uom} onChange={(e) => setLine(i, { uom: e.target.value })} aria-label={`UOM line ${i + 1}`} /></td>
+                  <td><input value={l.uom} readOnly tabIndex={-1} aria-label={`UOM line ${i + 1}`}
+                    title="Taken from the Item Master — change it there, not on the receipt"
+                    style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
                   <td><input type="number" step="any" min="0" value={l.widthMm} onChange={(e) => setLine(i, { widthMm: e.target.value })} aria-label={`Width line ${i + 1}`} /></td>
                   <td><input type="number" step="any" min="0" value={l.price} onChange={(e) => setLine(i, { price: e.target.value })} aria-label={`Price line ${i + 1}`} /></td>
-                  <td><input value={l.location} onChange={(e) => setLine(i, { location: e.target.value })} aria-label={`Location line ${i + 1}`} placeholder="rack / bay" /></td>
+                  <td>
+                    {locations.length ? (
+                      <select value={l.location} onChange={(e) => setLine(i, { location: e.target.value })}
+                        aria-label={`Location line ${i + 1}`} style={{ width: '100%' }}>
+                        <option value="">— rack —</option>
+                        {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
+                        {l.location && !locations.some((loc) => loc.name === l.location) && <option value={l.location}>{l.location}</option>}
+                      </select>
+                    ) : (
+                      // No list on file yet: keep the box usable rather than blocking a receipt.
+                      <input value={l.location} onChange={(e) => setLine(i, { location: e.target.value })}
+                        aria-label={`Location line ${i + 1}`} placeholder="rack / bay" />
+                    )}
+                  </td>
                   <td><input type="date" value={l.expiryDate} onChange={(e) => setLine(i, { expiryDate: e.target.value })} aria-label={`Expiry line ${i + 1}`} /></td>
                   <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => rmLine(i)} title="Remove line">✕</button></td>
                 </tr>

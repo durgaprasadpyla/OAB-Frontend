@@ -285,6 +285,8 @@ export const planningApi = {
   week: (from, to) => api('/api/planning/week?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
   assign: (body) => api('/api/planning/assign', { method: 'POST', body }),
   unassign: (jobId) => api('/api/planning/unassign', { method: 'POST', body: { jobId } }),
+  // Issues 2.4 §5: the PPC's own start time for a planned job ('' clears it).
+  setJobStart: (jobId, startTime) => api('/api/planning/job-start', { method: 'POST', body: { jobId, startTime } }),
   move: (body) => api('/api/planning/move', { method: 'POST', body }),
   reorder: (body) => api('/api/planning/reorder', { method: 'POST', body }),
 };
@@ -329,6 +331,12 @@ export const storesApi = {
   applyMslSuggestions: (months = 3) => api('/api/stores/msl-suggestions/apply?months=' + encodeURIComponent(months), { method: 'POST' }),
   // Planner: rolls still free to promise (oldest first = FIFO), and the earmarks.
   available: (p) => api('/api/stores/available' + qs(p)),
+  // Issues 2.4 §13: the racks a received unit is put away in. Every signed-in role
+  // reads them (the GRN picker); only the Super Admin maintains the list.
+  locations: (includeInactive) => api('/api/stores/locations' + (includeInactive ? '?includeInactive=1' : '')),
+  createLocation: (body) => api('/api/stores/locations', { method: 'POST', body }),
+  updateLocation: (id, body) => api('/api/stores/locations/' + encodeURIComponent(id), { method: 'PATCH', body }),
+  deleteLocation: (id) => api('/api/stores/locations/' + encodeURIComponent(id), { method: 'DELETE' }),
   allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),
   allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
   releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),
