@@ -177,3 +177,64 @@ export function bomSaveSpec(bom, spec, draft, { jssRow = {}, user = '' } = {}) {
   next.history.push({ ts: new Date().toISOString(), user: user || '', note: bomDiffNote(prev, next) });
   return { ...base, [spec]: next };
 }
+
+/**
+ * The recipes QC saves under Route and BOM live in the normalized planning
+ * tables (GET /api/bom), not in module 13 — and only those carry the DEPARTMENT
+ * each line belongs to. Convert that response into the same shape this module
+ * uses, so a caller can layer it over the module blob:
+ *
+ *     const bom = { ...(mods.bom || {}), ...plannedBomMap(await bomApi.list()) };
+ *
+ * A spec present in both prefers the planning store: it is the live one.
+ */
+export function plannedBomMap(list) {
+  const m = {};
+  (Array.isArray(list) ? list : []).forEach((b) => {
+    if (!b || !b.specCode) return;
+    m[String(b.specCode).trim()] = {
+      baseQty: b.baseQty, baseUOM: b.baseUom, savedBy: b.savedBy, savedAt: b.savedAt,
+      items: (b.items || []).map((it) => ({
+        itemCode: it.itemCode, itemDescription: it.itemName, materialType: it.materialType || '',
+        subGroup: it.subGroup || '', microns: it.microns || '', uom: it.uom || '',
+        qtyPerBase: it.qtyPerBase, departmentName: it.departmentName || '',
+      })),
+    };
+  });
+  return m;
+}
+
+/** Where a BOM line is consumed. Blank for lines captured before departments existed. */
+export const NO_DEPARTMENT = 'Unassigned';
+
+/**
+ * The same scaled requirement as `bomMaterialForSO`, but split into the
+ * departments that consume it — which is how the shop floor issues material:
+ * Printing draws its own inks and films, Lamination its adhesives, and each
+ * department wants its own sheet rather than one combined list.
+ *
+ * Departments keep the order their lines arrive in (the server sorts by the
+ * department's own sequence, so that is the route order). Lines saved before
+ * departments were captured collect under `NO_DEPARTMENT` rather than vanishing.
+ *
+ * Returns [{ department, items: [...as bomMaterialForSO...], totals: {uom: qty} }].
+ */
+export function bomMaterialForSOByDept(bom, spec, soQty) {
+  const rec = bom && bom[spec];
+  const perBase = new Map(((rec && rec.items) || []).map((r) => [r.itemCode, r]));
+  const groups = [];
+  const byName = new Map();
+  bomMaterialForSO(bom, spec, soQty).forEach((m) => {
+    const src = perBase.get(m.itemCode) || {};
+    const dept = String(src.departmentName || '').trim() || NO_DEPARTMENT;
+    if (!byName.has(dept)) {
+      const g = { department: dept, items: [], totals: {} };
+      byName.set(dept, g); groups.push(g);
+    }
+    const g = byName.get(dept);
+    g.items.push({ ...m, department: dept, microns: src.microns || '', qtyPerBase: n(src.qtyPerBase) });
+    const uk = m.uom || '';
+    g.totals[uk] = (g.totals[uk] || 0) + m.required;
+  });
+  return groups;
+}

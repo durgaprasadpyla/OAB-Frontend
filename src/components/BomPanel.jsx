@@ -4,7 +4,7 @@ import { useAuth } from '../auth.jsx';
 import { masterApi, bomApi } from '../api.js';
 import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
-import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO } from '../lib/bom.js';
+import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO, plannedBomMap } from '../lib/bom.js';
 import { specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
@@ -57,20 +57,7 @@ export default function BomPanel() {
   const [plannedErr, setPlannedErr] = useState('');
   const loadPlanned = useCallback(async () => {
     try {
-      const list = await bomApi.list();
-      const m = {};
-      (Array.isArray(list) ? list : []).forEach((b) => {
-        if (!b || !b.specCode) return;
-        m[String(b.specCode).trim()] = {
-          baseQty: b.baseQty, baseUOM: b.baseUom, savedBy: b.savedBy, savedAt: b.savedAt,
-          items: (b.items || []).map((it) => ({
-            itemCode: it.itemCode, itemDescription: it.itemName, materialType: it.materialType || '',
-            subGroup: it.subGroup || '', microns: it.microns || '', uom: it.uom || '',
-            qtyPerBase: it.qtyPerBase, departmentName: it.departmentName || '',
-          })),
-        };
-      });
-      setPlanned(m);
+      setPlanned(plannedBomMap(await bomApi.list()));
     } catch (e) { setPlannedErr(e.message || 'Could not read the planning BOMs'); }
   }, []);
   useEffect(() => { loadPlanned(); }, [loadPlanned]);
@@ -204,8 +191,8 @@ export default function BomPanel() {
       ['Base Qty', baseLine],
       [],
     ];
-    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
-    const body = rec.items.map((r) => [r.itemCode, r.materialType || '', r.subGroup || '', r.itemDescription || '', r.microns || '', r.uom || '', r.qtyPerBase]);
+    const header = ['Department', 'Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
+    const body = rec.items.map((r) => [r.departmentName || '', r.itemCode, r.materialType || '', r.subGroup || '', r.itemDescription || '', r.microns || '', r.uom || '', r.qtyPerBase]);
     exportAOA([...meta, header, ...body], 'BOM_' + safeName(spec), 'BOM');
   }
 
@@ -215,10 +202,10 @@ export default function BomPanel() {
     const rec = bom[spec];
     if (!rec || !(rec.items || []).length) { flash('r', `No BOM defined for ${spec} yet.`); return; }
     const baseLine = `${esc(rec.baseQty)} ${esc(rec.baseUOM)}`.trim() + (rec.meters ? ` / ${esc(rec.meters)} m` : '');
-    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
+    const header = ['Department', 'Item Code', 'Material Type', 'Sub-Group', 'Item Description', 'Microns', 'UOM', 'Qty per Base'];
     const rowsHtml = rec.items.map((r) => '<tr style="border-bottom:1px solid #eee">'
-      + [r.itemCode, r.materialType, r.subGroup, r.itemDescription, r.microns, r.uom, r.qtyPerBase]
-        .map((c, k) => `<td style="padding:4px 6px;text-align:${k === 6 ? 'right' : 'left'}">${esc(c)}</td>`).join('')
+      + [r.departmentName, r.itemCode, r.materialType, r.subGroup, r.itemDescription, r.microns, r.uom, r.qtyPerBase]
+        .map((c, k) => `<td style="padding:4px 6px;text-align:${k === 7 ? 'right' : 'left'}">${esc(c)}</td>`).join('')
       + '</tr>').join('');
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;padding:16px;font-family:Arial,sans-serif;width:760px;color:#111';
