@@ -638,17 +638,28 @@ function Grn({ flash }) {
           </div>
         )}
 
-        <div className="tw"><table>
+        {/* Issues 2.7: `table{width:100%}` made the browser squeeze ten columns into the
+            card, so the Qty and Price boxes came out ~27px wide however wide their
+            column was declared. A natural minimum width lets them keep their size; the
+            wrapper already scrolls horizontally (.tw), so the page does not grow. */}
+        {/* Issues 2.7: `table{width:100%}` with AUTO layout made the browser squeeze ten
+            columns into the card and treat every declared width as a hint, so the Qty
+            and Price boxes came out ~27px wide however wide their column was declared —
+            the long item names in column one won the argument. `table-layout:fixed`
+            makes the declared widths authoritative, and the natural minimum keeps them
+            from being scaled down; the wrapper already scrolls (.tw), so the page itself
+            does not grow. */}
+        <div className="tw"><table style={{ minWidth: 1255, tableLayout: 'fixed' }}>
           <thead><tr>
-            <th style={{ minWidth: 220 }}>Item *</th><th>Supplier Label Code</th>
-            <th>Internal Code</th>
+            <th style={{ width: 240 }}>Item *</th><th style={{ width: 130 }}>Supplier Label Code</th>
+            <th style={{ width: 120 }}>Internal Code</th>
             {/* Issues 2.7: Qty and Price are the two numbers the stores desk types on
                 every line, so they get the same comfortable width and neither is
                 cramped. The stepper arrows are gone (.nospin), which is where most of
                 the room came from — the table itself is no wider than before. */}
             <th style={{ width: 128 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
             <th style={{ width: 110 }}>Width (mm)</th><th style={{ width: 128 }}>Price</th><th style={{ width: 140 }}>Location</th>
-            <th style={{ width: 140 }}>Expiry</th><th style={{ width: 40 }}></th>
+            <th style={{ width: 145 }}>Expiry</th><th style={{ width: 44 }}></th>
           </tr></thead>
           <tbody>
             {lines.map((l, i) => {

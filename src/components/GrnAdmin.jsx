@@ -169,7 +169,9 @@ function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
 
       <div className="ctitle" style={{ fontSize: 11, margin: '12px 0 2px' }}>Units received on this GRN</div>
       <div className="tw">
-        <table>
+        {/* Same reason as the GRN screen: without a natural minimum the browser squeezes
+            the Qty and Price boxes down to nothing. */}
+        <table style={{ minWidth: 1120 }}>
           <thead><tr>
             <th>Internal Code</th><th style={{ minWidth: 180 }}>Item</th><th>Supplier Label</th>
             <th style={{ width: 128 }}>Qty</th><th style={{ width: 70 }}>UOM</th>
