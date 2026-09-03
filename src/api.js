@@ -343,6 +343,13 @@ export const storesApi = {
   createLocation: (body) => api('/api/stores/locations', { method: 'POST', body }),
   updateLocation: (id, body) => api('/api/stores/locations/' + encodeURIComponent(id), { method: 'PATCH', body }),
   deleteLocation: (id) => api('/api/stores/locations/' + encodeURIComponent(id), { method: 'DELETE' }),
+  // Issues 2.7 — correcting a receipt after it was booked, and repricing material
+  // already in stock. Both are Super Admin only, enforced server-side.
+  grn: (id) => api('/api/stores/grns/' + encodeURIComponent(id)),
+  updateGrn: (id, body) => api('/api/stores/grns/' + encodeURIComponent(id), { method: 'PUT', body }),
+  updateUnit: (unitId, body) => api('/api/stores/units/' + encodeURIComponent(unitId), { method: 'PUT', body }),
+  rmPrices: () => api('/api/stores/rm-prices'),
+  setItemPrice: (itemId, price) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/price', { method: 'PUT', body: { price } }),
   allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),
   allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
   releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),

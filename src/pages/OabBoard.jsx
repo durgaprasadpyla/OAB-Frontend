@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { ordersApi } from '../api.js';
@@ -8,7 +8,7 @@ import { dash, fmtDate, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { downloadOabPdf } from '../lib/oabPdf.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
-import { getCustByLoc } from '../lib/master.js';
+import { getCustByLoc, custGroupOf } from '../lib/master.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
@@ -50,6 +50,7 @@ export default function OabBoard() {
     useApi('/api/oab-rows?sheet=' + sheet);
 
   const [q, setQ] = useState('');
+  const [gf, setGf] = useState('');      // buying group — narrows the customer and spec lists
   const [cf, setCf] = useState('');
   const [stf, setStf] = useState('');
   const [spf, setSpf] = useState('');
@@ -81,9 +82,38 @@ export default function OabBoard() {
     return j ? { ...r, customer: j.customer || r.customer, subBrand: j.subBrand || r.subBrand, jobName: j.jobName || r.jobName } : r;
   }), [allRows, jssBySpec]);
 
-  const customers = useMemo(() => [...new Set(openRows.map((r) => r.customer))].filter(Boolean).sort(), [openRows]);
-  const stages = useMemo(() => [...new Set(openRows.map((r) => r.stage))].filter(Boolean).sort(), [openRows]);
-  const specs = useMemo(() => [...new Set(openRows.map((r) => r.spec))].filter(Boolean).sort(), [openRows]);
+  /**
+   * The buying group each open order belongs to, from the Customer Master.
+   *
+   * The board had no Group filter at all, and its Customer and Spec lists were
+   * built from EVERY open order — so after choosing a customer the Spec box still
+   * offered all 386 specs, most of which that customer has never ordered. Each
+   * list is now built from the rows that pass the OTHER filters, so what is
+   * offered is what exists: a group narrows the customers, and group + customer
+   * narrow the specs. The value already chosen stays in its own list, or the box
+   * would appear to clear itself.
+   */
+  const rowGroup = useCallback((r) => custGroupOf(r.customer, mods.customers), [mods.customers]);
+  const options = useMemo(() => {
+    const pass = (r, skip) => (
+      (skip === 'group' || !gf || rowGroup(r) === gf)
+      && (skip === 'customer' || !cf || r.customer === cf)
+      && (skip === 'spec' || !spf || r.spec === spf)
+      && (skip === 'stage' || !stf || r.stage === stf)
+    );
+    const list = (key, field, chosen) => {
+      const set = new Set(openRows.filter((r) => pass(r, key)).map(field).filter(Boolean));
+      if (chosen) set.add(chosen);
+      return [...set].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+    };
+    return {
+      groups: list('group', rowGroup, gf),
+      customers: list('customer', (r) => r.customer, cf),
+      specs: list('spec', (r) => r.spec, spf),
+      stages: list('stage', (r) => r.stage, stf),
+    };
+  }, [openRows, rowGroup, gf, cf, spf, stf]);
+  const { groups, customers, specs, stages } = options;
 
   // "Loc Code" is the warehouse the row dispatches to — from the row if it carries
   // one, else looked up in the Customer Master. It is searchable too. (renderOAB)
@@ -91,6 +121,7 @@ export default function OabBoard() {
 
   const filtered = useMemo(() => {
     const list = openRows.filter((r) => {
+      if (gf && rowGroup(r) !== gf) return false;
       if (cf && r.customer !== cf) return false;
       if (stf && r.stage !== stf) return false;
       if (spf && r.spec !== spf) return false;
@@ -103,7 +134,7 @@ export default function OabBoard() {
       return true;
     });
     return soOrder(list, order.newestFirst);
-  }, [openRows, q, cf, stf, spf, mods.customers, order.newestFirst]);
+  }, [openRows, q, gf, cf, stf, spf, rowGroup, mods.customers, order.newestFirst]);
 
   const tPO = filtered.reduce((s, r) => s + (Number(r.poQty) || 0), 0);
   const tD = filtered.reduce((s, r) => s + (Number(r.invDisp) || 0) + (Number(r.manDisp) || 0), 0);
@@ -241,7 +272,8 @@ export default function OabBoard() {
           <option value="SF">Stay Fresh OAB</option><option value="OT">Others OAB</option>
         </select>
         <input placeholder="Search..." aria-label="Search orders" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 200 }} />
-        <select value={cf} aria-label="Filter by customer" onChange={(e) => setCf(e.target.value)}><option value="">All customers</option>{customers.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <select value={gf} aria-label="Filter by group" onChange={(e) => { setGf(e.target.value); setCf(''); setSpf(''); }}><option value="">All groups</option>{groups.map((g) => <option key={g} value={g}>{g}</option>)}</select>
+        <select value={cf} aria-label="Filter by customer" onChange={(e) => { setCf(e.target.value); setSpf(''); }}><option value="">All customers</option>{customers.map((c) => <option key={c} value={c}>{c}</option>)}</select>
         <select value={spf} aria-label="Filter by spec" onChange={(e) => setSpf(e.target.value)}><option value="">All specs</option>{specs.map((s) => <option key={s} value={s}>{s}</option>)}</select>
         <select value={stf} aria-label="Filter by stage" onChange={(e) => setStf(e.target.value)}><option value="">All stages</option>{stages.map((s) => <option key={s} value={s}>{s}</option>)}</select>
         <button className="btn btn-s" style={{ height: 30, fontSize: 12 }} aria-label="Refresh" onClick={refetchRows}>↻</button>

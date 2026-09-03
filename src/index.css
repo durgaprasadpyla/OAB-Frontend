@@ -81,8 +81,12 @@ label.cb>input{flex:none;width:14px;height:14px;margin:0;accent-color:var(--g);c
 .mod-alloc{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 14px;min-width:180px;margin-top:6px;padding:8px 10px;background:var(--wh);border:1px solid var(--bd);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 /* Hide the native up/down spinner arrows on the KAM & Targets numeric fields — typing
    a number should never accidentally get bumped by a stray arrow click. */
-input.kam-numinput::-webkit-inner-spin-button,input.kam-numinput::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-input.kam-numinput{-moz-appearance:textfield}
+input.kam-numinput::-webkit-inner-spin-button,input.kam-numinput::-webkit-outer-spin-button,
+input.nospin::-webkit-inner-spin-button,input.nospin::-webkit-outer-spin-button{-webkit-appearance:none;appearance:none;margin:0}
+input.kam-numinput,input.nospin{-moz-appearance:textfield;appearance:textfield}
+/* Issues 2.7: .nospin is the same rule as .kam-numinput, named for reuse. A number
+   input keeps its numeric keypad and validation; only the stepper arrows go, and
+   with them the ~17px they were stealing from a cramped Qty/Price column. */
 .fbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .fbar input,.fbar select{height:30px;border:1px solid var(--bd);border-radius:7px;padding:0 9px;font-size:12px;outline:none}
 .fbar input:focus,.fbar select:focus{border-color:var(--g)}

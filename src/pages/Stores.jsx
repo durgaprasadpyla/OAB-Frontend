@@ -641,8 +641,13 @@ function Grn({ flash }) {
         <div className="tw"><table>
           <thead><tr>
             <th style={{ minWidth: 220 }}>Item *</th><th>Supplier Label Code</th>
-            <th>Internal Code</th><th style={{ width: 110 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
-            <th style={{ width: 110 }}>Width (mm)</th><th style={{ width: 110 }}>Price</th><th style={{ width: 140 }}>Location</th>
+            <th>Internal Code</th>
+            {/* Issues 2.7: Qty and Price are the two numbers the stores desk types on
+                every line, so they get the same comfortable width and neither is
+                cramped. The stepper arrows are gone (.nospin), which is where most of
+                the room came from — the table itself is no wider than before. */}
+            <th style={{ width: 128 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
+            <th style={{ width: 110 }}>Width (mm)</th><th style={{ width: 128 }}>Price</th><th style={{ width: 140 }}>Location</th>
             <th style={{ width: 140 }}>Expiry</th><th style={{ width: 40 }}></th>
           </tr></thead>
           <tbody>
@@ -667,12 +672,12 @@ function Grn({ flash }) {
                   </td>
                   <td><input value={l.supplierCode} onChange={(e) => setLine(i, { supplierCode: e.target.value })} aria-label={`Supplier code line ${i + 1}`} /></td>
                   <td><input value={l.internalCode} placeholder="auto" onChange={(e) => setLine(i, { internalCode: e.target.value })} aria-label={`Internal code line ${i + 1}`} /></td>
-                  <td><input type="number" step="any" min="0" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label={`Quantity line ${i + 1}`} /></td>
+                  <td><input type="number" step="any" min="0" className="nospin" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label={`Quantity line ${i + 1}`} /></td>
                   <td><input value={l.uom} readOnly tabIndex={-1} aria-label={`UOM line ${i + 1}`}
                     title="Taken from the Item Master — change it there, not on the receipt"
                     style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
-                  <td><input type="number" step="any" min="0" value={l.widthMm} onChange={(e) => setLine(i, { widthMm: e.target.value })} aria-label={`Width line ${i + 1}`} /></td>
-                  <td><input type="number" step="any" min="0" value={l.price} onChange={(e) => setLine(i, { price: e.target.value })} aria-label={`Price line ${i + 1}`} /></td>
+                  <td><input type="number" step="any" min="0" className="nospin" value={l.widthMm} onChange={(e) => setLine(i, { widthMm: e.target.value })} aria-label={`Width line ${i + 1}`} /></td>
+                  <td><input type="number" step="any" min="0" className="nospin" value={l.price} onChange={(e) => setLine(i, { price: e.target.value })} aria-label={`Price line ${i + 1}`} /></td>
                   <td>
                     {locations.length ? (
                       <select value={l.location} onChange={(e) => setLine(i, { location: e.target.value })}

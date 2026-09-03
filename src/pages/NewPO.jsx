@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../data.jsx';
-import { ordersApi, stockApi } from '../api.js';
+import { ordersApi, stockApi, masterApi } from '../api.js';
 import { today, fmtDate, dash, rupees } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, getCustByLoc, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
@@ -25,6 +25,12 @@ export default function NewPO() {
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
   const [shortages, setShortages] = useState([]);   // low-stock shortfalls for the just-created SOs
+  // Which of the shortfalls are FILM. The alert used to list every shorted item with
+  // its quantities, which is a stores report — the person raising a sale order needs
+  // one thing from it: can this order run? Film is what decides that, so it is the
+  // only material called out by name. The full breakdown stays where it belongs, on
+  // the Stock Alerts screen the server already notifies Stores and the Super Admin about.
+  const [filmShort, setFilmShort] = useState(false);
   const [busy, setBusy] = useState(false);
   const [allocRows, setAllocRows] = useState(null);   // FG drawdown candidates (modal), or null
 
@@ -147,12 +153,23 @@ export default function NewPO() {
       // requirements against the BOM + stock and surface any shortfall. The server
       // also raises SO-specific alerts + notifies Plant Manager / Stores / Super Admin.
       // Purely additive — a failure here never affects the already-created SOs.
-      setShortages([]);
+      setShortages([]); setFilmShort(false);
       Promise.all(created.map((so) => stockApi.check(so).catch(() => null)))
-        .then((results) => {
+        .then(async (results) => {
           const short = [];
           results.forEach((r) => { if (r && Array.isArray(r.requirements)) r.requirements.filter((x) => x.short).forEach((x) => short.push({ so: r.so, ...x })); });
           setShortages(short);
+          if (!short.length) return;
+          // The shortfall rows carry the item code, not what the item is made of —
+          // the Item Master is the authority on that.
+          try {
+            const items = await masterApi.listItems();
+            const byCode = new Map((items || []).map((it) => [String(it.code || '').trim().toLowerCase(), it]));
+            setFilmShort(short.some((x) => {
+              const it = byCode.get(String(x.itemCode || '').trim().toLowerCase());
+              return /film/i.test(String((it && it.materialType) || '')) || /film/i.test(String((it && it.subGroup) || ''));
+            }));
+          } catch { /* master unreachable — the count alone still tells them something is short */ }
         })
         .catch(() => {});
       // Offer to draw down existing finished goods for any created SO whose spec
@@ -193,6 +210,7 @@ export default function NewPO() {
 
   function reset() {
     setPoNum(''); setPoExp(''); setGroup(''); setCustomer(''); setLoc(''); setSkus([]); setSelPO([]); setAdded(null);
+    setShortages([]); setFilmShort(false);
     setShortages([]); setPoDate(today()); setStep(1);
   }
 
@@ -418,13 +436,11 @@ export default function NewPO() {
             <span className="so-pill">{added.first}</span>{added.count > 1 ? <> → <span className="so-pill">{added.last}</span></> : null}
           </div>
           {shortages.length > 0 && (
-            <div className="al al-r" style={{ textAlign: 'left', margin: '0 auto 14px', maxWidth: 640 }}>
-              <b>⚠ Low stock on {shortages.length} item{shortages.length > 1 ? 's' : ''}.</b> Stores &amp; Super Admin have been alerted.
-              <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-                {shortages.map((s, i) => (
-                  <li key={i}><span className="so-pill">{s.so}</span> {s.itemCode} short by <b>{s.shortageQty}</b> (need {s.requiredQty}, have {s.availableQty})</li>
-                ))}
-              </ul>
+            <div className="al al-r" style={{ textAlign: 'left', margin: '0 auto 14px', maxWidth: 640, fontSize: 12 }}>
+              <b>⚠ Low stock on {shortages.length} item{shortages.length > 1 ? 's' : ''}{filmShort ? ', including film' : ''}.</b>{' '}
+              {filmShort
+                ? <>This sale order cannot be processed until the film is in.</>
+                : <>Stores &amp; Super Admin have been alerted.</>}
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>

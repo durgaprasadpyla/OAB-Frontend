@@ -19,6 +19,7 @@ import KamPanel from '../components/KamPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 import FgValuePanel from '../components/FgValuePanel.jsx';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
+import GrnAdmin, { RmPriceAdmin } from '../components/GrnAdmin.jsx';
 import MasterData from './MasterData.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -42,6 +43,11 @@ const TABS = [
   { k: 'master', label: '🗂 Machines' },
   { k: 'routes', label: '🛣 Routes' },
   { k: 'alerts', label: '🔔 Stock Alerts' },
+  // Issues 2.7: correcting a booked receipt, and repricing material in stock.
+  // Super Admin only — /dashboard is already gated to that role, and both
+  // endpoints check it again server-side.
+  { k: 'grns', label: '📥 GRN Entries' },
+  { k: 'rmprices', label: '💱 RM Prices' },
   { k: 'bom', label: '🧱 BOM' },
   { k: 'material', label: '🧮 Raw Material' },
   { k: 'costing', label: '🧮 SO Costing' },
@@ -102,6 +108,8 @@ export default function Dashboard() {
           Drop-down selections; the machine form pulls them in as a dropdown. */}
       {tab === 'master' && <MasterData only={['machines']} title="🗂 Machines" subtitle="Machines and the department each one runs under (departments are managed in Drop-down selections)." />}
       {tab === 'routes' && <MasterData only={['routes']} title="🛣 Routes" subtitle="Production routes — ordered department stages per Dispatch Form." />}
+      {tab === 'grns' && <GrnAdmin />}
+      {tab === 'rmprices' && <RmPriceAdmin />}
       {tab === 'alerts' && <MasterData only={['alerts']} title="🔔 Stock Alerts" subtitle="Open low-stock shortages and notifications." />}
       {tab === 'users' && <UsersAccess />}
       {tab === 'audit' && <AuditLog />}
