@@ -462,20 +462,68 @@ function Grn({ flash }) {
   useEffect(() => { load(); }, [load]);
 
   const distinct = (arr, f) => [...new Set(arr.map((x) => String(x[f] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const norm = (v) => String(v || '').trim().toLowerCase();
+
+  /**
+   * The approved-supplier rows for each item code.
+   *
+   * The ASL is where the supplier↔item link lives, and each of its rows carries the
+   * SUPPLIER's own description of that material — its material type, sub-group and
+   * microns. The Item Master carries the same three, and the two do not always
+   * agree: BLM106 reads FILM / CC PET on the ASL row that ties it to MR Polymers,
+   * but narrowing looked only at the Item Master, so choosing FILM + CC PET matched
+   * nothing there. The consequence was two failures at once — the supplier list
+   * could not be narrowed (it fell back to all 175) and, once MR Polymers was
+   * chosen anyway, the item itself was filtered out of the line's dropdown.
+   *
+   * So a material matches if EITHER record says so. The Item Master still wins for
+   * what is written onto the receipt (Issues 2.6); this is only about what is
+   * OFFERED, and offering too little is what stopped the desk working.
+   */
+  const aslByCode = useMemo(() => {
+    const m = new Map();
+    asl.forEach((r) => {
+      const c = norm(r.itemCode);
+      if (!c) return;
+      if (!m.has(c)) m.set(c, []);
+      m.get(c).push(r);
+    });
+    return m;
+  }, [asl]);
+
+  /** Does this code match the pickers — by the Item Master, or by any ASL row for it? */
+  const matchesFilters = useCallback((code, masterRow) => {
+    const ok = (row, f, want) => !want || norm(row && row[f]) === norm(want);
+    if (masterRow && ok(masterRow, 'materialType', fMat) && ok(masterRow, 'subGroup', fSub)
+      && ok(masterRow, 'specialtyName', fSpec)) return true;
+    return (aslByCode.get(norm(code)) || []).some((r) => (
+      ok(r, 'materialType', fMat) && ok(r, 'subGroup', fSub) && ok(r, 'speciality', fSpec)
+    ));
+  }, [aslByCode, fMat, fSub, fSpec]);
 
   /** The items matching the material / sub-group / speciality pickers alone. */
-  const byFilters = useMemo(() => items.filter((it) => (
-    (!fMat || String(it.materialType || '') === fMat)
-    && (!fSub || String(it.subGroup || '') === fSub)
-    && (!fSpec || String(it.specialtyName || '') === fSpec)
-  )), [items, fMat, fSub, fSpec]);
+  const byFilters = useMemo(
+    () => items.filter((it) => matchesFilters(it.code, it)),
+    [items, matchesFilters],
+  );
 
   const narrowed = useMemo(() => byFilters.filter((it) => (
     // §12: one GRN covers one supplier, so once that supplier is chosen only the
     // items they are approved for can be received against it.
     !itemCodesForSupplier || !itemCodesForSupplier.size
-      || itemCodesForSupplier.has(String(it.code || '').trim().toLowerCase())
+      || itemCodesForSupplier.has(norm(it.code))
   )), [byFilters, itemCodesForSupplier]);
+
+  /**
+   * Codes this supplier is approved for that the Item Master does not have. Receiving
+   * needs a real item, so they cannot simply be offered — but they must not vanish
+   * silently either, which is exactly how an item "goes missing" from the dropdown.
+   */
+  const unknownForSupplier = useMemo(() => {
+    if (!itemCodesForSupplier || !itemCodesForSupplier.size) return [];
+    const known = new Set(items.map((it) => norm(it.code)));
+    return [...itemCodesForSupplier].filter((c) => !known.has(c)).sort();
+  }, [itemCodesForSupplier, items]);
 
   /**
    * Issues 2.6 — the supplier list narrows to the material, instead of the other way
@@ -490,16 +538,18 @@ function Grn({ flash }) {
    */
   const suppliersNarrowed = useMemo(() => {
     if (!fMat && !fSub && !fSpec) return null;
-    const codes = new Set(byFilters.map((it) => String(it.code || '').trim().toLowerCase()).filter(Boolean));
-    if (!codes.size) return null;
+    // Walk the ASL rows, not the Item Master: the row IS the supplier's claim to
+    // supply that material, and it carries their own description of it.
+    const byId = new Map(items.map((it) => [norm(it.code), it]));
     const names = new Set();
     asl.forEach((r) => {
-      if (!codes.has(String(r.itemCode || '').trim().toLowerCase())) return;
+      const code = norm(r.itemCode);
+      if (!code || !matchesFilters(code, byId.get(code))) return;
       const v = String(r.company || '').trim();
       if (v) names.add(v);
     });
     return names.size ? [...names].sort((a, b) => a.localeCompare(b)) : null;
-  }, [asl, byFilters, fMat, fSub, fSpec]);
+  }, [asl, items, matchesFilters, fMat, fSub, fSpec]);
 
   const supplierOptions = suppliersNarrowed || allSuppliers;
 
@@ -572,12 +622,14 @@ function Grn({ flash }) {
         <div className="g4">
           <div className="fg"><label>Material Type</label>
             <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type filter">
-              <option value="">Any material</option>{distinct(items, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
+              {/* Offered from BOTH records: a sub-group that only the ASL records —
+                  CC PET against MR Polymers — would otherwise not even be listed. */}
+              <option value="">Any material</option>{distinct([...items, ...asl], 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           <div className="fg"><label>Sub Group</label>
             <select value={fSub} onChange={(e) => setFSub(e.target.value)} aria-label="Sub group filter">
-              <option value="">Any sub-group</option>{distinct(items.filter((i) => !fMat || i.materialType === fMat), 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
+              <option value="">Any sub-group</option>{distinct([...items, ...asl].filter((i) => !fMat || norm(i.materialType) === norm(fMat)), 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           {/* §14: the same intelligent narrowing as the stock filters — speciality
@@ -585,8 +637,10 @@ function Grn({ flash }) {
           <div className="fg"><label>Speciality</label>
             <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Speciality filter">
               <option value="">Any speciality</option>
-              {distinct(items.filter((i) => (!fMat || i.materialType === fMat) && (!fSub || i.subGroup === fSub)), 'specialtyName')
-                .map((v) => <option key={v} value={v}>{v}</option>)}
+              {[...new Set([
+                ...distinct(items.filter((i) => (!fMat || norm(i.materialType) === norm(fMat)) && (!fSub || norm(i.subGroup) === norm(fSub))), 'specialtyName'),
+                ...distinct(asl.filter((i) => (!fMat || norm(i.materialType) === norm(fMat)) && (!fSub || norm(i.subGroup) === norm(fSub))), 'speciality'),
+              ])].sort((a, b) => a.localeCompare(b)).map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           {/* §9: chosen, never typed — and it decides which items this GRN can receive. */}
@@ -607,6 +661,16 @@ function Grn({ flash }) {
                     ? `No approved supplier on file for this material — showing all ${allSuppliers.length}.`
                     : `All ${allSuppliers.length} suppliers — narrow the material above to shorten this list.`}
             </div>
+            {/* An approved item that is not in the Item Master cannot be received, but
+                it must not just be absent from the list either — that is exactly what
+                "the item is not showing" looks like from the desk. Name it. */}
+            {unknownForSupplier.length > 0 && (
+              <div className="pg-sub" style={{ margin: '3px 0 0', color: '#B7770D' }}>
+                {head.supplier} is approved for {unknownForSupplier.length} item code(s) that are not in the Item
+                Master, so they cannot be received: <b>{unknownForSupplier.join(', ').toUpperCase()}</b>. Ask the
+                Purchase Admin to add them.
+              </div>
+            )}
           </div>
         </div>
 
