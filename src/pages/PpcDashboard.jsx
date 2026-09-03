@@ -29,6 +29,8 @@ const PPC_TABS = [
   { k: 'machinewise', label: '🏭 Machine-wise Planning' },
 ];
 
+import SoBomDownloads from '../components/SoBomDownloads.jsx';
+
 export default function PpcDashboard() {
   const nav = useNavigate();
   const [tab, setTab] = useState('dash');
@@ -83,6 +85,7 @@ export default function PpcDashboard() {
       {tab === 'machinewise' && <MachineWisePanel />}
 
       {tab === 'dash' && (<>
+      <SoBomDownloads compact />
       <div className="card">
         <div className="fbar">
           <div className="fg"><label>From</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>

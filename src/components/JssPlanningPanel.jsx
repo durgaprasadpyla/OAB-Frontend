@@ -594,17 +594,24 @@ export default function JssPlanningPanel() {
                   </div>
                   {deptLines.length === 0 ? <div className="al al-y">No items for this department.</div> : (
                     <div className="tw">
-                      <table>
+                      {/* Issues 3.0: every department is its own table, and under the
+                          default AUTO layout each one sized its columns to its own
+                          content — so Packing's Specialty box came out far wider than
+                          Printing's and the four blocks did not line up down the page.
+                          A fixed layout makes the declared widths authoritative, so
+                          every department reads identically. (Same cause as the 27px
+                          GRN price box in Issues 2.7.) */}
+                      <table style={{ minWidth: 1010, tableLayout: 'fixed' }}>
                         <thead><tr>
-                          <th style={{ minWidth: 120 }}>Material Type</th>
-                          <th style={{ minWidth: 110 }}>Sub-Group</th>
-                          <th style={{ minWidth: 110 }}>Specialty</th>
-                          <th style={{ minWidth: 220 }}>Item</th>
-                          <th style={{ width: 130 }}>Item Code</th>
-                          <th style={{ width: 80 }}>Microns</th>
-                          <th style={{ width: 130 }}>Qty / base</th>
-                          <th style={{ width: 90 }}>UOM</th>
-                          <th style={{ width: 50 }}></th>
+                          <th style={{ width: 130 }}>Material Type</th>
+                          <th style={{ width: 120 }}>Sub-Group</th>
+                          <th style={{ width: 130 }}>Specialty</th>
+                          <th style={{ width: 230 }}>Item</th>
+                          <th style={{ width: 110 }}>Item Code</th>
+                          <th style={{ width: 70 }}>Microns</th>
+                          <th style={{ width: 100 }}>Qty / base</th>
+                          <th style={{ width: 80 }}>UOM</th>
+                          <th style={{ width: 40 }}></th>
                         </tr></thead>
                         <tbody>
                           {deptLines.map(({ l, i }) => {

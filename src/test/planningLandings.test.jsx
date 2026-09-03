@@ -40,7 +40,9 @@ describe('PPC dashboard (/ppc)', () => {
       ['/api/reports/production', () => res(200, [{ group: 'Printing', plannedQty: 1000, actualQty: 800, wastageQty: 50 }])],
       ['/api/planning/week', () => res(200, { jobs: [], capacity: [{ date: '2026-08-25', machineName: 'CI Flexo', jobs: 1, usedMinutes: 100, capMinutes: 720, overbooked: false }] })],
     ]);
-    render(<MemoryRouter><PpcDashboard /></MemoryRouter>);
+    // Issues 3.0: the PPC dashboard now carries the sale-order BOM download, which
+    // reads the order and BOM modules — so it needs the data provider like the rest.
+    render(<MemoryRouter><AuthProvider><DataProvider><PpcDashboard /></DataProvider></AuthProvider></MemoryRouter>);
     expect(await screen.findByText(/PPC — Production Planning Dashboard/)).toBeInTheDocument();
     // planned-vs-actual by department renders
     expect(await screen.findByText('Printing')).toBeInTheDocument();

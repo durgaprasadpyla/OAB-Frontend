@@ -167,7 +167,7 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // which items may be received against it — so it comes first.
     fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Cosmos Films' } });
     await waitFor(() => expect(screen.getByLabelText('Item for line 1')).not.toBeDisabled());
-    fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: 'FILM-BOPP20' } });
     fireEvent.change(screen.getByLabelText('Quantity line 1'), { target: { value: '400' } });
     fireEvent.change(screen.getByLabelText('Supplier code line 1'), { target: { value: 'CF-1234' } });
     fireEvent.change(screen.getByLabelText('Internal code line 1'), { target: { value: 'BLMU-9' } });
@@ -247,8 +247,10 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     fireEvent.change(screen.getByLabelText('Material type filter'), { target: { value: 'Ink' } });
     fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Siegwerk India' } });
     await waitFor(() => expect(screen.getByLabelText('Item for line 1')).not.toBeDisabled());
-    const itemNames = [...screen.getByLabelText('Item for line 1').options].slice(1).map((o) => o.text);
-    expect(itemNames).toEqual(['INK-CYAN — Cyan Ink']);
+    // Issues 3.0: the item is typed against a datalist (by code or name), so what is
+    // OFFERED is the datalist's options rather than a select's.
+    const offered = [...document.querySelectorAll('#grn-items-0 option')].map((o) => o.value);
+    expect(offered).toEqual(['INK-CYAN — Cyan Ink']);
   });
 
   it('offers the header fields in the order the receipt is worked: material, then paperwork', async () => {

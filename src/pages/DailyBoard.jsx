@@ -234,7 +234,16 @@ export default function DailyBoard({ embedded = false }) {
           order onto one meant scrolling the right-hand column while holding the
           card. Stacked, the drop targets are all on one page and the drag is short. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-        <div className="card" style={{ order: 2 }}>
+        {/* Issues 3.0: "once I select a sale order from the bottom and I scroll up in
+            the middle, the selection is going away." A drag ends the moment the pointer
+            leaves the card, so a pool that scrolls off the page cannot reach a machine
+            further up. The pool is a STICKY footer now: it stays on screen while the
+            machines scroll past it, so the card being dragged and the shift it is going
+            onto are visible at the same time and the drag is short. */}
+        <div className="card" style={{
+          order: 2, position: 'sticky', bottom: 0, zIndex: 5,
+          boxShadow: '0 -6px 16px rgba(15,23,42,.10)', maxHeight: '38vh', overflow: 'auto',
+        }}>
           {(() => {
             const open = pool.filter((p) => !p.fullyPlanned);
             const done = pool.length - open.length;
@@ -281,7 +290,9 @@ export default function DailyBoard({ embedded = false }) {
               </>
             );
           })()}
-          <div className="pg-sub" style={{ marginTop: 8 }}>Tip: drag a card onto a machine above ↑</div>
+          <div className="pg-sub" style={{ marginTop: 8 }}>
+            Tip: this strip stays put while you scroll — drag a card straight up onto a machine&rsquo;s shift ↑
+          </div>
         </div>
 
         {/* Machine columns by department */}
@@ -409,7 +420,10 @@ export default function DailyBoard({ embedded = false }) {
       </div>
 
       {/* Full / partial quantity prompt on drop */}
-      <Modal open={!!drop} title="Plan quantity" onClose={() => setDrop(null)}>
+      {/* Issues 3.0: the title said only "Plan quantity", so with two machines or two
+          shifts under one department there was nothing on the prompt to tell the PPC
+          WHICH they had just dropped onto. It names both now. */}
+      <Modal open={!!drop} title={drop ? `Plan ${drop.so} — ${drop.machine.code}, Shift ${drop.shift || 'A'} (${drop.shift === 'B' ? 'night' : 'day'})` : 'Plan quantity'} onClose={() => setDrop(null)}>
         {drop && <DropForm drop={drop} onCancel={() => setDrop(null)} onSubmit={doAssign} />}
       </Modal>
     </div>
@@ -431,7 +445,11 @@ function DropForm({ drop, onSubmit, onCancel }) {
     <form onSubmit={submit}>
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
       <div className="al al-b" style={{ marginBottom: 10 }}>
-        <span className="so-pill">{drop.so}</span> → <b>{drop.machine.code}</b> ({drop.department.departmentName}) · ready to plan <b>{drop.remaining}</b>
+        <span className="so-pill">{drop.so}</span> →{' '}
+        <b>{drop.machine.code}</b>{drop.machine.name ? ` — ${drop.machine.name}` : ''} · {drop.department.departmentName}
+        <div style={{ marginTop: 4 }}>
+          Going onto <b>{drop.shift === 'B' ? '🌙 Shift B · night' : '🌞 Shift A · day'}</b> · ready to plan <b>{drop.remaining}</b>
+        </div>
       </div>
       <div className="fbar">
         <label className="cb"><input type="radio" checked={mode === 'full'} onChange={() => setMode('full')} /> All ready qty on this machine ({drop.remaining})</label>

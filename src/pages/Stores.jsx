@@ -404,6 +404,101 @@ function PurchaseOrders({ flash }) {
 
 /* ─────────────────────────────────── GRN ────────────────────────────────── */
 
+/**
+ * One receipt in the Recent-receipts list, opening out into what actually came in on
+ * it (Issues 3.0). The list itself only ever carried a unit COUNT; the business asked
+ * to see the item code, material type, sub-group, speciality and description behind
+ * that number, which means fetching the receipt's own units. The item identity is
+ * joined from the Item Master already loaded on this screen, so the row reads the
+ * same words the rest of the app uses for that item.
+ *
+ * Corrections are the Super Admin's (Dashboard -> GRN Entries): repricing a booked
+ * receipt moves the stock valuation, so it is not a stores-desk action.
+ */
+function GrnRow({ g, items, open, onToggle, flash }) {
+  const [detail, setDetail] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open || detail) return undefined;
+    let live = true;
+    setBusy(true);
+    storesApi.grn(g.id)
+      .then((d) => { if (live) setDetail(d); })
+      .catch((e) => { if (live) flash('r', e.message || 'Could not open that receipt'); })
+      .finally(() => { if (live) setBusy(false); });
+    return () => { live = false; };
+  }, [open, detail, g.id, flash]);
+
+  const byId = new Map((items || []).map((it) => [String(it.id), it]));
+  const units = (detail && detail.units) || [];
+
+  return (
+    <>
+      <tr className={open ? 'hi' : undefined}>
+        <td style={{ textAlign: 'center' }}>
+          <button className="btn btn-s" style={{ height: 20, fontSize: 10, padding: '0 5px' }}
+            aria-label={`${open ? 'Close' : 'Open'} ${g.grnNo}`} onClick={onToggle}>{open ? '▾' : '▸'}</button>
+        </td>
+        <td>
+          <button className="btn btn-s" style={{ height: 22, fontSize: 11, padding: '0 7px', fontFamily: 'monospace', fontWeight: 700 }}
+            onClick={onToggle} aria-label={`Open GRN ${g.grnNo}`}>{g.grnNo}</button>
+        </td>
+        <td style={{ fontSize: 11 }}>{g.grnDate}</td>
+        <td style={{ fontSize: 11 }}>{g.poNum || '—'}</td>
+        <td style={{ fontSize: 11 }}>{g.supplier || '—'}</td>
+        <td style={{ fontSize: 11 }}>{g.invoiceNo || '—'}</td>
+        <td style={{ fontSize: 11 }}>{g.invoiceDate || '—'}</td>
+        <td style={{ textAlign: 'right' }}>{g.units}</td>
+        <td style={{ fontSize: 11, color: 'var(--i3)' }}>{g.actor || '—'}</td>
+      </tr>
+      {open && (
+        <tr><td colSpan={9} style={{ background: 'var(--bg)', padding: '6px 14px 12px' }}>
+          {busy ? <div className="pg-sub" style={{ margin: 0 }}>Opening…</div> : units.length === 0 ? (
+            <div className="al al-y" style={{ margin: 0 }}>This receipt has no units on it.</div>
+          ) : (
+            <div className="tw">
+              <table>
+                <thead><tr>
+                  <th>Item Code</th><th style={{ minWidth: 170 }}>Item Description</th><th>Material Type</th>
+                  <th>Sub-Group</th><th>Speciality</th><th>Internal Code</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th><th>UOM</th><th>Location</th>
+                  <th style={{ textAlign: 'right' }}>Price</th>
+                </tr></thead>
+                <tbody>
+                  {units.map((u) => {
+                    const it = byId.get(String(u.itemId)) || {};
+                    return (
+                      <tr key={u.id}>
+                        <td style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{it.code || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{it.name || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{it.materialType || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{it.subGroup || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{it.specialtyName || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{u.internalCode}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{qty(u.qtyReceived)}</td>
+                        <td style={{ fontSize: 11 }}>{u.uom || it.uom || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{u.location || '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{u.price != null ? inr(u.price) : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="pg-sub" style={{ marginTop: 6 }}>
+                Supplier <b>{detail.supplier || '—'}</b> · invoice <b>{detail.invoiceNo || '—'}</b>
+                {detail.invoiceDate ? ` dated ${detail.invoiceDate}` : ''} · entered by <b>{detail.actor || '—'}</b>.
+                To correct a price or a quantity, the Super Admin does it under Dashboard → GRN Entries — a booked
+                receipt drives the stock valuation, so it is not changed from the desk.
+              </div>
+            </div>
+          )}
+        </td></tr>
+      )}
+    </>
+  );
+}
+
 const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: '', supplierCode: '', internalCode: '', widthMm: '', expiryDate: '', status: 'MOVING' });
 
 // §12: the supplier is a property of the GRN, not of each line — one GRN is one
@@ -424,6 +519,7 @@ function Grn({ flash }) {
   const pos = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.pos) ? mods.purchase.pos : []), [mods.purchase]);
   const asl = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.asl) ? mods.purchase.asl : []), [mods.purchase]);
   const [locations, setLocations] = useState([]);
+  const [openGrn, setOpenGrn] = useState(null);   // which receipt is opened out
 
   /**
    * Issues 2.4 §9 — every supplier the business buys from, for the header picker.
@@ -567,11 +663,30 @@ function Grn({ flash }) {
   const addLine = () => setLines((ls) => [...ls, blankLine()]);
   const rmLine = (i) => setLines((ls) => (ls.length === 1 ? [blankLine()] : ls.filter((_, j) => j !== i)));
 
+  /** "BLM106 — CC PET 12 MIC" — what the picker shows and matches on. */
+  const itemLabel = (it) => (it ? `${it.code} — ${it.name}` : '');
+
+  /**
+   * Resolve what was typed: the exact label, a bare item CODE, or a name. Anything
+   * else is kept as free text so the operator can carry on typing, and the line
+   * says so rather than silently holding no item.
+   */
+  function pickItemByText(i, text) {
+    const t = norm(text);
+    const hit = narrowed.find((it) => norm(itemLabel(it)) === t)
+      || narrowed.find((it) => norm(it.code) === t)
+      || narrowed.find((it) => norm(it.name) === t)
+      || items.find((it) => norm(it.code) === t);
+    if (hit) { pickItem(i, hit.id); return; }
+    setLine(i, { itemId: '', uom: '', _search: text });
+  }
+
   function pickItem(i, id) {
     const it = itemById(id);
     // §11: the UOM is the item master's, and is shown read-only — a hand-typed unit
-    // on a receipt silently changes what the stock figure means.
-    setLine(i, { itemId: id, uom: (it && it.uom) || '' });
+    // on a receipt silently changes what the stock figure means. Issues 3.0: the
+    // width comes across the same way, and is no longer a field on the line at all.
+    setLine(i, { itemId: id, uom: (it && it.uom) || '', _search: '' });
   }
 
   // The PO the stores person must physically check before receiving.
@@ -593,7 +708,8 @@ function Grn({ flash }) {
           // §12: one supplier for the whole receipt.
           supplier: head.supplier || undefined,
           internalCode: l.internalCode || undefined,
-          widthMm: l.widthMm === '' ? undefined : Number(l.widthMm),
+          // Issues 3.0: the width is the item's, not something typed per receipt.
+          widthMm: l.widthMm === '' || l.widthMm == null ? undefined : Number(l.widthMm),
           expiryDate: l.expiryDate || undefined, status: l.status || 'MOVING',
         })),
       });
@@ -713,16 +829,19 @@ function Grn({ flash }) {
             makes the declared widths authoritative, and the natural minimum keeps them
             from being scaled down; the wrapper already scrolls (.tw), so the page itself
             does not grow. */}
-        <div className="tw"><table style={{ minWidth: 1255, tableLayout: 'fixed' }}>
+        <div className="tw"><table style={{ minWidth: 1235, tableLayout: 'fixed' }}>
           <thead><tr>
-            <th style={{ width: 240 }}>Item *</th><th style={{ width: 130 }}>Supplier Label Code</th>
+            <th style={{ width: 300 }}>Item *</th><th style={{ width: 130 }}>Supplier Label Code</th>
             <th style={{ width: 120 }}>Internal Code</th>
             {/* Issues 2.7: Qty and Price are the two numbers the stores desk types on
                 every line, so they get the same comfortable width and neither is
                 cramped. The stepper arrows are gone (.nospin), which is where most of
                 the room came from — the table itself is no wider than before. */}
-            <th style={{ width: 128 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
-            <th style={{ width: 110 }}>Width (mm)</th><th style={{ width: 128 }}>Price</th><th style={{ width: 140 }}>Location</th>
+            {/* Issues 3.0: Width is gone — it is fixed on the item in the Item Master,
+                so typing it per receipt could only ever disagree with it. The room it
+                freed goes to Qty and Price, the two numbers actually typed here. */}
+            <th style={{ width: 150 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
+            <th style={{ width: 150 }}>Price</th><th style={{ width: 140 }}>Location</th>
             <th style={{ width: 145 }}>Expiry</th><th style={{ width: 44 }}></th>
           </tr></thead>
           <tbody>
@@ -734,11 +853,23 @@ function Grn({ flash }) {
               return (
                 <tr key={i}>
                   <td>
-                    <select value={l.itemId} onChange={(e) => pickItem(i, e.target.value)} aria-label={`Item for line ${i + 1}`} style={{ width: '100%' }}
-                      disabled={!head.supplier}>
-                      <option value="">{head.supplier ? '— select an item —' : '— choose a supplier first —'}</option>
-                      {narrowed.map((it) => <option key={it.id} value={it.id}>{it.code} — {it.name}</option>)}
-                    </select>
+                    {/* Issues 3.0: "I should be able to type and select the item number
+                        also." A dropdown of hundreds is unusable when the desk already
+                        knows the code off the carton, so this matches on the CODE as
+                        readily as on the name — type either, or pick from the list. */}
+                    <input list={`grn-items-${i}`} disabled={!head.supplier} style={{ width: '100%' }}
+                      aria-label={`Item for line ${i + 1}`}
+                      placeholder={head.supplier ? 'type the item code or name…' : 'choose a supplier first'}
+                      value={l.itemId ? itemLabel(itemById(l.itemId)) : (l._search || '')}
+                      onChange={(e) => pickItemByText(i, e.target.value)} />
+                    <datalist id={`grn-items-${i}`}>
+                      {narrowed.map((it) => <option key={it.id} value={itemLabel(it)} />)}
+                    </datalist>
+                    {!l.itemId && l._search ? (
+                      <div style={{ fontSize: 9.5, color: 'var(--red)', marginTop: 2 }}>
+                        no item with that code or name — pick one from the list
+                      </div>
+                    ) : null}
                     {unmapped && (
                       <div style={{ fontSize: 9.5, color: '#B7770D', marginTop: 2 }}>
                         Not mapped to {head.supplier} — call the Super Admin to get the association done.
@@ -751,7 +882,6 @@ function Grn({ flash }) {
                   <td><input value={l.uom} readOnly tabIndex={-1} aria-label={`UOM line ${i + 1}`}
                     title="Taken from the Item Master — change it there, not on the receipt"
                     style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
-                  <td><input type="number" step="any" min="0" className="nospin" value={l.widthMm} onChange={(e) => setLine(i, { widthMm: e.target.value })} aria-label={`Width line ${i + 1}`} /></td>
                   <td><input type="number" step="any" min="0" className="nospin" value={l.price} onChange={(e) => setLine(i, { price: e.target.value })} aria-label={`Price line ${i + 1}`} /></td>
                   <td>
                     {locations.length ? (
@@ -783,21 +913,18 @@ function Grn({ flash }) {
 
       <div className="card">
         <div className="ctitle">Recent receipts <span className="tag tgr">{grns.length}</span></div>
-        <div className="tw sy" style={{ maxHeight: 260 }}>
+        <div className="pg-sub" style={{ marginTop: 0 }}>Click a GRN number to see what came in on it.</div>
+        <div className="tw sy" style={{ maxHeight: 320 }}>
           <table>
-            <thead><tr><th>GRN</th><th>Date</th><th>PO</th><th>Supplier</th><th>Invoice</th><th style={{ textAlign: 'right' }}>Units</th><th>By</th></tr></thead>
+            <thead><tr>
+              <th style={{ width: 34 }}></th><th>GRN</th><th>Date</th><th>PO</th><th>Supplier</th>
+              <th>Invoice</th><th>Invoice Date</th><th style={{ textAlign: 'right' }}>Units</th><th>Entered by</th>
+            </tr></thead>
             <tbody>
-              {grns.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No receipts yet</td></tr>
+              {grns.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No receipts yet</td></tr>
                 : grns.map((g) => (
-                  <tr key={g.id}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{g.grnNo}</td>
-                    <td style={{ fontSize: 11 }}>{g.grnDate}</td>
-                    <td style={{ fontSize: 11 }}>{g.poNum || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{g.supplier || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{g.invoiceNo || '—'}</td>
-                    <td style={{ textAlign: 'right' }}>{g.units}</td>
-                    <td style={{ fontSize: 11, color: 'var(--i3)' }}>{g.actor || '—'}</td>
-                  </tr>
+                  <GrnRow key={g.id} g={g} items={items} open={openGrn === g.id}
+                    onToggle={() => setOpenGrn(openGrn === g.id ? null : g.id)} flash={flash} />
                 ))}
             </tbody>
           </table>

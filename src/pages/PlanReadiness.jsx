@@ -5,6 +5,7 @@ import { dash, today } from '../lib/format.js';
 import { balance } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
+import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
 
@@ -182,6 +183,7 @@ export default function PlanReadiness() {
 
       {/* Plan downloads (§55) — shared with the planner and the Plant login (§63) */}
       <PlanDownloads compact />
+      <SoBomDownloads compact />
 
       {/* P6: department-wise wastage against each sale order, on the PLAN dashboard too */}
       <SoWastagePanel from={addDays(today(), -6)} to={today()} />
@@ -301,6 +303,15 @@ export default function PlanReadiness() {
                   </tr>
                   {matFor === r.so && (
                     <tr><td colSpan={18} style={{ background: 'var(--bg)', padding: '4px 12px 12px' }}>
+                      {/* Issues 3.0: the panel opens under the row and pushes the rest of
+                          the board down. The ▼ Material button toggles it, but that button
+                          is now above a tall panel and easy to lose — so the way out is
+                          also here, where the eye already is. */}
+                      <div className="fbar" style={{ justifyContent: 'space-between', margin: '0 0 4px' }}>
+                        <div className="ctitle" style={{ margin: 0 }}>Material for <span className="so-pill">{r.so}</span></div>
+                        <button className="btn btn-s" style={{ height: 24, fontSize: 11 }}
+                          aria-label={`Close material for ${r.so}`} onClick={() => setMatFor('')}>✕ Close</button>
+                      </div>
                       <MaterialAssignPanel so={r.so} spec={r.spec} material={r.substrate} />
                     </td></tr>
                   )}

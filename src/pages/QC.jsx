@@ -6,6 +6,7 @@ import { custsInGroup, groupOptions, specGroup } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
+import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
 import CertificatePanel from '../components/CertificatePanel.jsx';
 import CsaPanel from '../components/CsaPanel.jsx';
@@ -241,6 +242,8 @@ export default function QC() {
         <div className="pg-ttl">QC — Route and BOM</div>
         <QcTabs tab={tab} setTab={setTab} />
         <JssPlanningPanel />
+        {/* Issues 3.0: QC writes the recipe, so QC can take the sale-order sheet too. */}
+        <SoBomDownloads compact />
       </div>
     );
   }

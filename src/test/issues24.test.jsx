@@ -167,17 +167,20 @@ describe('Stores GRN (§9-§13)', () => {
 
   it('offers only the chosen supplier’s items (§12)', async () => {
     const sup = await renderGrn();
+    // Issues 3.0: the item is typed (by code or name) against a datalist, not picked
+    // out of a select — so the offered set is the datalist's options.
     const item = () => screen.getByLabelText('Item for line 1');
+    const offered = () => [...document.querySelectorAll('#grn-items-0 option')].map((o) => o.value);
     expect(item()).toBeDisabled();                       // nothing to receive until a supplier is named
 
     fireEvent.change(sup, { target: { value: 'Cosmo Films' } });
     await waitFor(() => expect(item()).not.toBeDisabled());
-    expect(within(item()).queryByRole('option', { name: /BLM031/ })).toBeTruthy();
-    expect(within(item()).queryByRole('option', { name: /BLM999/ })).toBeNull();
+    expect(offered().join('|')).toContain('BLM031');
+    expect(offered().join('|')).not.toContain('BLM999');
 
     fireEvent.change(sup, { target: { value: 'Jindal Poly' } });
-    await waitFor(() => expect(within(item()).queryByRole('option', { name: /BLM999/ })).toBeTruthy());
-    expect(within(item()).queryByRole('option', { name: /BLM031/ })).toBeNull();
+    await waitFor(() => expect(offered().join('|')).toContain('BLM999'));
+    expect(offered().join('|')).not.toContain('BLM031');
   });
 
   it('has no supplier column on the line — one GRN, one supplier (§12)', async () => {
@@ -188,7 +191,8 @@ describe('Stores GRN (§9-§13)', () => {
   it('fills the UOM from the item master and will not let it be edited (§11)', async () => {
     const sup = await renderGrn();
     fireEvent.change(sup, { target: { value: 'Cosmo Films' } });
-    fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: '1' } });
+    // typed by CODE — the thing the desk reads off the carton
+    fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: 'BLM031' } });
     const uom = screen.getByLabelText('UOM line 1');
     await waitFor(() => expect(uom).toHaveValue('KG'));
     expect(uom).toHaveAttribute('readonly');
@@ -289,7 +293,7 @@ describe('PPC daily board (§5, §6)', () => {
     expect(container.querySelector('div[style*="order: 1"]')).toBeTruthy();
     expect(machines).toBeTruthy();
     // …and the tip points the operator upwards, not sideways.
-    expect(screen.getByText(/drag a card onto a machine above/)).toBeTruthy();
+    expect(screen.getByText(/drag a card straight up onto a machine/)).toBeTruthy();
   });
 
   it('lets the PPC type a job’s real start time (§5)', async () => {

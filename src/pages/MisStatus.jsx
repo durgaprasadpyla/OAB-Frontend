@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { productionApi, reportsApi } from '../api.js';
 import { today } from '../lib/format.js';
+import { exportAOA } from '../lib/xlsx.js';
 
 // MIS landing page — Enhancements 2.0 §50-53. MIS sees the STATUS of every sale order
 // the PPC has planned (its route departments/machines and how much is still pending),
@@ -19,7 +20,7 @@ const statusTag = (s) => ({ Completed: 'tg', 'Partially Completed': 'tb', 'In Pr
  * (machines + metres), takes the ACTUAL metres + wastage inline, and lets MIS mark
  * the department "Completed — Partial" / "Completed — Whole" once entered.
  */
-function StatusRow({ p, onSaved, onFull }) {
+function StatusRow({ p, onSaved, onFull, onExport }) {
   const [actual, setActual] = useState('');
   const [waste, setWaste] = useState('');
   const [busy, setBusy] = useState(false);
@@ -79,6 +80,8 @@ function StatusRow({ p, onSaved, onFull }) {
         {err && <div style={{ color: 'var(--red)', fontSize: 10 }}>{err}</div>}
       </td>
       <td><button className="btn btn-s" style={{ height: 26, fontSize: 10 }} onClick={onFull} title="Full form with start/end times">Full form</button></td>
+      <td><button className="btn btn-s" style={{ height: 26, fontSize: 10 }} onClick={onExport}
+        aria-label={`Export ${p.so} to Excel`} title={`Every stage of ${p.so}, as a sheet`}>⬇ XLS</button></td>
     </tr>
   );
 }
@@ -111,6 +114,39 @@ export default function MisStatus() {
   useEffect(() => { load(); }, [load]);
 
   const preset = (days) => { setTo(today()); setFrom(addDays(today(), -(days - 1))); };
+
+  /**
+   * Issues 3.0: "In MIS login I should have export to Excel when I am looking at the
+   * details of a particular sale order." Every board here exports what is on screen,
+   * and a sale order exports on its own — MIS works one order at a time, and handing
+   * the whole board to someone asking about one order is not an answer.
+   */
+  const STATUS_COLS = ['Sale Order', 'Stage', 'Department', 'Machine(s)', 'Planned', 'Remaining',
+    'Planned date', 'Actual date', 'Delay (days)', 'Status'];
+  const statusRow = (p) => [p.so, p.stageSeq, p.departmentName, p.machines || '', n1(p.plannedQty),
+    n1(p.remaining), p.plannedDate || '', p.actualDate || '', p.delayDays ?? '', p.status || ''];
+
+  function exportStatus(rowsIn, name) {
+    if (!rowsIn.length) return;
+    exportAOA([[`MIS status — ${name}`], ['Printed', today()], [], STATUS_COLS, ...rowsIn.map(statusRow)],
+      `MIS_Status_${String(name).replace(/[\/:*?"<>|]+/g, '-')}_${today()}`, 'Status');
+  }
+  function exportPva() {
+    if (!prod.length) return;
+    exportAOA([['Planned vs Actual, with wastage'], ['Range', `${from} to ${to}`], [],
+      ['Department', 'Planned', 'Actual', 'Wastage', 'Variance'],
+      ...prod.map((r) => [r.group, n1(r.plannedQty), n1(r.actualQty), n1(r.wastageQty),
+        n1(Number(r.actualQty || 0) - Number(r.plannedQty || 0))])],
+    `MIS_Planned_vs_Actual_${from}_to_${to}`, 'Planned vs Actual');
+  }
+  function exportUtil() {
+    if (!util.length) return;
+    exportAOA([['Machine utilization'], ['Range', `${from} to ${to}`], [],
+      ['Machine', 'Available min', 'Planned min', 'Actual min', 'Changeover', 'Idle min', 'Util %', 'Actual qty', 'Wastage'],
+      ...util.map((m) => [m.machine, n1(m.availableMinutes), n1(m.plannedMinutes), n1(m.actualMinutes),
+        n1(m.changeoverMinutes), n1(m.idleMinutes), m.utilizationPct, n1(m.actualQty), n1(m.wastageQty)])],
+    `MIS_Machine_Utilization_${from}_to_${to}`, 'Utilization');
+  }
   const distinctSos = useMemo(() => new Set((pending || []).map((p) => p.so)).size, [pending]);
   const plannedQty = useMemo(() => sum(prod, 'plannedQty'), [prod]);
   const actualQty = useMemo(() => sum(prod, 'actualQty'), [prod]);
@@ -154,13 +190,18 @@ export default function MisStatus() {
 
       {!loading && tab === 'status' && (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="ctitle">Pending stages <span className="tag ty">{pending.length}</span></div>
+          <div className="fbar" style={{ justifyContent: 'space-between' }}>
+            <div className="ctitle" style={{ margin: 0 }}>Pending stages <span className="tag ty">{pending.length}</span></div>
+            <button className="btn btn-s" disabled={!pending.length} onClick={() => exportStatus(pending, 'all open orders')}
+              aria-label="Export the status board to Excel">⬇ Excel</button>
+          </div>
           <div className="pg-sub" style={{ marginTop: 0 }}>Planned machine(s) and metres come from the PPC plan. Enter the actual metres (and wastage) right here, or open the full form for start/end times.</div>
           {pending.length === 0 ? <div className="al al-g">Nothing pending — every planned stage is complete.</div> : (
             <div className="tw sy"><table>
-              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Machine(s)</th><th>Planned</th><th>Remaining</th><th>Planned date</th><th>Actual date</th><th>Delay</th><th>Status</th><th>Actual / Wastage</th><th></th></tr></thead>
-              <tbody>{pending.map((p, i) => (
-                <StatusRow key={p.so + '|' + p.stageSeq} p={p} onSaved={load} onFull={() => nav('/production')} />
+              <thead><tr><th>Sale Order</th><th>Stage</th><th>Department</th><th>Machine(s)</th><th>Planned</th><th>Remaining</th><th>Planned date</th><th>Actual date</th><th>Delay</th><th>Status</th><th>Actual / Wastage</th><th></th><th></th></tr></thead>
+              <tbody>{pending.map((p) => (
+                <StatusRow key={p.so + '|' + p.stageSeq} p={p} onSaved={load} onFull={() => nav('/production')}
+                  onExport={() => exportStatus(pending.filter((x) => x.so === p.so), p.so)} />
               ))}</tbody>
             </table></div>
           )}
@@ -169,7 +210,10 @@ export default function MisStatus() {
 
       {!loading && tab === 'pva' && (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="ctitle">Planned vs Actual + Wastage (by department)</div>
+          <div className="fbar" style={{ justifyContent: 'space-between' }}>
+            <div className="ctitle" style={{ margin: 0 }}>Planned vs Actual + Wastage (by department)</div>
+            <button className="btn btn-s" disabled={!prod.length} onClick={exportPva} aria-label="Export planned vs actual to Excel">⬇ Excel</button>
+          </div>
           {prod.length === 0 ? <div className="al al-g">No production recorded in this period.</div> : (
             <div className="tw sy"><table>
               <thead><tr><th>Department</th><th>Planned</th><th>Actual</th><th>Wastage</th><th>Variance</th></tr></thead>
@@ -183,7 +227,10 @@ export default function MisStatus() {
 
       {!loading && tab === 'util' && (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="ctitle">Machine Utilization</div>
+          <div className="fbar" style={{ justifyContent: 'space-between' }}>
+            <div className="ctitle" style={{ margin: 0 }}>Machine Utilization</div>
+            <button className="btn btn-s" disabled={!util.length} onClick={exportUtil} aria-label="Export machine utilization to Excel">⬇ Excel</button>
+          </div>
           {util.length === 0 ? <div className="al al-g">No machines.</div> : (
             <div className="tw sy"><table>
               <thead><tr><th>Machine</th><th>Avail min</th><th>Planned min</th><th>Actual min</th><th>Changeover</th><th>Idle min</th><th>Util %</th><th>Actual qty</th><th>Wastage</th></tr></thead>

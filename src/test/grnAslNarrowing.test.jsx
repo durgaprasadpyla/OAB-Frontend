@@ -87,8 +87,9 @@ describe('GRN — narrowing by what the supplier actually supplies', () => {
 
     const item = await screen.findByLabelText('Item for line 1');
     await waitFor(() => expect(item).not.toBeDisabled());
-    expect(within(item).getByRole('option', { name: /BLM106/ })).toBeTruthy();
-    expect(within(item).queryByRole('option', { name: /BLM031/ })).toBeNull();
+    const offered = [...document.querySelectorAll('#grn-items-0 option')].map((o) => o.value).join('|');
+    expect(offered).toContain('BLM106');
+    expect(offered).not.toContain('BLM031');
   });
 
   it('names an approved code that is missing from the Item Master instead of hiding it', async () => {
@@ -110,9 +111,12 @@ describe('GRN — narrowing by what the supplier actually supplies', () => {
 
     await waitFor(() => expect(values(sup)).toEqual(['Cosmo Films']));
     fireEvent.change(sup, { target: { value: 'Cosmo Films' } });
-    const item = await screen.findByLabelText('Item for line 1');
-    await waitFor(() => expect(within(item).queryByRole('option', { name: /BLM031/ })).toBeTruthy());
-    expect(within(item).queryByRole('option', { name: /BLM106/ })).toBeNull();
+    await screen.findByLabelText('Item for line 1');
+    await waitFor(() => {
+      const offered = [...document.querySelectorAll('#grn-items-0 option')].map((o) => o.value).join('|');
+      expect(offered).toContain('BLM031');
+      expect(offered).not.toContain('BLM106');
+    });
   });
 
   it('leaves the supplier list whole when no material is chosen', async () => {
