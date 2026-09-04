@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { storesApi, masterApi } from '../api.js';
+import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 
 // Stores Login. Four desks, in the order the day runs:
@@ -673,12 +673,25 @@ function Grn({ flash }) {
    */
   function pickItemByText(i, text) {
     const t = norm(text);
-    const hit = narrowed.find((it) => norm(itemLabel(it)) === t)
-      || narrowed.find((it) => norm(it.code) === t)
+    const hit = narrowed.find((it) => norm(it.code) === t)
+      || narrowed.find((it) => norm(itemLabel(it)) === t)
       || narrowed.find((it) => norm(it.name) === t)
       || items.find((it) => norm(it.code) === t);
     if (hit) { pickItem(i, hit.id); return; }
     setLine(i, { itemId: '', uom: '', _search: text });
+  }
+
+  /**
+   * The price this supplier last charged for this item, from the approved-supplier
+   * list the Purchase Admin keeps (Issues 3.1). It is a STARTING POINT, not a rule:
+   * the invoice in the storesman's hand wins, so the box stays editable.
+   */
+  function aslPrice(code) {
+    const sup = norm(head.supplier);
+    const row = (aslByCode.get(norm(code)) || [])
+      .find((r) => !sup || norm(r.company) === sup);
+    const v = row && (row.basicPrice ?? row.price);
+    return v === undefined || v === null || String(v).trim() === '' ? '' : String(v);
   }
 
   function pickItem(i, id) {
@@ -686,7 +699,14 @@ function Grn({ flash }) {
     // §11: the UOM is the item master's, and is shown read-only — a hand-typed unit
     // on a receipt silently changes what the stock figure means. Issues 3.0: the
     // width comes across the same way, and is no longer a field on the line at all.
-    setLine(i, { itemId: id, uom: (it && it.uom) || '', _search: '' });
+    // Issues 3.1: the item's own material identity reads back beside it, and the
+    // price starts at what this supplier last charged.
+    setLine(i, {
+      itemId: id,
+      uom: (it && it.uom) || '',
+      _search: '',
+      price: aslPrice(it && it.code) || '',
+    });
   }
 
   // The PO the stores person must physically check before receiving.
@@ -734,7 +754,26 @@ function Grn({ flash }) {
         {/* Issues 2.6 — the material comes FIRST. Narrowing by material type, sub-group
             and speciality cuts the 175-name supplier list down to the companies that
             actually supply it, and cuts the item list down at the same time. */}
-        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>① What arrived</div>
+        <div className="ctitle" style={{ fontSize: 11, margin: '10px 0 2px' }}>① The paperwork</div>
+        <div className="g4">
+          <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
+          {/* §10: PO generation is not automated yet, so this is a plain note — type
+              the number if there is one, leave it blank if there is not. The supplier's
+              own PO numbers are offered, so it is picked rather than remembered. */}
+          <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
+            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
+              list="grn-po-numbers" placeholder="PO number, if any" aria-label="Purchase order" />
+            <datalist id="grn-po-numbers">
+              {pos.filter((p) => !head.supplier || String(p.supplier || '').trim().toLowerCase() === String(head.supplier).trim().toLowerCase())
+                .map((p) => <option key={p.poNum} value={p.poNum} />)}
+            </datalist>
+          </div>
+          <div className="fg"><label>GRN Date</label><input type="date" value={head.grnDate} onChange={(e) => setHead({ ...head, grnDate: e.target.value })} aria-label="GRN date" /></div>
+          <div className="fg"><label>Invoice Date</label><input type="date" value={head.invoiceDate} onChange={(e) => setHead({ ...head, invoiceDate: e.target.value })} aria-label="Invoice date" /></div>
+          <div className="fg"><label>Invoice No.</label><input value={head.invoiceNo} onChange={(e) => setHead({ ...head, invoiceNo: e.target.value })} aria-label="Invoice number" /></div>
+        </div>
+
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② What arrived</div>
         <div className="g4">
           <div className="fg"><label>Material Type</label>
             <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type filter">
@@ -790,25 +829,6 @@ function Grn({ flash }) {
           </div>
         </div>
 
-        <div className="ctitle" style={{ fontSize: 11, margin: '10px 0 2px' }}>② The paperwork</div>
-        <div className="g4">
-          <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
-          {/* §10: PO generation is not automated yet, so this is a plain note — type
-              the number if there is one, leave it blank if there is not. The supplier's
-              own PO numbers are offered, so it is picked rather than remembered. */}
-          <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
-            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
-              list="grn-po-numbers" placeholder="PO number, if any" aria-label="Purchase order" />
-            <datalist id="grn-po-numbers">
-              {pos.filter((p) => !head.supplier || String(p.supplier || '').trim().toLowerCase() === String(head.supplier).trim().toLowerCase())
-                .map((p) => <option key={p.poNum} value={p.poNum} />)}
-            </datalist>
-          </div>
-          <div className="fg"><label>GRN Date</label><input type="date" value={head.grnDate} onChange={(e) => setHead({ ...head, grnDate: e.target.value })} aria-label="GRN date" /></div>
-          <div className="fg"><label>Invoice Date</label><input type="date" value={head.invoiceDate} onChange={(e) => setHead({ ...head, invoiceDate: e.target.value })} aria-label="Invoice date" /></div>
-          <div className="fg"><label>Invoice No.</label><input value={head.invoiceNo} onChange={(e) => setHead({ ...head, invoiceNo: e.target.value })} aria-label="Invoice number" /></div>
-        </div>
-
         {chosenPo && (
           <div className="al al-b" style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <span><strong>Verify against {chosenPo.poNum}:</strong></span>
@@ -829,9 +849,13 @@ function Grn({ flash }) {
             makes the declared widths authoritative, and the natural minimum keeps them
             from being scaled down; the wrapper already scrolls (.tw), so the page itself
             does not grow. */}
-        <div className="tw"><table style={{ minWidth: 1235, tableLayout: 'fixed' }}>
+        <div className="tw"><table style={{ minWidth: 1470, tableLayout: 'fixed' }}>
           <thead><tr>
-            <th style={{ width: 300 }}>Item *</th><th style={{ width: 130 }}>Supplier Label Code</th>
+            {/* Issues 3.1: "let us not club the item code and item description into
+                one" — the code is picked, the description and the item's material
+                identity read back from the Item Master beside it. */}
+            <th style={{ width: 170 }}>Item Code *</th><th style={{ width: 200 }}>Description</th>
+            <th style={{ width: 160 }}>Material / Sub-Group</th><th style={{ width: 130 }}>Supplier Label Code</th>
             <th style={{ width: 120 }}>Internal Code</th>
             {/* Issues 2.7: Qty and Price are the two numbers the stores desk types on
                 every line, so they get the same comfortable width and neither is
@@ -859,11 +883,11 @@ function Grn({ flash }) {
                         readily as on the name — type either, or pick from the list. */}
                     <input list={`grn-items-${i}`} disabled={!head.supplier} style={{ width: '100%' }}
                       aria-label={`Item for line ${i + 1}`}
-                      placeholder={head.supplier ? 'type the item code or name…' : 'choose a supplier first'}
-                      value={l.itemId ? itemLabel(itemById(l.itemId)) : (l._search || '')}
+                      placeholder={head.supplier ? 'type the item code…' : 'choose a supplier first'}
+                      value={l.itemId ? (itemById(l.itemId) || {}).code || '' : (l._search || '')}
                       onChange={(e) => pickItemByText(i, e.target.value)} />
                     <datalist id={`grn-items-${i}`}>
-                      {narrowed.map((it) => <option key={it.id} value={itemLabel(it)} />)}
+                      {narrowed.map((it) => <option key={it.id} value={it.code}>{it.name}</option>)}
                     </datalist>
                     {!l.itemId && l._search ? (
                       <div style={{ fontSize: 9.5, color: 'var(--red)', marginTop: 2 }}>
@@ -876,6 +900,15 @@ function Grn({ flash }) {
                       </div>
                     )}
                   </td>
+                  <td><input value={(itemById(l.itemId) || {}).name || ''} readOnly tabIndex={-1}
+                    aria-label={`Item description line ${i + 1}`} placeholder="from the Item Master"
+                    style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
+                  <td><input
+                    value={[(itemById(l.itemId) || {}).materialType, (itemById(l.itemId) || {}).subGroup,
+                      (itemById(l.itemId) || {}).specialtyName].filter(Boolean).join(' · ')}
+                    readOnly tabIndex={-1} aria-label={`Item identity line ${i + 1}`} placeholder="—"
+                    title="Material type · sub-group · speciality, from the Item Master"
+                    style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
                   <td><input value={l.supplierCode} onChange={(e) => setLine(i, { supplierCode: e.target.value })} aria-label={`Supplier code line ${i + 1}`} /></td>
                   <td><input value={l.internalCode} placeholder="auto" onChange={(e) => setLine(i, { internalCode: e.target.value })} aria-label={`Internal code line ${i + 1}`} /></td>
                   <td><input type="number" step="any" min="0" className="nospin" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label={`Quantity line ${i + 1}`} /></td>
@@ -946,11 +979,71 @@ function IssuesReturns({ flash }) {
   const [form, setForm] = useState({ unitId: '', qty: '', so: '', department: '', note: '' });
   const [split, setSplit] = useState(false);
   const [children, setChildren] = useState([{ qty: '', widthMm: '', internalCode: '', location: '' }]);
+  // Issues 3.1: department, sale order, split width and location are all pickers
+  // here now. Typed free-hand they drifted — "Printing", "printing", "PRINTING" —
+  // and nothing that groups issues by department could add them up.
+  const [departments, setDepartments] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [plannedSos, setPlannedSos] = useState(null);   // null = the plan is unreadable here
+  const [masterItems, setMasterItems] = useState([]);
+
+  useEffect(() => {
+    let live = true;
+    masterApi.listDepartments()
+      .then((r) => { if (live && Array.isArray(r)) setDepartments(r); })
+      .catch(() => { /* master unreachable - the box falls back to free text */ });
+    // Widths come from the whole Item Master, not only what is in stock: a code
+    // exists for a width whether or not there is a roll of it on the floor today.
+    masterApi.listItems()
+      .then((r) => { if (live && Array.isArray(r)) setMasterItems(r); })
+      .catch(() => { /* fall back to the widths already on rolls */ });
+    storesApi.locations()
+      .then((r) => { if (live && Array.isArray(r)) setLocations(r); })
+      .catch(() => { /* not provisioned yet */ });
+    // "Sale orders should be a drop down with the sale orders that are planned for
+    // that particular day under PPC." Today's plan is the right shortlist; if it is
+    // empty or unreadable the full open list stands in, because a return still has
+    // to be bookable against an order nobody planned today.
+    planningApi.week(today(), today())
+      .then((w) => {
+        if (!live) return;
+        const list = [...new Set(((w && w.jobs) || []).map((j) => j.so).filter(Boolean))];
+        setPlannedSos(list);
+      })
+      .catch(() => { if (live) setPlannedSos(null); });
+    return () => { live = false; };
+  }, []);
+
+  /**
+   * The widths a returned roll may be cut to: the ones the business has item codes
+   * for. Width is not a field on an item — it is written into the item's NAME
+   * ("460 MM", "680 MM (AJ)", "700"), which is exactly how codes are allocated by
+   * width — so the list is read from there, plus every width already on a roll.
+   */
+  const knownWidths = useMemo(() => {
+    const set = new Set();
+    units.forEach((u) => { if (num(u.widthMm) > 0) set.add(String(num(u.widthMm))); });
+    // The leading run of digits in the name IS the width: "460 MM", "680 MM (AJ)", "700".
+    const widthOf = (name) => {
+      const t = String(name || '').trim();
+      let d = '';
+      for (let i = 0; i < t.length && t[i] >= '0' && t[i] <= '9'; i++) d += t[i];
+      const v = Number(d);
+      return d && Number.isFinite(v) && v >= 50 ? String(v) : '';
+    };
+    (masterItems.length ? masterItems : items).forEach((it) => {
+      const w = widthOf(it.name);
+      if (w) set.add(w);
+    });
+    return [...set].sort((a, b) => Number(a) - Number(b));
+  }, [units, items, masterItems]);
 
   const openSos = useMemo(() => {
     const oab = (mods.oab && mods.oab.OAB) || {};
     return ['SF', 'OT'].flatMap((k) => (oab[k] || []).filter((r) => !r.closed).map((r) => r.so)).filter(Boolean);
   }, [mods.oab]);
+  const soOptions = (plannedSos && plannedSos.length) ? plannedSos : openSos;
+  const soFromPlan = !!(plannedSos && plannedSos.length);
 
   useEffect(() => { storesApi.onHand().then((r) => setItems((r || []).filter((x) => num(x.closingStock) > 0 || x.unitCount > 0))).catch(() => {}); }, []);
 
@@ -1012,11 +1105,19 @@ function IssuesReturns({ flash }) {
           stock on the Material on Hand board immediately.
         </div>
         <div className="g4">
-          <div className="fg"><label>Item</label>
+          {/* Issues 3.1: "the item code should be different and the description should
+              be different" — the code is what is stencilled on the roll, so it is what
+              is picked; the description reads back beside it. */}
+          <div className="fg"><label>Item code</label>
             <select value={itemId} onChange={(e) => { setItemId(e.target.value); setForm((f) => ({ ...f, unitId: '' })); }} aria-label="Item">
-              <option value="">— select an item —</option>
-              {items.map((it) => <option key={it.id} value={it.id}>{it.code} — {it.name}</option>)}
+              <option value="">— select an item code —</option>
+              {items.map((it) => <option key={it.id} value={it.id}>{it.code}</option>)}
             </select>
+          </div>
+          <div className="fg"><label>Item description</label>
+            <input value={(items.find((it) => String(it.id) === String(itemId)) || {}).name || ''} readOnly tabIndex={-1}
+              aria-label="Item description" placeholder="pick a code first"
+              style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} />
           </div>
           <div className="fg"><label>Roll / can (oldest first)</label>
             <select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })} aria-label="Roll">
@@ -1028,11 +1129,33 @@ function IssuesReturns({ flash }) {
               ))}
             </select>
           </div>
-          <div className="fg"><label>Sale order</label>
-            <input list="stores-so-list" value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })} aria-label="Sale order" placeholder="optional" />
-            <datalist id="stores-so-list">{openSos.map((s) => <option key={s} value={s} />)}</datalist>
+          <div className="fg">
+            <label>Sale order {soFromPlan ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(planned today)</span> : null}</label>
+            {/* A picker over the day's plan. With nothing planned and no order list
+                readable, it falls back to a plain box rather than leaving the desk
+                unable to say which order the material went to. */}
+            {soOptions.length ? (
+              <select value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })} aria-label="Sale order">
+                <option value="">— none —</option>
+                {soOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                {form.so && !soOptions.includes(form.so) && <option value={form.so}>{form.so}</option>}
+              </select>
+            ) : (
+              <input value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })}
+                aria-label="Sale order" placeholder="nothing planned today — type the SO" />
+            )}
           </div>
-          <div className="fg"><label>Department</label><input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department" placeholder="e.g. Printing" /></div>
+          <div className="fg"><label>Department</label>
+            {departments.length ? (
+              <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department">
+                <option value="">— none —</option>
+                {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                {form.department && !departments.some((d) => d.name === form.department) && <option value={form.department}>{form.department}</option>}
+              </select>
+            ) : (
+              <input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department" placeholder="e.g. Printing" />
+            )}
+          </div>
           <div className="fg"><label>Quantity</label>
             <input type="number" step="any" min="0" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
               aria-label="Quantity" disabled={split} placeholder={selectedUnit ? `max ${qty(selectedUnit.qtyRemaining)}` : ''} />
@@ -1050,15 +1173,68 @@ function IssuesReturns({ flash }) {
               A 1200&nbsp;mm roll issued and returned as 700 + 500&nbsp;mm: enter each returned roll below. Each becomes its own
               roll with its own sticker, and the original roll is left at zero.
             </div>
+            {/* Issues 3.1: the parent-child link, said out loud — every roll entered
+                below is recorded as having come off this one. */}
+            {selectedUnit && (
+              <div className="al al-b" style={{ margin: '6px 0' }}>
+                Cut from <b>{selectedUnit.internalCode}</b>
+                {selectedUnit.widthMm ? ` · ${qty(selectedUnit.widthMm)} mm` : ''}
+                {selectedUnit.location ? ` · ${selectedUnit.location}` : ''} — each roll below is linked back to it.
+              </div>
+            )}
             <div className="tw"><table>
-              <thead><tr><th style={{ width: 120 }}>Qty *</th><th style={{ width: 120 }}>Width (mm)</th><th>Internal code</th><th>Location</th><th style={{ width: 40 }}></th></tr></thead>
+              <thead><tr><th style={{ width: 120 }}>Qty *</th><th style={{ width: 140 }}>Width (mm)</th><th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th></tr></thead>
               <tbody>
                 {children.map((c, i) => (
                   <tr key={i}>
                     <td><input type="number" step="any" min="0" value={c.qty} aria-label={`Returned quantity ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} /></td>
-                    <td><input type="number" step="any" min="0" value={c.widthMm} aria-label={`Returned width ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} /></td>
+                    <td>
+                      {/* Issues 3.1: item codes are allocated by width, so a returned
+                          roll may only be cut to a width already on file. A width that
+                          is missing is the Super Admin's to add, not the desk's. */}
+                      {knownWidths.length ? (
+                        <>
+                          <select value={c._other ? '__other__' : c.widthMm} aria-label={`Returned width ${i + 1}`} style={{ width: '100%' }}
+                            onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i
+                              ? (e.target.value === '__other__' ? { ...x, _other: true, widthMm: '' } : { ...x, _other: false, widthMm: e.target.value })
+                              : x)))}>
+                            <option value="">— width —</option>
+                            {knownWidths.map((w) => <option key={w} value={w}>{w} mm</option>)}
+                            {c.widthMm && !c._other && !knownWidths.includes(String(c.widthMm)) && <option value={c.widthMm}>{c.widthMm} mm</option>}
+                            <option value="__other__">＋ Other width…</option>
+                          </select>
+                          {c._other && (
+                            <>
+                              <input type="number" step="any" min="0" value={c.widthMm} className="nospin"
+                                aria-label={`Returned width ${i + 1} other`} placeholder="mm" style={{ marginTop: 3 }}
+                                onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} />
+                              <div style={{ fontSize: 9, color: '#B7770D', marginTop: 2 }}>
+                                No item code for this width yet — ask the Super Admin to add one.
+                              </div>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <input type="number" step="any" min="0" value={c.widthMm} aria-label={`Returned width ${i + 1}`}
+                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} />
+                      )}
+                    </td>
                     <td><input value={c.internalCode} placeholder="auto" aria-label={`Returned internal code ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, internalCode: e.target.value } : x)))} /></td>
-                    <td><input value={c.location} aria-label={`Returned location ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, location: e.target.value } : x)))} /></td>
+                    <td>
+                      {/* Issues 3.1: the rack is picked from the Super Admin's list, the
+                          same list the GRN puts material away into. */}
+                      {locations.length ? (
+                        <select value={c.location} aria-label={`Returned location ${i + 1}`} style={{ width: '100%' }}
+                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, location: e.target.value } : x)))}>
+                          <option value="">— rack —</option>
+                          {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
+                          {c.location && !locations.some((loc) => loc.name === c.location) && <option value={c.location}>{c.location}</option>}
+                        </select>
+                      ) : (
+                        <input value={c.location} aria-label={`Returned location ${i + 1}`}
+                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, location: e.target.value } : x)))} />
+                      )}
+                    </td>
                     <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => setChildren((cs) => (cs.length === 1 ? cs : cs.filter((_, j) => j !== i)))}>✕</button></td>
                   </tr>
                 ))}

@@ -266,6 +266,8 @@ export const notificationsApi = {
 export const productionApi = {
   get: (so) => api('/api/production?so=' + encodeURIComponent(so)),
   pending: () => api('/api/production/pending'),
+  // Issues 3.0: the MIS status board — every planned SO, a column per department.
+  statusBoard: () => api('/api/production/status-board'),
   init: (so) => api('/api/production/init', { method: 'POST', body: { so } }),
   record: (body) => api('/api/production/record', { method: 'POST', body }),
   setStatus: (so, stageSeq, status) => api('/api/production/status', { method: 'POST', body: { so, stageSeq, status } }),

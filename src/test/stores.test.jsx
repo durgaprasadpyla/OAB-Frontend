@@ -250,14 +250,16 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // Issues 3.0: the item is typed against a datalist (by code or name), so what is
     // OFFERED is the datalist's options rather than a select's.
     const offered = [...document.querySelectorAll('#grn-items-0 option')].map((o) => o.value);
-    expect(offered).toEqual(['INK-CYAN — Cyan Ink']);
+    expect(offered).toEqual(['INK-CYAN']);   // Issues 3.1: the code alone; the description reads back beside it
   });
 
   it('offers the header fields in the order the receipt is worked: material, then paperwork', async () => {
     const user = userEvent.setup();
     await openGrn(user);
-    const order = ['Material type filter', 'Sub group filter', 'Speciality filter', 'Supplier',
-      'GRN number', 'Purchase order', 'GRN date', 'Invoice date', 'Invoice number']
+    // Issues 3.1: "I want the paperwork to move to the top and material type,
+    // subgroup, speciality, supplier drop-down everything to move to the bottom."
+    const order = ['GRN number', 'Purchase order', 'GRN date', 'Invoice date', 'Invoice number',
+      'Material type filter', 'Sub group filter', 'Speciality filter', 'Supplier']
       .map((l) => screen.getByLabelText(l));
     for (let i = 1; i < order.length; i++) {
       // eslint-disable-next-line no-bitwise
@@ -288,10 +290,14 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // now the 1200 comes back as a 700 and a 500
     await user.click(screen.getByLabelText('Returned as narrower rolls'));
     fireEvent.change(screen.getByLabelText('Returned quantity 1'), { target: { value: '250' } });
-    fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '700' } });
+    // Issues 3.1: the width is picked from the widths the business has item codes
+    // for; a width with no code yet is entered through the explicit escape.
+    fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '__other__' } });
+    fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '700' } });
     await user.click(screen.getByRole('button', { name: /Another roll back/ }));
     fireEvent.change(screen.getByLabelText('Returned quantity 2'), { target: { value: '150' } });
-    fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '500' } });
+    fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '__other__' } });
+    fireEvent.change(screen.getByLabelText('Returned width 2 other'), { target: { value: '500' } });
     await user.click(screen.getByRole('button', { name: /Receive return/ }));
 
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/returns'))).toBe(true));
