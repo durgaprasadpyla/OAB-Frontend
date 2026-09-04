@@ -35,9 +35,11 @@ const DETAIL = {
     { id: 12, internalCode: 'BLMU-2', itemCode: 'FILM-1', itemName: 'BOPP 20mic', supplierCode: 'CF-2', uom: 'Kg', qtyReceived: 50, qtyRemaining: 20, price: 120, location: 'B3', expiryDate: null, qtyLocked: true },
   ],
 };
+// Issues 3.1 reshaped this: `adminPrice` is the Super Admin's price as on today and
+// sits BESIDE what the GRNs said (priceLow/priceHigh/grnValue) rather than rewriting it.
 const RM = [
-  { itemId: 5, code: 'FILM-1', name: 'BOPP 20mic', uom: 'Kg', materialType: 'FILM', subGroup: 'AF BOPP', onHand: 120, units: 2, priceLow: 120, priceHigh: 140, stockValue: 15000 },
-  { itemId: 6, code: 'INK-1', name: 'Cyan Ink', uom: 'Kg', materialType: 'INK', subGroup: 'C I FLEXO', onHand: 0, units: 0, priceLow: null, priceHigh: null, stockValue: 0 },
+  { itemId: 5, code: 'FILM-1', name: 'BOPP 20mic', uom: 'Kg', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: 'Metallized', onHand: 120, units: 2, priceLow: 120, priceHigh: 140, grnValue: 15000, adminPrice: null, adminValue: 15000 },
+  { itemId: 6, code: 'INK-1', name: 'Cyan Ink', uom: 'Kg', materialType: 'INK', subGroup: 'C I FLEXO', specialtyName: 'Surface', onHand: 0, units: 0, priceLow: null, priceHigh: null, grnValue: 0, adminPrice: null, adminValue: 0 },
 ];
 
 let calls;
@@ -65,7 +67,10 @@ beforeEach(() => {
       return res(200, unit);
     }
     if (u.includes('/api/stores/rm-prices')) return res(200, RM);
-    if (u.match(/\/api\/stores\/items\/\d+\/price$/) && method === 'PUT') return res(200, { unitsUpdated: 2 });
+    if (u.match(/\/api\/stores\/items\/\d+\/price$/) && method === 'PUT') {
+      const cleared = body == null || body.price === '' || body.price == null;
+      return res(200, { itemId: 5, code: 'FILM-1', price: cleared ? null : body.price, cleared });
+    }
     if (u.includes('/api/stores/on-hand')) return res(200, []);
     if (u.includes('/api/master/items')) return res(200, []);
     if (u.includes('/api/stores/locations')) return res(200, []);
@@ -215,7 +220,7 @@ describe('Issues 2.7 §4 — Super Admin edits RM prices', () => {
     expect(within(row).getByText('120')).toBeInTheDocument();            // on hand
   });
 
-  it('repositions the whole item onto one price through the stock endpoint', async () => {
+  it('sets the price as on today without touching what the GRNs said', async () => {
     mount(<RmPriceAdmin />);
     await screen.findByText('FILM-1');
     fireEvent.change(screen.getByLabelText('New price for FILM-1'), { target: { value: '135.50' } });
@@ -223,7 +228,29 @@ describe('Issues 2.7 §4 — Super Admin edits RM prices', () => {
 
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.u === '/api/stores/items/5/price')).toBe(true));
     expect(calls.find((c) => c.method === 'PUT' && c.u === '/api/stores/items/5/price').body).toEqual({ price: '135.50' });
-    await screen.findByText(/repriced/);
+    await screen.findByText(/priced at .135.5 as on today/);
+    // the receipts are untouched — no unit was rewritten
+    expect(calls.some((c) => c.method === 'PUT' && c.u.includes('/units/'))).toBe(false);
+  });
+
+  it('clears the price as on today when the box is emptied on a priced item', async () => {
+    const priced = [{ ...RM[0], adminPrice: 135.5, adminValue: 16260 }, RM[1]];
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      const u = String(url); const method = (opts.method || 'GET').toUpperCase();
+      const body = opts.body ? JSON.parse(opts.body) : null;
+      calls.push({ u: u.replace(/^.*\/api/, '/api'), method, body });
+      if (u.includes('/api/stores/rm-prices')) return res(200, priced);
+      if (u.match(/\/api\/stores\/items\/\d+\/price$/) && method === 'PUT') return res(200, { cleared: true });
+      return res(200, []);
+    });
+    mount(<RmPriceAdmin />);
+    await screen.findByText('FILM-1');
+    // the hint says to clear the box and Save, so Save must accept an empty box here
+    expect(screen.getByLabelText('Save price for FILM-1')).not.toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Save price for FILM-1'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.u === '/api/stores/items/5/price')).toBe(true));
+    expect(calls.find((c) => c.method === 'PUT' && c.u === '/api/stores/items/5/price').body).toEqual({ price: '' });
+    await screen.findByText(/cleared/);
   });
 
   it('cannot reprice a material with nothing in stock', async () => {

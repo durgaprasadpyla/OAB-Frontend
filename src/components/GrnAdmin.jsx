@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
 import { fmtDate, rupees, dash } from '../lib/format.js';
 
@@ -106,8 +107,14 @@ export default function GrnAdmin() {
   );
 }
 
-/** One receipt: its paperwork, then the units it produced. */
-function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
+/**
+ * One receipt: its paperwork, then the units it produced.
+ *
+ * Exported because the stores desk edits its own receipts from the Recent-receipts
+ * panel on the GRN screen (Issues 3.1) — the same editor, the same endpoints, the
+ * same rules. A second copy would be a second set of rules to keep in step.
+ */
+export function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
   const [head, setHead] = useState(() => ({
     poNum: s(grn.poNum), supplier: s(grn.supplier), grnDate: s(grn.grnDate),
     invoiceNo: s(grn.invoiceNo), invoiceDate: s(grn.invoiceDate), notes: s(grn.notes),
@@ -252,6 +259,7 @@ function UnitRow({ unit, busy, setBusy, flash, onSaved, grnId }) {
 
 /** Remaining stock of one material and what it is priced at. */
 export function RmPriceAdmin() {
+  const { mods } = useData();
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState('');
   const [mat, setMat] = useState('');
@@ -270,6 +278,25 @@ export function RmPriceAdmin() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  /**
+   * Who supplies each material (Issues 3.1). The link lives on the approved-supplier
+   * list the Purchase Admin keeps, which this login already reads — so the price
+   * master can show it without the stores API learning about purchasing.
+   */
+  const suppliersByCode = useMemo(() => {
+    const asl = (mods.purchase && Array.isArray(mods.purchase.asl)) ? mods.purchase.asl : [];
+    const m = new Map();
+    asl.forEach((r) => {
+      const code = s(r.itemCode).trim().toLowerCase();
+      const co = s(r.company).trim();
+      if (!code || !co) return;
+      if (!m.has(code)) m.set(code, new Set());
+      m.get(code).add(co);
+    });
+    return m;
+  }, [mods.purchase]);
+
+
   const materials = useMemo(
     () => [...new Set(rows.map((r) => s(r.materialType).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [rows],
@@ -280,14 +307,32 @@ export function RmPriceAdmin() {
       && (!t || [r.code, r.name, r.materialType, r.subGroup].some((v) => s(v).toLowerCase().includes(t))));
   }, [rows, q, mat]);
 
+  /**
+   * The two figures the business asked for. The GRN total is what the receipts said
+   * this stock cost; the Super Admin total values the same stock at the price as on
+   * today, falling back to the GRN price for anything not priced here — "if nothing
+   * is mentioned here then the stock value will be based on the price at which the
+   * GRNs were entered".
+   */
+  const totals = useMemo(() => filtered.reduce((t, r) => ({
+    grn: t.grn + num(r.grnValue ?? r.stockValue),
+    admin: t.admin + num(r.adminValue ?? r.grnValue ?? r.stockValue),
+    priced: t.priced + (r.adminPrice == null ? 0 : 1),
+  }), { grn: 0, admin: 0, priced: 0 }), [filtered]);
+
   async function save(r) {
     const typed = draft[r.itemId];
-    if (typed == null || typed === '') { flash('r', 'Enter a price.'); return; }
-    if (!(num(typed) >= 0)) { flash('r', 'A price cannot be negative.'); return; }
+    // An empty box on an item that HAS a price as on today is the documented way to
+    // drop it ("clear the box and Save"); on one that has none there is nothing to do.
+    const clearing = typed == null || String(typed).trim() === '';
+    if (clearing && r.adminPrice == null) { flash('r', 'Enter a price.'); return; }
+    if (!clearing && !(num(typed) >= 0)) { flash('r', 'A price cannot be negative.'); return; }
     setBusy(String(r.itemId));
     try {
-      const out = await storesApi.setItemPrice(r.itemId, typed);
-      flash('g', `✓ ${r.code} repriced to ₹${num(typed)} on ${out.unitsUpdated} unit(s) in stock.`);
+      const out = await storesApi.setItemPrice(r.itemId, clearing ? '' : typed);
+      flash('g', out && out.cleared
+        ? `✓ ${r.code} — price as on today cleared; it falls back to what the GRNs said.`
+        : `✓ ${r.code} priced at ₹${num(typed)} as on today.`);
       setDraft((d) => { const n = { ...d }; delete n[r.itemId]; return n; });
       await load();
     } catch (e) { flash('r', e.message || 'Save failed'); } finally { setBusy(''); }
@@ -307,26 +352,50 @@ export function RmPriceAdmin() {
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="al al-b">
-        A material&rsquo;s price lives on the stock it was received as — the same figure the GRN
-        records and the stock valuation multiplies by. Saving here writes that figure onto
-        every unit of the item <strong>still in stock</strong>; material already issued keeps the
-        price it was consumed at, so past costs stay honest. Where a range is shown, batches
-        came in at different prices.
+        <strong>Price as on today</strong> is a valuation, not a correction: the receipts keep what
+        they were booked at, so the two totals below can be told apart. Stock is valued at the
+        price you give here, and at the GRN price for anything you leave blank. To change what a
+        receipt actually cost, open it under <strong>GRN Entries</strong>. Where a price range is
+        shown, batches came in at different prices.
+      </div>
+      {/* The answer the page exists to give, kept on screen rather than added up by hand. */}
+      <div className="stats" style={{ marginBottom: 8 }}>
+        <div className="stat">
+          <div className="sl">GRN entry total</div>
+          <div className="sv">{rupees(totals.grn)}</div>
+          <div className="pg-sub" style={{ margin: 0 }}>what the receipts said</div>
+        </div>
+        <div className="stat">
+          <div className="sl">Super Admin entry total</div>
+          <div className="sv" style={{ color: totals.admin === totals.grn ? undefined : 'var(--blu)' }}>{rupees(totals.admin)}</div>
+          <div className="pg-sub" style={{ margin: 0 }}>
+            {totals.priced ? `${totals.priced} material(s) priced as on today` : 'nothing priced yet — same as the GRN total'}
+          </div>
+        </div>
+        <div className="stat">
+          <div className="sl">Difference</div>
+          <div className="sv" style={{ color: totals.admin - totals.grn === 0 ? undefined : (totals.admin > totals.grn ? 'var(--g)' : 'var(--red)') }}>
+            {rupees(totals.admin - totals.grn)}
+          </div>
+          <div className="pg-sub" style={{ margin: 0 }}>valuation less cost</div>
+        </div>
       </div>
       {loading ? <div className="pg-sub" style={{ margin: 0 }}>Loading materials…</div> : (
         <div className="tw sy" style={{ maxHeight: 'calc(100vh - 360px)' }}>
           <table>
             <thead><tr>
-              <th>Item Code</th><th style={{ minWidth: 200 }}>Description</th>
-              <th>Material</th><th>Sub-Group</th>
+              <th>Item Code</th><th style={{ minWidth: 190 }}>Description</th>
+              <th>Material</th><th>Sub-Group</th><th>Speciality</th>
+              <th style={{ minWidth: 150 }}>Suppliers</th>
               <th style={{ textAlign: 'right' }}>On Hand</th><th>UOM</th>
-              <th style={{ textAlign: 'right' }}>Price on stock</th>
-              <th style={{ textAlign: 'right' }}>Stock Value</th>
-              <th style={{ width: 190 }}>Set price</th>
+              <th style={{ textAlign: 'right' }}>GRN price</th>
+              <th style={{ textAlign: 'right' }}>GRN value</th>
+              <th style={{ width: 190 }}>Price as on today</th>
+              <th style={{ textAlign: 'right' }}>Valued at</th>
             </tr></thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+                <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
                   {rows.length ? 'No material matches your search' : 'No materials in the item master yet'}
                 </td></tr>
               ) : filtered.map((r) => {
@@ -335,12 +404,18 @@ export function RmPriceAdmin() {
                 const range = lo != null && hi != null && lo !== hi;
                 const saving = busy === String(r.itemId);
                 const typed = draft[r.itemId];
+                const sups = [...(suppliersByCode.get(s(r.code).trim().toLowerCase()) || [])].sort();
                 return (
                   <tr key={r.itemId}>
                     <td style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{r.code}</td>
                     <td style={{ fontSize: 11 }}>{r.name}</td>
                     <td style={{ fontSize: 11 }}>{r.materialType || '—'}</td>
                     <td style={{ fontSize: 11 }}>{r.subGroup || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{r.specialtyName || '—'}</td>
+                    <td style={{ fontSize: 10.5 }} title={sups.join(', ')}>
+                      {sups.length ? (sups.length > 2 ? `${sups.slice(0, 2).join(', ')} +${sups.length - 2}` : sups.join(', '))
+                        : <span style={{ color: 'var(--i3)' }}>not mapped</span>}
+                    </td>
                     <td style={{ textAlign: 'right' }}>{dash(r.onHand)}</td>
                     <td style={{ fontSize: 11, color: 'var(--i3)' }}>{r.uom || '—'}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>
@@ -348,7 +423,7 @@ export function RmPriceAdmin() {
                         : range ? <span title="Batches came in at different prices">₹{lo} – ₹{hi}</span>
                           : '₹' + lo}
                     </td>
-                    <td style={{ textAlign: 'right' }}>{rupees(num(r.stockValue))}</td>
+                    <td style={{ textAlign: 'right' }}>{rupees(num(r.grnValue ?? r.stockValue))}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <input type="number" step="any" min="0" className="nospin"
                         style={{ width: 96 }} placeholder={lo == null ? '0.00' : String(lo)}
@@ -359,8 +434,14 @@ export function RmPriceAdmin() {
                         onChange={(e) => setDraft((d) => ({ ...d, [r.itemId]: e.target.value }))} />{' '}
                       <button className="btn btn-g" style={{ height: 24, fontSize: 10, padding: '0 7px' }}
                         aria-label={`Save price for ${r.code}`}
-                        disabled={saving || typed == null || typed === '' || num(r.onHand) <= 0}
+                        disabled={saving || (typed == null && r.adminPrice == null) || num(r.onHand) <= 0}
                         onClick={() => save(r)}>{saving ? '…' : 'Save'}</button>
+                      {r.adminPrice != null && (
+                        <div className="pg-sub" style={{ margin: 0 }}>now ₹{num(r.adminPrice)} — clear the box and Save to drop it</div>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: r.adminPrice != null ? 'var(--blu)' : undefined }}>
+                      {rupees(num(r.adminValue ?? r.grnValue ?? r.stockValue))}
                     </td>
                   </tr>
                 );

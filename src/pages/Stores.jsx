@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { GrnEditor } from '../components/GrnAdmin.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 
@@ -74,6 +75,11 @@ function OnHand({ flash }) {
   const [fSpec, setFSpec] = useState('');
   const [fMic, setFMic] = useState('');
   const [fDept, setFDept] = useState('');
+  // Issues 3.1: "In the main page filters I need to have a filter for status to get
+  // the amount that is in the moving stocks, non-moving stocks, rejected stocks, or
+  // QC hold stocks." Status lives on each ROLL, so an item matches when it holds any
+  // stock of that disposition — and the figures below then count only that stock.
+  const [fStatus, setFStatus] = useState('');
   const [open, setOpen] = useState(null);        // itemId whose units are expanded
   const [units, setUnits] = useState([]);
   const [unitsBusy, setUnitsBusy] = useState(false);
@@ -146,16 +152,22 @@ function OnHand({ flash }) {
       if (fSpec && String(r.specialtyName || '') !== fSpec) return false;
       if (fMic && String(r.microns || '') !== fMic) return false;
       if (fDept && String(r.departmentName || '') !== fDept) return false;
+      if (fStatus && !num(((r.byStatus || {})[fStatus] || {}).qty)) return false;
       if (!t) return true;
       return [r.code, r.name, r.materialType, r.subGroup, r.specialtyName].some((v) => String(v || '').toLowerCase().includes(t));
     });
-  }, [rows, q, fMat, fSub, fSpec, fMic, fDept]);
+  }, [rows, q, fMat, fSub, fSpec, fMic, fDept, fStatus]);
 
+  // With a disposition chosen the figures answer the question that was asked —
+  // "the amount that is in the moving stocks, non-moving stocks, rejected stocks or
+  // QC hold" — rather than the whole item's value regardless of disposition.
   const totals = useMemo(() => ({
     items: visible.length,
     below: visible.filter((r) => r.belowMsl).length,
-    value: visible.reduce((t, r) => t + num(r.stockValue), 0),
-  }), [visible]);
+    value: visible.reduce((t, r) => t + (fStatus
+      ? num(((r.byStatus || {})[fStatus] || {}).value)
+      : num(r.stockValue)), 0),
+  }), [visible, fStatus]);
 
   async function expand(item) {
     if (open === item.id) { setOpen(null); setUnits([]); return; }
@@ -204,6 +216,10 @@ function OnHand({ flash }) {
         <select value={fDept} onChange={(e) => setFDept(e.target.value)} aria-label="Filter by department">
           <option value="">All departments</option>{opts('departmentName').map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
+        <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} aria-label="Filter by status">
+          <option value="">All stock</option>
+          {UNIT_STATUSES.map((st) => <option key={st.v} value={st.v}>{st.label}</option>)}
+        </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
           title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
@@ -215,7 +231,10 @@ function OnHand({ flash }) {
       <div className="stats" style={{ marginBottom: 8 }}>
         <div className="stat"><div className="sl">Items listed</div><div className="sv">{totals.items}</div></div>
         <div className="stat"><div className="sl">Below MSL</div><div className="sv" style={{ color: totals.below ? 'var(--red)' : undefined }}>{totals.below}</div></div>
-        <div className="stat"><div className="sl">Stock value</div><div className="sv">{inr(Math.round(totals.value))}</div></div>
+        <div className="stat">
+          <div className="sl">{fStatus ? `Value — ${statusLabel(fStatus)}` : 'Stock value'}</div>
+          <div className="sv">{inr(Math.round(totals.value))}</div>
+        </div>
       </div>
 
       <div className="pg-sub" style={{ marginTop: 0 }}>
@@ -415,9 +434,15 @@ function PurchaseOrders({ flash }) {
  * Corrections are the Super Admin's (Dashboard -> GRN Entries): repricing a booked
  * receipt moves the stock valuation, so it is not a stores-desk action.
  */
-function GrnRow({ g, items, open, onToggle, flash }) {
+function GrnRow({ g, items, open, onToggle, flash, onChanged }) {
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Issues 3.1: "there should be an edit button which when clicked upon I should be
+  // able to edit the GRN entry." The desk that booked the receipt is the one holding
+  // the supplier's invoice, so it corrects its own — through the same editor and the
+  // same endpoints the Super Admin's GRN Entries screen uses.
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!open) setEditing(false); }, [open]);
 
   useEffect(() => {
     if (!open || detail) return undefined;
@@ -454,8 +479,23 @@ function GrnRow({ g, items, open, onToggle, flash }) {
       </tr>
       {open && (
         <tr><td colSpan={9} style={{ background: 'var(--bg)', padding: '6px 14px 12px' }}>
-          {busy ? <div className="pg-sub" style={{ margin: 0 }}>Opening…</div> : units.length === 0 ? (
-            <div className="al al-y" style={{ margin: 0 }}>This receipt has no units on it.</div>
+          {busy ? <div className="pg-sub" style={{ margin: 0 }}>Opening…</div> : editing && detail ? (
+            <GrnEditor
+              grn={detail} busy={busy} setBusy={setBusy} flash={flash}
+              onClose={() => setEditing(false)}
+              onSaved={async (fresh) => {
+                setDetail(fresh);
+                // "the same changes should be reflected in the store's front end as
+                // well" — the receipt list and the stock behind it are refetched, so
+                // a corrected price is the one the valuation shows.
+                if (onChanged) await onChanged();
+              }} />
+          ) : units.length === 0 ? (
+            <div className="al al-y" style={{ margin: 0 }}>
+              This receipt has no units on it.
+              <button className="btn btn-s" style={{ marginLeft: 10 }}
+                aria-label={`Edit ${g.grnNo}`} onClick={() => setEditing(true)}>✎ Edit this GRN</button>
+            </div>
           ) : (
             <div className="tw">
               <table>
@@ -485,11 +525,16 @@ function GrnRow({ g, items, open, onToggle, flash }) {
                   })}
                 </tbody>
               </table>
-              <div className="pg-sub" style={{ marginTop: 6 }}>
-                Supplier <b>{detail.supplier || '—'}</b> · invoice <b>{detail.invoiceNo || '—'}</b>
-                {detail.invoiceDate ? ` dated ${detail.invoiceDate}` : ''} · entered by <b>{detail.actor || '—'}</b>.
-                To correct a price or a quantity, the Super Admin does it under Dashboard → GRN Entries — a booked
-                receipt drives the stock valuation, so it is not changed from the desk.
+              <div className="fbar" style={{ marginTop: 6, alignItems: 'baseline' }}>
+                <div className="pg-sub" style={{ margin: 0 }}>
+                  Supplier <b>{detail.supplier || '—'}</b> · invoice <b>{detail.invoiceNo || '—'}</b>
+                  {detail.invoiceDate ? ` dated ${detail.invoiceDate}` : ''} · entered by <b>{detail.actor || '—'}</b>.
+                  A booked receipt drives the stock valuation, so the GRN number and who booked it stay
+                  as they are — and a quantity already issued against cannot be rewritten.
+                </div>
+                <span style={{ flex: 1 }} />
+                <button className="btn btn-s" aria-label={`Edit ${g.grnNo}`}
+                  onClick={() => setEditing(true)}>✎ Edit this GRN</button>
               </div>
             </div>
           )}
@@ -957,7 +1002,8 @@ function Grn({ flash }) {
               {grns.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No receipts yet</td></tr>
                 : grns.map((g) => (
                   <GrnRow key={g.id} g={g} items={items} open={openGrn === g.id}
-                    onToggle={() => setOpenGrn(openGrn === g.id ? null : g.id)} flash={flash} />
+                    onToggle={() => setOpenGrn(openGrn === g.id ? null : g.id)} flash={flash}
+                    onChanged={load} />
                 ))}
             </tbody>
           </table>
@@ -1408,6 +1454,11 @@ function Fg({ flash }) {
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
+  // Issues 3.1: "how much of our money is blocked in moving FG and how much in
+  // non-moving FG". Purely an internal segregation — it changes no quantity, and FG
+  // is still offered against a new sale order either way.
+  const [fMove, setFMove] = useState('');
+  const [saving, setSaving] = useState('');
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -1419,23 +1470,65 @@ function Fg({ flash }) {
 
   const visible = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t) return rows;
-    return rows.filter((r) => [r.spec, r.customer, r.jobName].some((v) => String(v || '').toLowerCase().includes(t)));
-  }, [rows, q]);
+    return rows.filter((r) => {
+      const moving = r.moving !== false;
+      if (fMove === 'moving' && !moving) return false;
+      if (fMove === 'non' && moving) return false;
+      if (!t) return true;
+      return [r.spec, r.customer, r.jobName].some((v) => String(v || '').toLowerCase().includes(t));
+    });
+  }, [rows, q, fMove]);
   const totalFg = visible.reduce((t, r) => t + num(r.fgQty), 0);
+  // The money, split the way it was asked for. Value comes from the sale price the
+  // server holds against the spec; a spec with no price contributes nothing rather
+  // than being guessed at.
+  const money = useMemo(() => rows.reduce((t, r) => {
+    const v = num(r.value);
+    if (r.moving === false) return { ...t, non: t.non + v };
+    return { ...t, moving: t.moving + v };
+  }, { moving: 0, non: 0 }), [rows]);
+  const unpriced = rows.filter((r) => r.value == null).length;
+
+  async function setMovement(r, moving) {
+    setSaving(r.spec);
+    try {
+      await storesApi.setFgMovement(r.spec, moving);
+      setRows((rs) => rs.map((x) => (x.spec === r.spec ? { ...x, moving } : x)));
+      flash('g', `${r.spec} marked ${moving ? 'moving' : 'non-moving'}.`);
+    } catch (e) { flash('r', e.message); }
+    finally { setSaving(''); }
+  }
 
   return (
     <div className="card">
       <div className="fbar" style={{ flexWrap: 'wrap' }}>
         <div className="ctitle" style={{ margin: 0 }}>Finished goods, per spec <span className="tag tgr">{visible.length}</span></div>
         <input placeholder="Search spec / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search FG" style={{ minWidth: 220 }} />
+        <select value={fMove} onChange={(e) => setFMove(e.target.value)} aria-label="Filter by movement">
+          <option value="">All FG</option>
+          <option value="moving">Moving FG</option>
+          <option value="non">Non-moving FG</option>
+        </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
       </div>
       <div className="stats" style={{ marginBottom: 8 }}>
         <div className="stat"><div className="sl">Specs holding FG</div><div className="sv">{visible.length}</div></div>
         <div className="stat"><div className="sl">Finished pieces</div><div className="sv" style={{ color: 'var(--g)' }}>{totalFg.toLocaleString('en-IN')}</div></div>
+        <div className="stat">
+          <div className="sl">Money in moving FG</div>
+          <div className="sv" style={{ color: 'var(--g)' }}>{inr(Math.round(money.moving))}</div>
+        </div>
+        <div className="stat">
+          <div className="sl">Money in non-moving FG</div>
+          <div className="sv" style={{ color: money.non > 0 ? 'var(--red)' : undefined }}>{inr(Math.round(money.non))}</div>
+        </div>
       </div>
+      {unpriced > 0 && (
+        <div className="pg-sub" style={{ marginTop: 0 }}>
+          {unpriced} spec(s) have no sale price on file, so they add nothing to either figure.
+        </div>
+      )}
       <div className="pg-sub" style={{ marginTop: 0 }}>Booked on the FG Entry sheet, gathered per spec number.</div>
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
         <table>
@@ -1444,10 +1537,12 @@ function Fg({ flash }) {
             <th style={{ textAlign: 'right' }}>Orders</th><th style={{ textAlign: 'right' }}>PO Qty</th>
             <th style={{ textAlign: 'right' }}>FG</th><th style={{ textAlign: 'right' }}>Dispatched</th>
             <th style={{ textAlign: 'right' }}>FG in hand</th>
+            <th style={{ textAlign: 'right' }}>Value</th>
+            <th style={{ width: 150 }}>Movement</th>
           </tr></thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+              <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
                 No finished goods booked yet — they arrive from the FG Entry sheet.
               </td></tr>
             ) : visible.map((r) => {
@@ -1462,6 +1557,19 @@ function Fg({ flash }) {
                   <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{qty(r.fgQty)}</td>
                   <td style={{ textAlign: 'right' }}>{qty(r.dispatched)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{inHand > 0 ? inHand.toLocaleString('en-IN') : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {r.value == null ? <span style={{ color: 'var(--i3)' }} title="No sale price on file for this spec">—</span>
+                      : inr(Math.round(num(r.value)))}
+                  </td>
+                  <td>
+                    <select value={r.moving === false ? 'non' : 'moving'} disabled={saving === r.spec}
+                      aria-label={`Movement for ${r.spec}`}
+                      onChange={(e) => setMovement(r, e.target.value === 'moving')}
+                      style={{ height: 26, fontSize: 11, color: r.moving === false ? 'var(--red)' : undefined }}>
+                      <option value="moving">Moving</option>
+                      <option value="non">Non-moving</option>
+                    </select>
+                  </td>
                 </tr>
               );
             })}

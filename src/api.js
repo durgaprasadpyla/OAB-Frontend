@@ -334,6 +334,9 @@ export const storesApi = {
   // Semi-finished (material out on the floor) and finished goods, both per spec.
   sfg: () => api('/api/stores/sfg'),
   fg: () => api('/api/stores/fg'),
+  // Issues 3.1: mark a spec's finished goods moving or non-moving — an internal
+  // segregation; it changes no quantity and FG is offered on a sale order either way.
+  setFgMovement: (spec, moving) => api('/api/stores/fg/' + encodeURIComponent(spec) + '/movement', { method: 'PUT', body: { moving } }),
   // The MSL the last three months' consumption suggests, and adopting it.
   mslSuggestions: (months = 3) => api('/api/stores/msl-suggestions?months=' + encodeURIComponent(months)),
   applyMslSuggestions: (months = 3) => api('/api/stores/msl-suggestions/apply?months=' + encodeURIComponent(months), { method: 'POST' }),
