@@ -59,10 +59,15 @@ describe('MIS status (/mis)', () => {
     mockFetch([
       ['/api/auth/me', () => res(200, { username: 'mis', role: 'mis' })],
       ['/api/production/pending', () => res(200, [{ so: '26/500', stageSeq: 1, departmentName: 'Printing', remaining: 500, status: 'In Progress' }])],
+      // the Status tab reads the department grid
+      ['/api/production/status-board', () => res(200, [{ so: '26/500', spec: 'A1', poQty: 1000, plannedQty: 500, wastageQty: 0,
+        departments: [{ stageSeq: 1, departmentId: 1, departmentName: 'Printing', plannedQty: 500, status: 'In Progress' }] }])],
       ['/api/reports/production', () => res(200, [{ group: 'Printing', plannedQty: 1000, actualQty: 800, wastageQty: 50 }])],
       ['/api/reports/utilization', () => res(200, [{ machine: 'CI Flexo', availableMinutes: 720, plannedMinutes: 100, changeoverMinutes: 20, idleMinutes: 600, utilizationPct: 16, actualQty: 800, wastageQty: 50 }])],
     ]);
-    render(<MemoryRouter><MisStatus /></MemoryRouter>);
+    // Issues 3.0/3.1: the Status tab is the department grid now, which reads the
+    // customer and JSS modules for each order's group and substrate.
+    render(<MemoryRouter><AuthProvider><DataProvider><MisStatus /></DataProvider></AuthProvider></MemoryRouter>);
     expect(await screen.findByText(/MIS — Production Status/)).toBeInTheDocument();
     // the pending stage from the production pool appears on the status board
     expect(await screen.findByText('26/500')).toBeInTheDocument();
