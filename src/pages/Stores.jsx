@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
@@ -442,16 +443,28 @@ function GrnRow({ g, items, open, onToggle, flash, onChanged }) {
   // the supplier's invoice, so it corrects its own — through the same editor and the
   // same endpoints the Super Admin's GRN Entries screen uses.
   const [editing, setEditing] = useState(false);
+  // Correcting a booked receipt moves the stock valuation, so it stays with the Super
+  // Admin. The desk opens a receipt and reads all of it; the Edit button only appears
+  // for the role the server will actually accept it from.
+  const { role } = useAuth() || {};
+  const mayEdit = role === 'superadmin';
   useEffect(() => { if (!open) setEditing(false); }, [open]);
 
   useEffect(() => {
     if (!open || detail) return undefined;
     let live = true;
     setBusy(true);
+    // Clear `busy` in the SAME callback that sets the detail, not in a `finally`
+    // guarded by `live`: setting the detail changes this effect's own dependency,
+    // so React tears the effect down — and a `finally` that checks `live` would
+    // then never run, leaving the panel reading "Opening…" for good.
     storesApi.grn(g.id)
-      .then((d) => { if (live) setDetail(d); })
-      .catch((e) => { if (live) flash('r', e.message || 'Could not open that receipt'); })
-      .finally(() => { if (live) setBusy(false); });
+      .then((d) => { if (live) { setDetail(d); setBusy(false); } })
+      .catch((e) => {
+        if (!live) return;
+        setBusy(false);
+        flash('r', e.message || 'Could not open that receipt');
+      });
     return () => { live = false; };
   }, [open, detail, g.id, flash]);
 
@@ -493,8 +506,10 @@ function GrnRow({ g, items, open, onToggle, flash, onChanged }) {
           ) : units.length === 0 ? (
             <div className="al al-y" style={{ margin: 0 }}>
               This receipt has no units on it.
-              <button className="btn btn-s" style={{ marginLeft: 10 }}
-                aria-label={`Edit ${g.grnNo}`} onClick={() => setEditing(true)}>✎ Edit this GRN</button>
+              {mayEdit && (
+                <button className="btn btn-s" style={{ marginLeft: 10 }}
+                  aria-label={`Edit ${g.grnNo}`} onClick={() => setEditing(true)}>✎ Edit this GRN</button>
+              )}
             </div>
           ) : (
             <div className="tw">
@@ -529,12 +544,19 @@ function GrnRow({ g, items, open, onToggle, flash, onChanged }) {
                 <div className="pg-sub" style={{ margin: 0 }}>
                   Supplier <b>{detail.supplier || '—'}</b> · invoice <b>{detail.invoiceNo || '—'}</b>
                   {detail.invoiceDate ? ` dated ${detail.invoiceDate}` : ''} · entered by <b>{detail.actor || '—'}</b>.
-                  A booked receipt drives the stock valuation, so the GRN number and who booked it stay
-                  as they are — and a quantity already issued against cannot be rewritten.
+                  A booked receipt drives the stock valuation, so correcting one is the Super Admin&rsquo;s:
+                  the GRN number and who booked it never change, and a quantity already issued against
+                  cannot be rewritten by anyone.
                 </div>
                 <span style={{ flex: 1 }} />
-                <button className="btn btn-s" aria-label={`Edit ${g.grnNo}`}
-                  onClick={() => setEditing(true)}>✎ Edit this GRN</button>
+                {mayEdit ? (
+                  <button className="btn btn-s" aria-label={`Edit ${g.grnNo}`}
+                    onClick={() => setEditing(true)}>✎ Edit this GRN</button>
+                ) : (
+                  <span className="pg-sub" style={{ margin: 0, whiteSpace: 'nowrap' }}>
+                    To correct this receipt, ask the Super Admin — Dashboard → GRN Entries.
+                  </span>
+                )}
               </div>
             </div>
           )}

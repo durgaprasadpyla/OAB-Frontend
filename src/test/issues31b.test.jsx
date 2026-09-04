@@ -182,3 +182,45 @@ describe('Stores — Material on Hand, filtered by disposition', () => {
     await waitFor(() => expect(within(statCard('Value —')).getByText(/2,000/)).toBeInTheDocument());
   });
 });
+
+// A booked receipt drives the stock valuation, so correcting one stays with the
+// Super Admin. The desk opens a receipt and reads all of it — offering it a button
+// the server will refuse is worse than not offering one.
+describe('Correcting a booked receipt is the Super Admin’s', () => {
+  const GRNS = [{ id: 7, grnNo: 'GRN/2026/7', grnDate: '2026-09-04', poNum: '', supplier: 'Cosmo Films', invoiceNo: 'INV-1', invoiceDate: '2026-09-03', units: 1, actor: 'store1' }];
+  const DETAIL = { ...GRNS[0], units: [{ id: 11, itemId: 1, internalCode: 'BLMU-1', qtyReceived: 100, qtyRemaining: 100, uom: 'Kg', location: 'A2', price: 50 }] };
+
+  function install(role) {
+    vi.doMock('../auth.jsx', () => ({ useAuth: () => ({ role, user: role }) }));
+    vi.doMock('../data.jsx', () => ({ useData: () => ({ mods: { purchase: PURCHASE }, save: vi.fn() }) }));
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      const u = String(url);
+      if ((opts.method || 'GET') !== 'GET') { posted.push({ u, method: opts.method, body: JSON.parse(opts.body || '{}') }); return res({}); }
+      if (u.includes('/api/stores/grns/7')) return res(DETAIL);
+      if (u.includes('/api/stores/grns')) return res(GRNS);
+      if (u.includes('/api/master/items')) return res([{ id: 1, code: 'BLM031', name: '460 MM', uom: 'Kg' }]);
+      return res([]);
+    });
+  }
+
+  async function openReceipt() {
+    const { default: Stores } = await import('../pages/Stores.jsx');
+    render(<Stores />);
+    fireEvent.click(await screen.findByText('📥 GRN'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open GRN GRN/2026/7' }));
+  }
+
+  it('offers the stores desk no Edit button, and says where corrections are made', async () => {
+    install('stores');
+    await openReceipt();
+    expect(await screen.findByText(/ask the Super Admin/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Edit GRN/2026/7')).toBeNull();
+  });
+
+  it('offers it to the Super Admin', async () => {
+    install('superadmin');
+    await openReceipt();
+    expect(await screen.findByLabelText('Edit GRN/2026/7')).toBeInTheDocument();
+    expect(screen.queryByText(/ask the Super Admin/)).toBeNull();
+  });
+});
