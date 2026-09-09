@@ -154,4 +154,36 @@ describe('MasterData page', () => {
     expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
     expect(screen.getByText(/short by 3000/)).toBeInTheDocument();   // the notification message
   });
+
+  it('shows item code and description as separate columns and searches both', async () => {
+    renderMaster('superadmin', {
+      ...seed,
+      alerts: [
+        { id: 7, so: '26/500', itemCode: 'BLM309', itemName: '320 MM X 35 MIC / ANTIFOG', requiredQty: 10, availableQty: 7, shortageQty: 3, status: 'OPEN' },
+        { id: 8, so: '26/501', itemCode: 'INK77', itemName: 'Cyan process ink', requiredQty: 5, availableQty: 1, shortageQty: 4, status: 'OPEN' },
+      ],
+      notifications: [],
+    });
+    await waitFor(() => expect(screen.getByText('Printing')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Stock Alerts/ }));
+    await waitFor(() => expect(screen.getByText('BLM309')).toBeInTheDocument());
+    // Two columns, not one merged "CODE — name" cell.
+    expect(screen.getByText('320 MM X 35 MIC / ANTIFOG')).toBeInTheDocument();
+    expect(screen.queryByText(/BLM309 — /)).toBeNull();
+
+    const box = screen.getByLabelText('Search stock alerts');
+    fireEvent.change(box, { target: { value: 'ink77' } });        // by code
+    expect(screen.queryByText('BLM309')).toBeNull();
+    expect(screen.getByText('Cyan process ink')).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'antifog' } });      // by description
+    expect(screen.getByText('BLM309')).toBeInTheDocument();
+    expect(screen.queryByText('INK77')).toBeNull();
+
+    fireEvent.change(box, { target: { value: 'nothing here' } });
+    expect(screen.getByText(/No alert matches/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByText('BLM309')).toBeInTheDocument();
+    expect(screen.getByText('INK77')).toBeInTheDocument();
+  });
 });

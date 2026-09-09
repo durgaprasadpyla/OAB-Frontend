@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../auth.jsx';
 import { useDataOptional } from '../data.jsx';
 import { masterApi, stockApi, notificationsApi } from '../api.js';
@@ -262,6 +262,7 @@ export default function MasterData({ only, title, subtitle }) {
   const [tab, setTab] = useState(only && only.length ? only[0] : 'departments');
   const [allocDept, setAllocDept] = useState('');   // §7: department picked on the allocation tab
   const [alerts, setAlerts] = useState([]);
+  const [alertQ, setAlertQ] = useState('');   // free-text over alert item code / description / SO
   const [notes, setNotes] = useState([]);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
@@ -296,6 +297,16 @@ export default function MasterData({ only, title, subtitle }) {
     } catch { /* alerts may be forbidden for some roles — ignore */ }
   }, [canAlerts]);
   useEffect(() => { loadAlerts(); }, [loadAlerts]);
+
+  // Item code and item description are two different things to search on: the
+  // buyer knows the code, the shop floor knows the description. One box matches
+  // either (plus the SO, which is the other way people find a row here).
+  const shownAlerts = useMemo(() => {
+    const t = alertQ.trim().toLowerCase();
+    if (!t) return alerts;
+    return alerts.filter((a) => [a.itemCode, a.itemName, a.so, a.departmentName]
+      .some((v) => String(v || '').toLowerCase().includes(t)));
+  }, [alerts, alertQ]);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
   const close = () => setModal(null);
@@ -511,16 +522,24 @@ export default function MasterData({ only, title, subtitle }) {
         )}
         {tab === 'alerts' && (
           <div>
-            <div className="ctitle">Open Low-Stock Alerts <span className={'tag ' + (alerts.length ? 'tr' : 'tg')}>{alerts.length}</span></div>
-            {alerts.length === 0 ? <div className="al al-g">No open shortages.</div> : (
+            <div className="fbar" style={{ flexWrap: 'wrap' }}>
+              <div className="ctitle" style={{ margin: 0 }}>Open Low-Stock Alerts <span className={'tag ' + (alerts.length ? 'tr' : 'tg')}>{shownAlerts.length}{alertQ.trim() && shownAlerts.length !== alerts.length ? ' of ' + alerts.length : ''}</span></div>
+              <input placeholder="Search item code / description / SO…" value={alertQ} onChange={(e) => setAlertQ(e.target.value)}
+                aria-label="Search stock alerts" style={{ minWidth: 240 }} />
+              {alertQ.trim() && <button className="btn btn-s" onClick={() => setAlertQ('')}>Clear</button>}
+            </div>
+            {alerts.length === 0 ? <div className="al al-g">No open shortages.</div> : shownAlerts.length === 0 ? (
+              <div className="al al-b">No alert matches “{alertQ.trim()}”.</div>
+            ) : (
               <div className="tw sy">
                 <table>
-                  <thead><tr><th>Sale Order</th><th>Item</th><th>Needed by</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
+                  <thead><tr><th>Sale Order</th><th>Item Code</th><th>Item Description</th><th>Needed by</th><th>Required</th><th>Available</th><th>Shortage</th>{canResolve && <th></th>}</tr></thead>
                   <tbody>
-                    {alerts.map((a) => (
+                    {shownAlerts.map((a) => (
                       <tr key={a.id} className="nr">
                         <td><span className="so-pill">{a.so}</span></td>
-                        <td>{a.itemCode}{a.itemName ? ' — ' + a.itemName : ''}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{a.itemCode || '—'}</td>
+                        <td>{a.itemName || '—'}</td>
                         <td>{a.departmentName || '—'}</td>
                         <td>{a.requiredQty}</td>
                         <td>{a.availableQty}</td>
