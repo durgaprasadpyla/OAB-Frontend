@@ -4,6 +4,7 @@ import { useData } from '../data.jsx';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
+import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 
 // Stores Login. Four desks, in the order the day runs:
 //   Material on Hand — the landing board: every item with its characteristics,
@@ -761,6 +762,30 @@ function Grn({ flash }) {
     return v === undefined || v === null || String(v).trim() === '' ? '' : String(v);
   }
 
+  /**
+   * Issues 4.1 — "when I select an item code while making a GRN, I want the material
+   * type, subgroup, and specialty to be prefilled automatically."
+   *
+   * The three boxes above were only ever a way IN — narrow, then choose — so once the
+   * storesman went the other way and typed the code off the carton they sat on "Any
+   * material" while the line below plainly showed FILM · PEARLISED BOPP. They are the
+   * receipt's own description of what arrived, so they follow the item.
+   *
+   * The Item Master is the authority (Issues 2.6); where it is silent the supplier's
+   * own words for that code stand in, preferring the row for THIS supplier. A field
+   * neither record fills is cleared rather than left showing the last item's value —
+   * a stale speciality reads as a fact about this delivery.
+   */
+  function fillFiltersFromItem(it) {
+    if (!it) return;
+    const rows = aslByCode.get(norm(it.code)) || [];
+    const row = rows.find((r) => norm(r.company) === norm(head.supplier)) || rows[0] || {};
+    const of = (mine, theirs) => String(mine || theirs || '').trim();
+    setFMat(of(it.materialType, row.materialType));
+    setFSub(of(it.subGroup, row.subGroup));
+    setFSpec(of(it.specialtyName, row.speciality));
+  }
+
   function pickItem(i, id) {
     const it = itemById(id);
     // §11: the UOM is the item master's, and is shown read-only — a hand-typed unit
@@ -774,6 +799,7 @@ function Grn({ flash }) {
       _search: '',
       price: aslPrice(it && it.code) || '',
     });
+    fillFiltersFromItem(it);
   }
 
   // The PO the stores person must physically check before receiving.
@@ -796,7 +822,9 @@ function Grn({ flash }) {
           supplier: head.supplier || undefined,
           internalCode: l.internalCode || undefined,
           // Issues 3.0: the width is the item's, not something typed per receipt.
-          widthMm: l.widthMm === '' || l.widthMm == null ? undefined : Number(l.widthMm),
+          // Issues 4.1: and it is stamped onto the roll as it is received, so the job
+          // allocation and the parent/child split rule have a number to work from.
+          widthMm: itemWidthMm(itemById(l.itemId)) ?? undefined,
           expiryDate: l.expiryDate || undefined, status: l.status || 'MOVING',
         })),
       });
@@ -1037,6 +1065,11 @@ function Grn({ flash }) {
 
 /* ───────────────────────────── Issues & Returns ─────────────────────────── */
 
+// One line of a roll that came back slit: N rolls, each `widthMm` wide and `weightKg`
+// heavy. Rolls is a COUNT (two 445 mm rolls is one line, not two), which is what makes
+// "these add up to more than the roll they came off" a question with an answer.
+const blankChild = () => ({ rolls: '1', widthMm: '', weightKg: '', internalCode: '', location: '' });
+
 function IssuesReturns({ flash }) {
   const { mods } = useData();
   const [items, setItems] = useState([]);
@@ -1046,7 +1079,9 @@ function IssuesReturns({ flash }) {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ unitId: '', qty: '', so: '', department: '', note: '' });
   const [split, setSplit] = useState(false);
-  const [children, setChildren] = useState([{ qty: '', widthMm: '', internalCode: '', location: '' }]);
+  // Issues 4.1 — a returned roll row is now "N rolls, each W mm wide and K kg", which
+  // is how the desk says it out loud, and is what makes the two caps below checkable.
+  const [children, setChildren] = useState([blankChild()]);
   // Issues 3.1: department, sale order, split width and location are all pickers
   // here now. Typed free-hand they drifted — "Printing", "printing", "PRINTING" —
   // and nothing that groups issues by department could add them up.
@@ -1091,17 +1126,12 @@ function IssuesReturns({ flash }) {
   const knownWidths = useMemo(() => {
     const set = new Set();
     units.forEach((u) => { if (num(u.widthMm) > 0) set.add(String(num(u.widthMm))); });
-    // The leading run of digits in the name IS the width: "460 MM", "680 MM (AJ)", "700".
-    const widthOf = (name) => {
-      const t = String(name || '').trim();
-      let d = '';
-      for (let i = 0; i < t.length && t[i] >= '0' && t[i] <= '9'; i++) d += t[i];
-      const v = Number(d);
-      return d && Number.isFinite(v) && v >= 50 ? String(v) : '';
-    };
+    // Issues 4.1: the item's own numeric Width (mm) field, set on the Padmin Item
+    // Master. Items that predate the field still state it in their description
+    // ("460 MM", "680 MM (AJ)", "700"), which itemWidthMm falls back to.
     (masterItems.length ? masterItems : items).forEach((it) => {
-      const w = widthOf(it.name);
-      if (w) set.add(w);
+      const w = itemWidthMm(it);
+      if (w != null) set.add(String(w));
     });
     return [...set].sort((a, b) => Number(a) - Number(b));
   }, [units, items, masterItems]);
@@ -1129,6 +1159,36 @@ function IssuesReturns({ flash }) {
   const selectedUnit = units.find((u) => String(u.id) === String(form.unitId)) || null;
   const withStock = units.filter((u) => num(u.qtyRemaining) > 0);
 
+  /* ── Issues 4.1: a slit roll cannot come back bigger than it went out ────────
+     "The total width should not be more than the initial film width", and the same
+     for weight. Both caps come off the PARENT roll: the width stamped on it when it
+     was received, or failing that its item's Width (mm); and the weight it was
+     received at. An unknown cap is not enforced — a roll booked before either field
+     existed must still be returnable — and the panel says so rather than pretending. */
+  const chosenItem = useMemo(() => items.find((it) => String(it.id) === String(itemId)) || null, [items, itemId]);
+  const chosenMaster = useMemo(() => {
+    const code = String((chosenItem || {}).code || '').trim().toLowerCase();
+    return code ? masterItems.find((it) => String(it.code || '').trim().toLowerCase() === code) || null : null;
+  }, [masterItems, chosenItem]);
+  const parentWidth = selectedUnit ? unitWidthMm(selectedUnit, chosenMaster || chosenItem) : null;
+  const parentWeight = selectedUnit ? num(selectedUnit.qtyReceived) : 0;
+
+  /** What the rows below come to — and which of them are half-filled. */
+  const splitTotals = useMemo(() => {
+    let rolls = 0, width = 0, weight = 0, incomplete = false;
+    children.forEach((c) => {
+      const n = Math.floor(num(c.rolls));
+      const w = parseWidthMm(c.widthMm);
+      const kg = num(c.weightKg);
+      if (!n && w === null && !kg) return;          // an untouched spare row
+      if (n <= 0 || w === null || kg <= 0) { incomplete = true; return; }
+      rolls += n; width += n * w; weight += n * kg;
+    });
+    return { rolls, width, weight, incomplete };
+  }, [children]);
+  const overWidth = parentWidth != null && splitTotals.width > parentWidth + 1e-6;
+  const overWeight = parentWeight > 0 && splitTotals.weight > parentWeight + 1e-6;
+
   async function doIssue() {
     if (!form.unitId || num(form.qty) <= 0) { flash('r', 'Pick a roll and enter the quantity to issue.'); return; }
     setBusy(true);
@@ -1144,9 +1204,45 @@ function IssuesReturns({ flash }) {
     if (!form.unitId) { flash('r', 'Pick the roll the material went out on.'); return; }
     const body = { unitId: Number(form.unitId), so: form.so || undefined, department: form.department || undefined, note: form.note || undefined };
     if (split) {
-      const kids = children.filter((c) => num(c.qty) > 0);
-      if (!kids.length) { flash('r', 'Enter at least one returned roll.'); return; }
-      body.children = kids.map((c) => ({ qty: Number(c.qty), widthMm: c.widthMm === '' ? undefined : Number(c.widthMm), internalCode: c.internalCode || undefined, location: c.location || undefined, status: 'RETURNED' }));
+      // A half-filled row first: it is the commonest slip, and "enter at least one
+      // returned roll" is the wrong thing to say to someone who has entered three
+      // quarters of one.
+      if (splitTotals.incomplete) {
+        flash('r', 'Every returned roll needs a count, a width and a weight — one of the rows below is half filled in.');
+        return;
+      }
+      if (!splitTotals.rolls) { flash('r', 'Enter at least one returned roll.'); return; }
+      // Issues 4.1 — the two caps. Said with the numbers, because "invalid" tells the
+      // desk nothing about which figure to change.
+      if (overWidth) {
+        flash('r', `These come to ${qty(splitTotals.width)} mm, but ${selectedUnit.internalCode} is only `
+          + `${qty(parentWidth)} mm wide. A ${qty(parentWidth)} mm roll can be slit into widths that add up to `
+          + `${qty(parentWidth)} — no more.`);
+        return;
+      }
+      if (overWeight) {
+        flash('r', `These come to ${qty(splitTotals.weight)} ${selectedUnit.uom || 'kg'}, but ${selectedUnit.internalCode} `
+          + `only weighed ${qty(parentWeight)}. Slitting a roll does not add material to it.`);
+        return;
+      }
+      // One physical roll, one unit, one sticker — so a line saying "2 rolls" books two.
+      // A typed internal code can only belong to one of them, so it is honoured for a
+      // single roll and auto-assigned otherwise (the desk is told, beside the box).
+      const kids = [];
+      children.forEach((c) => {
+        const n = Math.floor(num(c.rolls));
+        const w = parseWidthMm(c.widthMm);
+        const kg = num(c.weightKg);
+        if (n <= 0 || w === null || kg <= 0) return;
+        for (let k = 0; k < n; k++) {
+          kids.push({
+            qty: kg, widthMm: w,
+            internalCode: n === 1 && c.internalCode ? c.internalCode : undefined,
+            location: c.location || undefined, status: 'RETURNED',
+          });
+        }
+      });
+      body.children = kids;
     } else {
       if (num(form.qty) <= 0) { flash('r', 'Enter the quantity returned.'); return; }
       body.qty = Number(form.qty);
@@ -1158,7 +1254,7 @@ function IssuesReturns({ flash }) {
         ? `Returned as ${(r.returned || []).length} roll(s): ${(r.returned || []).map((x) => x.internalCode).join(', ')}. The original roll is now zero.`
         : `Returned ${form.qty} to ${selectedUnit ? selectedUnit.internalCode : 'the roll'}.`);
       setForm((f) => ({ ...f, qty: '', note: '' }));
-      setChildren([{ qty: '', widthMm: '', internalCode: '', location: '' }]);
+      setChildren([blankChild()]);
       setSplit(false);
       await loadUnits(itemId); await loadTxns();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
@@ -1239,23 +1335,44 @@ function IssuesReturns({ flash }) {
           <div style={{ marginTop: 6 }}>
             <div className="pg-sub" style={{ marginTop: 0 }}>
               A 1200&nbsp;mm roll issued and returned as 700 + 500&nbsp;mm: enter each returned roll below. Each becomes its own
-              roll with its own sticker, and the original roll is left at zero.
+              roll with its own sticker, and the original roll is left at zero. Say how many rolls of each width came
+              back and what one of them weighs — <strong>the widths and the weights cannot add up to more than the roll
+              they were cut from</strong>.
             </div>
             {/* Issues 3.1: the parent-child link, said out loud — every roll entered
                 below is recorded as having come off this one. */}
             {selectedUnit && (
               <div className="al al-b" style={{ margin: '6px 0' }}>
                 Cut from <b>{selectedUnit.internalCode}</b>
-                {selectedUnit.widthMm ? ` · ${qty(selectedUnit.widthMm)} mm` : ''}
+                {parentWidth != null ? ` · ${qty(parentWidth)} mm` : ''}
+                {parentWeight > 0 ? ` · ${qty(parentWeight)} ${selectedUnit.uom || ''}` : ''}
                 {selectedUnit.location ? ` · ${selectedUnit.location}` : ''} — each roll below is linked back to it.
+                {parentWidth == null && (
+                  /* Issues 4.1: no width on the roll and none on its item, so the width
+                     rule has nothing to check against. Say so — silently not enforcing
+                     it is how a 700 + 600 gets booked against a 1200. */
+                  <div style={{ fontSize: 11, color: '#B7770D', marginTop: 3 }}>
+                    No width on file for this roll or its item, so the total width cannot be checked. Set the item&rsquo;s
+                    Width (mm) on the Padmin Item Master.
+                  </div>
+                )}
               </div>
             )}
             <div className="tw"><table>
-              <thead><tr><th style={{ width: 120 }}>Qty *</th><th style={{ width: 140 }}>Width (mm)</th><th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th></tr></thead>
+              <thead><tr>
+                <th style={{ width: 90 }}>Rolls *</th><th style={{ width: 140 }}>Width (mm) *</th>
+                {/* Issues 4.1 — "there should be one more field for the child rolls'
+                    weight". One roll's weight, so N rolls of it is N × this, and the
+                    cumulative figure can be held against the parent roll's weight. */}
+                <th style={{ width: 130 }}>Weight each *</th>
+                <th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th>
+              </tr></thead>
               <tbody>
                 {children.map((c, i) => (
                   <tr key={i}>
-                    <td><input type="number" step="any" min="0" value={c.qty} aria-label={`Returned quantity ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} /></td>
+                    <td><input type="number" step="1" min="1" className="nospin" value={c.rolls}
+                      aria-label={`Returned rolls ${i + 1}`} placeholder="1"
+                      onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, rolls: e.target.value } : x)))} /></td>
                     <td>
                       {/* Issues 3.1: item codes are allocated by width, so a returned
                           roll may only be cut to a width already on file. A width that
@@ -1287,7 +1404,24 @@ function IssuesReturns({ flash }) {
                           onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} />
                       )}
                     </td>
-                    <td><input value={c.internalCode} placeholder="auto" aria-label={`Returned internal code ${i + 1}`} onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, internalCode: e.target.value } : x)))} /></td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }} value={c.weightKg}
+                          aria-label={`Returned weight ${i + 1}`} placeholder="per roll"
+                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, weightKg: e.target.value } : x)))} />
+                        <span style={{ fontSize: 10, color: 'var(--i3)' }}>{(selectedUnit && selectedUnit.uom) || 'kg'}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <input value={c.internalCode} placeholder="auto" aria-label={`Returned internal code ${i + 1}`}
+                        disabled={Math.floor(num(c.rolls)) > 1}
+                        onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, internalCode: e.target.value } : x)))} />
+                      {Math.floor(num(c.rolls)) > 1 && (
+                        <div style={{ fontSize: 9, color: 'var(--i3)', marginTop: 2 }}>
+                          {Math.floor(num(c.rolls))} stickers — the codes are assigned.
+                        </div>
+                      )}
+                    </td>
                     <td>
                       {/* Issues 3.1: the rack is picked from the Super Admin's list, the
                           same list the GRN puts material away into. */}
@@ -1308,7 +1442,22 @@ function IssuesReturns({ flash }) {
                 ))}
               </tbody>
             </table></div>
-            <button className="btn btn-s" onClick={() => setChildren((cs) => [...cs, { qty: '', widthMm: '', internalCode: '', location: '' }])}>＋ Another roll back</button>
+            <button className="btn btn-s" onClick={() => setChildren((cs) => [...cs, blankChild()])}>＋ Another roll back</button>
+            {/* Issues 4.1 — the two running totals, against the two caps, before the
+                button is pressed. The desk should not have to submit to find out that
+                700 + 600 does not come off a 1200. */}
+            {splitTotals.rolls > 0 && (
+              <div className={'al ' + (overWidth || overWeight ? 'al-r' : 'al-g')} style={{ marginTop: 6 }}>
+                <b>{splitTotals.rolls}</b> roll{splitTotals.rolls === 1 ? '' : 's'} back
+                {' · '}total width <b>{qty(splitTotals.width)} mm</b>
+                {parentWidth != null ? ` of ${qty(parentWidth)} mm` : ' (roll width unknown)'}
+                {' · '}total weight <b>{qty(splitTotals.weight)}</b>
+                {parentWeight > 0 ? ` of ${qty(parentWeight)}` : ''} {(selectedUnit && selectedUnit.uom) || ''}
+                {overWidth && <div>⚠ That is wider than the roll they were cut from — a {qty(parentWidth)} mm roll
+                  cuts into widths that add up to {qty(parentWidth)}, no more.</div>}
+                {overWeight && <div>⚠ That is heavier than the roll they were cut from ({qty(parentWeight)}).</div>}
+              </div>
+            )}
           </div>
         )}
 

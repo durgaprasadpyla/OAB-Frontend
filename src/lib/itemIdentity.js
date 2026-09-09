@@ -19,8 +19,15 @@
 // suppliers of the same code legitimately charge different prices, and copying one
 // onto the other would be wrong.
 
-/** The fields that describe the ITEM, wherever the item is written. */
-export const ITEM_IDENTITY = ['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'uom', 'department'];
+/**
+ * The fields that describe the ITEM, wherever the item is written.
+ *
+ * Issues 4.1 added `widthMm`: the slitting width as a number. It belongs here and not
+ * on the commercial side — how wide the roll is is a property of the material, not of
+ * one supplier's quote — so an edit in the Item Master reaches the supplier rows and
+ * the Stores return screen the same way the description does.
+ */
+export const ITEM_IDENTITY = ['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'widthMm', 'uom', 'department'];
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 /** A row's item code, from either store's spelling of the field. */

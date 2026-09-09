@@ -71,7 +71,8 @@ const pick = (label, value) => fireEvent.change(screen.getByLabelText(label), { 
 
 describe('item identity — one code, one identity', () => {
   it('carries the descriptive fields and never a supplier’s commercial terms', () => {
-    expect(ITEM_IDENTITY).toEqual(['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'uom', 'department']);
+    // Issues 4.1 added widthMm — how wide the roll is belongs to the material, not to one supplier's quote.
+    expect(ITEM_IDENTITY).toEqual(['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'widthMm', 'uom', 'department']);
     // two suppliers of one code legitimately charge different prices
     ['basicPrice', 'moq', 'leadTime', 'company', 'itemCode'].forEach((f) => expect(ITEM_IDENTITY).not.toContain(f));
   });

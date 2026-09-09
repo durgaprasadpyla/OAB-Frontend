@@ -289,15 +289,18 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
 
     // now the 1200 comes back as a 700 and a 500
     await user.click(screen.getByLabelText('Returned as narrower rolls'));
-    fireEvent.change(screen.getByLabelText('Returned quantity 1'), { target: { value: '250' } });
+    // Issues 4.1: a row is "N rolls, each W mm wide and K kg" — one roll of each here.
+    fireEvent.change(screen.getByLabelText('Returned rolls 1'), { target: { value: '1' } });
     // Issues 3.1: the width is picked from the widths the business has item codes
     // for; a width with no code yet is entered through the explicit escape.
     fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '__other__' } });
     fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '700' } });
+    fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '250' } });
     await user.click(screen.getByRole('button', { name: /Another roll back/ }));
-    fireEvent.change(screen.getByLabelText('Returned quantity 2'), { target: { value: '150' } });
+    fireEvent.change(screen.getByLabelText('Returned rolls 2'), { target: { value: '1' } });
     fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '__other__' } });
     fireEvent.change(screen.getByLabelText('Returned width 2 other'), { target: { value: '500' } });
+    fireEvent.change(screen.getByLabelText('Returned weight 2'), { target: { value: '150' } });
     await user.click(screen.getByRole('button', { name: /Receive return/ }));
 
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/returns'))).toBe(true));

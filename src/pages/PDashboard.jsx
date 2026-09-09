@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { masterApi } from '../api.js';
 import { UOM_DEFAULTS } from '../lib/dropdowns.js';
 import { ITEM_IDENTITY, identityByCode, applyIdentity, fillGaps, identityConflicts } from '../lib/itemIdentity.js';
+import { parseWidthMm, widthFromName, itemWidthMm } from '../lib/itemWidth.js';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
@@ -728,6 +729,11 @@ const IM_FIELDS = [
   { k: 'subGroup', label: 'Sub Group', pick: true },
   { k: 'specialty', label: 'Specialty', pick: true },     // §11: after Sub Group
   { k: 'microns', label: 'Microns' },
+  // Issues 4.1 — the width, as a NUMBER, fixed in millimetres. It was only ever
+  // inside the description ("435 MM"), and text cannot be compared: nothing could
+  // stop a 1200 mm roll being slit into 700 + 600. The job allocation and the
+  // parent/child roll rule both read THIS field.
+  { k: 'widthMm', label: 'Width (mm)', mm: true },
   { k: 'uom', label: 'UOM', pick: true },
   { k: 'department', label: 'Department', dept: true },   // §11: at the end, after UOM (dropdown)
 ];
@@ -867,7 +873,7 @@ function ItemMaster() {
 
   // Issues 2.0: nothing is edited in the table directly. A TOP FORM (like the
   // Add-New-Supplier page) adds items; a radio picks a row to edit in that form.
-  const blankItem = () => ({ itemCode: '', specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', uom: '', department: '' });
+  const blankItem = () => ({ itemCode: '', specificMaterial: '', materialType: '', subGroup: '', specialty: '', microns: '', widthMm: '', uom: '', department: '' });
   const [imForm, setImForm] = useState(blankItem);
   /**
    * Issues 2.6 — UOM comes from the units MASTER, not from whatever the item rows
@@ -899,7 +905,28 @@ function ItemMaster() {
   const blankNew = () => ({ materialType: '', subGroup: '', specialty: '', uom: '' });
   const [imNew, setImNew] = useState(blankNew);
   const setImField = (k) => (e) => setImForm((f) => ({ ...f, [k]: e.target.value }));
-  function startEditItem(i) { setImForm({ ...blankItem(), ...extra[i] }); setImNew(blankNew()); setImEditIdx(i); }
+
+  /**
+   * Issues 4.1 — the width is its own numeric field now, but for the whole existing
+   * catalogue it is still only inside the description ("435 MM"). So the box follows
+   * the description while it agrees with it, and stops the moment the Purchase Admin
+   * types a width of their own: a hand-typed number is never overwritten.
+   */
+  const derivedWidth = (r) => { const w = widthFromName(r && r.specificMaterial); return w == null ? '' : String(w); };
+  function setImDescription(v) {
+    setImForm((f) => {
+      const typed = String(f.widthMm ?? '').trim();
+      const following = typed === '' || typed === derivedWidth(f);
+      const next = widthFromName(v);
+      return { ...f, specificMaterial: v, widthMm: following && next != null ? String(next) : f.widthMm };
+    });
+  }
+  /** Load a row into the form, filling a width the row never had from its description. */
+  function startEditItem(i) {
+    const r = { ...blankItem(), ...extra[i] };
+    if (String(r.widthMm ?? '').trim() === '') r.widthMm = derivedWidth(r);
+    setImForm(r); setImNew(blankNew()); setImEditIdx(i);
+  }
   function cancelEditItem() { setImForm(blankItem()); setImNew(blankNew()); setImEditIdx(-1); }
 
   // Options behind each picker. Sub Group narrows to the chosen Material Type; with
@@ -933,6 +960,15 @@ function ItemMaster() {
     // beats silently writing an empty Material Type onto the item.
     const empty = IM_FIELDS.find((x) => x.pick && imForm[x.k] === NEW && !f[x.k]);
     if (empty) { flash('r', 'Enter the new ' + empty.label + ', or pick an existing one.'); return; }
+    // Issues 4.1 — the width has to be a real measurement. Rolls under FILM are the ones
+    // slit and re-joined against a parent width, so for those it is required; on
+    // everything else it is optional but still has to be a number when it is given.
+    if (f.widthMm !== '' && parseWidthMm(f.widthMm) === null) {
+      flash('r', 'Width must be a number of millimetres, e.g. 1200.'); return;
+    }
+    if (f.widthMm === '' && /film/i.test(f.materialType || '')) {
+      flash('r', 'Enter the Width in mm — film rolls are allocated and slit by width.'); return;
+    }
     // The code is always system-assigned: next free number for a new item, the
     // row's own code (unchanged) when editing.
     f.itemCode = imEditIdx >= 0 ? String(extra[imEditIdx]?.itemCode || '').trim() || nextItemCode(asl, extra) : nextItemCode(asl, extra);
@@ -1001,13 +1037,13 @@ function ItemMaster() {
   function exportXlsx() {
     const list = [...aslItems.map((m) => ({ code: m.code, ...m.ref })), ...extra];
     if (!list.length) { flash('r', 'Item Master is empty — nothing to export.'); return; }
-    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Specialty', 'Item Description', 'Microns', 'UOM', 'Department', 'Supplied By'];
+    const header = ['Item Code', 'Material Type', 'Sub-Group', 'Specialty', 'Item Description', 'Microns', 'Width (mm)', 'UOM', 'Department', 'Supplied By'];
     const seen = new Set();
     const body = [];
     list.forEach((r) => {
       const code = r.itemCode || r.code;
       if (!code || seen.has(code)) return; seen.add(code);
-      body.push([code, r.materialType || '', r.subGroup || '', r.specialty || '', r.specificMaterial || '', r.microns || '', r.uom || '', r.department || '', suppliersFor(code).join(', ')]);
+      body.push([code, r.materialType || '', r.subGroup || '', r.specialty || '', r.specificMaterial || '', r.microns || '', itemWidthMm(r) ?? '', r.uom || '', r.department || '', suppliersFor(code).join(', ')]);
     });
     exportAOA([header, ...body], 'Bloomflex_Item_Master_' + today());
   }
@@ -1025,15 +1061,20 @@ function ItemMaster() {
         subGroup: pickCol(o, ['subgroup', 'group']),
         specialty: pickCol(o, ['specialty', 'speciality']),
         microns: pickCol(o, ['microns', 'micron']),
+        // Issues 4.1: a Width column is honoured if the workbook has one; a sheet
+        // without it falls back to the width the description states, so an import
+        // never silently blanks the number the slitting rule reads.
+        widthMm: pickCol(o, ['widthmm', 'width']),
         uom: pickCol(o, ['uom', 'unit']),
         department: pickCol(o, ['department', 'dept']),
-      })).filter((r) => r.code);
+      })).filter((r) => r.code)
+        .map((r) => ({ ...r, widthMm: String(parseWidthMm(r.widthMm) ?? widthFromName(r.specificMaterial) ?? '') }));
       if (!parsed.length) { flash('r', 'No rows with an Item Code were found in the file.'); return; }
 
       const existing = new Set([...aslItems.map((m) => m.code), ...extra.map((r) => r.itemCode)]);
       const nUpd = parsed.filter((r) => existing.has(r.code)).length;
       const nNew = parsed.length - nUpd;
-      const ok = window.confirm('Import ' + parsed.length + ' row(s) from Excel?\n\n• ' + nUpd + ' existing item code(s) will be OVERWRITTEN (description, material type, sub-group, specialty, microns, UOM, department).\n• ' + nNew + ' new item code(s) will be added.\n\nProceed and overwrite?');
+      const ok = window.confirm('Import ' + parsed.length + ' row(s) from Excel?\n\n• ' + nUpd + ' existing item code(s) will be OVERWRITTEN (description, material type, sub-group, specialty, microns, width, UOM, department).\n• ' + nNew + ' new item code(s) will be added.\n\nProceed and overwrite?');
       if (!ok) return;
 
       const byCode = {}; parsed.forEach((r) => { byCode[r.code] = r; });
@@ -1042,7 +1083,7 @@ function ItemMaster() {
       const newAsl = applyIdentity(asl, identities);
       // Catalog-only rows: overwrite matches; append brand-new codes.
       const newExtra = applyIdentity(extra, identities);
-      parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, specialty: r.specialty, microns: r.microns, uom: r.uom, department: r.department }); });
+      parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, specialty: r.specialty, microns: r.microns, widthMm: r.widthMm, uom: r.uom, department: r.department }); });
 
       await save('purchase', { ...purchase, asl: newAsl, itemsExtra: newExtra });
       setExtra(newExtra);
@@ -1052,7 +1093,7 @@ function ItemMaster() {
 
   const match = (vals) => !q || vals.some((v) => String(v || '').toLowerCase().includes(q.toLowerCase()));
   const typeMatch = (r) => (!matF || String(r.materialType || '').trim() === matF) && (!subF || String(r.subGroup || '').trim() === subF);
-  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => typeMatch(r) && match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.specialty, r.department, r.microns]));
+  const extraRows = extra.map((r, i) => ({ r, i })).filter(({ r }) => typeMatch(r) && match([r.itemCode, r.specificMaterial, r.materialType, r.subGroup, r.specialty, r.department, r.microns, r.widthMm]));
   const aslRows = aslItems.filter((m) => typeMatch(m.ref) && match([m.code, m.ref.specificMaterial, m.ref.materialType, m.ref.subGroup, m.ref.specialty, m.ref.department, m.ref.microns]));
 
   return (
@@ -1099,6 +1140,24 @@ function ItemMaster() {
                     </div>
                   )}
                 </>
+              ) : f.mm ? (
+                /* Issues 4.1: a measurement, so a number — and the unit is fixed at mm,
+                   shown beside the box rather than typed, so "1200", "1200mm" and
+                   "1200 MM" cannot end up as three different widths. */
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }}
+                      value={imForm[f.k] ?? ''} onChange={setImField(f.k)} aria-label={'Item form ' + f.label}
+                      placeholder="e.g. 1200" />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--i2)' }}>mm</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--i3)', marginTop: 3 }}>
+                    Slitting width. A 1200 mm roll can only be cut into widths that add up to 1200.
+                  </div>
+                </>
+              ) : f.k === 'specificMaterial' ? (
+                <input value={imForm[f.k] ?? ''} onChange={(e) => setImDescription(e.target.value)}
+                  aria-label={'Item form ' + f.label} />
               ) : (
                 <input value={imForm[f.k] ?? ''} onChange={setImField(f.k)} aria-label={'Item form ' + f.label} />
               )}
@@ -1162,9 +1221,15 @@ function ItemMaster() {
                   </td>
                   {IM_FIELDS.map((f) => {
                     const other = (conflicts[r.itemCode] || {})[f.k];
+                    // Issues 4.1: an item that has never been given a width still HAS one,
+                    // inside its description — show that, marked, rather than a dash that
+                    // reads as "this roll cannot be slit".
+                    const derived = f.mm && !String(r[f.k] ?? '').trim() ? widthFromName(r.specificMaterial) : null;
                     return (
                       <td key={f.k} style={{ fontSize: 12 }}>
-                        {r[f.k] || '-'}
+                        {derived != null
+                          ? <span title="Read from the description — open the row to confirm it" style={{ color: 'var(--i3)' }}>{derived} <i>(from description)</i></span>
+                          : (r[f.k] || '-')}
                         {other && <div style={{ fontSize: 10, color: '#c99a2e' }} title="On the Approved Supplier List">ASL: {other}</div>}
                       </td>
                     );
@@ -1198,7 +1263,7 @@ function ItemMaster() {
                 return (
                   <tr key={m.code}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{m.code}</td>
-                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || (f.dept && masterDept[m.code]) || '-'}</td>)}
+                    {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 11, whiteSpace: f.k === 'specificMaterial' ? undefined : 'nowrap' }}>{m.ref[f.k] || (f.mm && itemWidthMm(m.ref)) || (f.dept && masterDept[m.code]) || '-'}</td>)}
                     <td style={{ fontSize: 11, color: 'var(--i2)' }}>{sups.length ? sups.join(', ') : <span style={{ color: '#c99a2e', fontStyle: 'italic' }}>Not linked</span>}</td>
                   </tr>
                 );

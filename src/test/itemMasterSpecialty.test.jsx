@@ -50,7 +50,8 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     await openItemMaster();
     const firstTable = (await screen.findAllByRole('table'))[0];
     const heads = within(firstTable).getAllByRole('columnheader').map((h) => h.textContent.trim());
-    expect(heads).toEqual(['Edit', 'Code', 'Description', 'Material Type', 'Sub Group', 'Specialty', 'Microns', 'UOM', 'Department', '']);
+    // Issues 4.1: Width (mm) sits with the other measurement, after Microns.
+    expect(heads).toEqual(['Edit', 'Code', 'Description', 'Material Type', 'Sub Group', 'Specialty', 'Microns', 'Width (mm)', 'UOM', 'Department', '']);
     // Issues 2.0: nothing is edited in the table directly — no inputs except the radio.
     const inputs = [...firstTable.querySelectorAll('tbody input')];
     expect(inputs.every((i) => i.type === 'radio')).toBe(true);
