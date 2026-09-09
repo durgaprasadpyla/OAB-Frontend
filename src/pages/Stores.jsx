@@ -1186,8 +1186,24 @@ function IssuesReturns({ flash }) {
     });
     return { rolls, width, weight, incomplete };
   }, [children]);
-  const overWidth = parentWidth != null && splitTotals.width > parentWidth + 1e-6;
-  const overWeight = parentWeight > 0 && splitTotals.weight > parentWeight + 1e-6;
+  /**
+   * What this roll has ALREADY produced. The rule is cumulative — "the cumulative
+   * weight of the child rolls from one parent roll" — so a roll slit 700 mm today
+   * and 600 mm tomorrow has produced 1300 mm off a 1200 mm parent, even though
+   * neither return broke the cap on its own. The server counts the same way; this
+   * is here so the screen agrees with it instead of promising a save that fails.
+   */
+  const prior = useMemo(() => {
+    if (!selectedUnit) return { width: 0, weight: 0, rolls: 0 };
+    return units.reduce((acc, u) => (String(u.parentUnitId) === String(selectedUnit.id)
+      ? { width: acc.width + num(u.widthMm), weight: acc.weight + num(u.qtyReceived), rolls: acc.rolls + 1 }
+      : acc), { width: 0, weight: 0, rolls: 0 });
+  }, [units, selectedUnit]);
+
+  const totalWidth = splitTotals.width + prior.width;
+  const totalWeight = splitTotals.weight + prior.weight;
+  const overWidth = parentWidth != null && totalWidth > parentWidth + 1e-6;
+  const overWeight = parentWeight > 0 && totalWeight > parentWeight + 1e-6;
 
   async function doIssue() {
     if (!form.unitId || num(form.qty) <= 0) { flash('r', 'Pick a roll and enter the quantity to issue.'); return; }
@@ -1215,14 +1231,17 @@ function IssuesReturns({ flash }) {
       // Issues 4.1 — the two caps. Said with the numbers, because "invalid" tells the
       // desk nothing about which figure to change.
       if (overWidth) {
-        flash('r', `These come to ${qty(splitTotals.width)} mm, but ${selectedUnit.internalCode} is only `
-          + `${qty(parentWidth)} mm wide. A ${qty(parentWidth)} mm roll can be slit into widths that add up to `
-          + `${qty(parentWidth)} — no more.`);
+        flash('r', `These come to ${qty(totalWidth)} mm`
+          + (prior.width > 0 ? ` (including ${qty(prior.width)} mm already back off this roll)` : '')
+          + `, but ${selectedUnit.internalCode} is only ${qty(parentWidth)} mm wide. `
+          + `A ${qty(parentWidth)} mm roll can be slit into widths that add up to ${qty(parentWidth)} — no more.`);
         return;
       }
       if (overWeight) {
-        flash('r', `These come to ${qty(splitTotals.weight)} ${selectedUnit.uom || 'kg'}, but ${selectedUnit.internalCode} `
-          + `only weighed ${qty(parentWeight)}. Slitting a roll does not add material to it.`);
+        flash('r', `These come to ${qty(totalWeight)} ${selectedUnit.uom || 'kg'}`
+          + (prior.weight > 0 ? ` (including ${qty(prior.weight)} already back off this roll)` : '')
+          + `, but ${selectedUnit.internalCode} only weighed ${qty(parentWeight)}. `
+          + `Slitting a roll does not add material to it.`);
         return;
       }
       // One physical roll, one unit, one sticker — so a line saying "2 rolls" books two.
@@ -1449,10 +1468,16 @@ function IssuesReturns({ flash }) {
             {splitTotals.rolls > 0 && (
               <div className={'al ' + (overWidth || overWeight ? 'al-r' : 'al-g')} style={{ marginTop: 6 }}>
                 <b>{splitTotals.rolls}</b> roll{splitTotals.rolls === 1 ? '' : 's'} back
-                {' · '}total width <b>{qty(splitTotals.width)} mm</b>
+                {' · '}total width <b>{qty(totalWidth)} mm</b>
                 {parentWidth != null ? ` of ${qty(parentWidth)} mm` : ' (roll width unknown)'}
-                {' · '}total weight <b>{qty(splitTotals.weight)}</b>
+                {' · '}total weight <b>{qty(totalWeight)}</b>
                 {parentWeight > 0 ? ` of ${qty(parentWeight)}` : ''} {(selectedUnit && selectedUnit.uom) || ''}
+                {prior.rolls > 0 && (
+                  <div style={{ fontSize: 11, marginTop: 2 }}>
+                    Includes {prior.rolls} roll{prior.rolls === 1 ? '' : 's'} already back off this one
+                    ({qty(prior.width)} mm, {qty(prior.weight)} {(selectedUnit && selectedUnit.uom) || ''}).
+                  </div>
+                )}
                 {overWidth && <div>⚠ That is wider than the roll they were cut from — a {qty(parentWidth)} mm roll
                   cuts into widths that add up to {qty(parentWidth)}, no more.</div>}
                 {overWeight && <div>⚠ That is heavier than the roll they were cut from ({qty(parentWeight)}).</div>}

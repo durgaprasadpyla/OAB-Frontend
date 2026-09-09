@@ -290,25 +290,30 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // now the 1200 comes back as a 700 and a 500
     await user.click(screen.getByLabelText('Returned as narrower rolls'));
     // Issues 4.1: a row is "N rolls, each W mm wide and K kg" — one roll of each here.
+    //
+    // The amounts are what actually FITS. BLMU-1 is a 1200 mm / 400 Kg roll that has
+    // already produced BLMU-2 (700 mm / 150 Kg), so only 500 mm and 250 Kg of it are
+    // left to give — the cap is cumulative across everything the parent has produced,
+    // not per return. 300 + 200 mm and 150 + 100 Kg is the whole of that remainder.
     fireEvent.change(screen.getByLabelText('Returned rolls 1'), { target: { value: '1' } });
     // Issues 3.1: the width is picked from the widths the business has item codes
     // for; a width with no code yet is entered through the explicit escape.
     fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '700' } });
-    fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '250' } });
+    fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '300' } });
+    fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '150' } });
     await user.click(screen.getByRole('button', { name: /Another roll back/ }));
     fireEvent.change(screen.getByLabelText('Returned rolls 2'), { target: { value: '1' } });
     fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Returned width 2 other'), { target: { value: '500' } });
-    fireEvent.change(screen.getByLabelText('Returned weight 2'), { target: { value: '150' } });
+    fireEvent.change(screen.getByLabelText('Returned width 2 other'), { target: { value: '200' } });
+    fireEvent.change(screen.getByLabelText('Returned weight 2'), { target: { value: '100' } });
     await user.click(screen.getByRole('button', { name: /Receive return/ }));
 
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/returns'))).toBe(true));
     const ret = calls.find((c) => c.u.includes('/api/stores/returns'));
     expect(ret.body.unitId).toBe(11);
     expect(ret.body.children).toEqual([
-      expect.objectContaining({ qty: 250, widthMm: 700 }),
-      expect.objectContaining({ qty: 150, widthMm: 500 }),
+      expect.objectContaining({ qty: 150, widthMm: 300 }),
+      expect.objectContaining({ qty: 100, widthMm: 200 }),
     ]);
   });
 });

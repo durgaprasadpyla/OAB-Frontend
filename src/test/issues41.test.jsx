@@ -48,14 +48,23 @@ const UNITS = [
   { id: 20, itemId: 64, internalCode: 'BLMU-20', uom: 'Kg', qtyReceived: 146, qtyRemaining: 146,
     widthMm: 635, location: 'A2', status: 'MOVING', receivedAt: '2026-09-01T00:00:00Z' },
 ];
+// The same roll, after 445 mm / 100 Kg has already come back off it. The cumulative
+// rule has to count that against the next return.
+const UNITS_WITH_PRIOR = [
+  ...UNITS,
+  { id: 21, itemId: 64, internalCode: 'BLMU-21', uom: 'Kg', qtyReceived: 100, qtyRemaining: 100,
+    widthMm: 445, parentUnitId: 20, status: 'RETURNED', receivedAt: '2026-09-02T00:00:00Z' },
+];
 const ON_HAND = [
   { id: 64, code: 'BLM064', name: '635 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: 'Reverse',
     microns: '20', uom: 'Kg', closingStock: 146, unitCount: 1, stockValue: 0, byStatus: {} },
 ];
 
 let posted;
+let unitsPayload;
 beforeEach(() => {
   posted = [];
+  unitsPayload = UNITS;
   vi.doMock('../data.jsx', () => ({ useData: () => ({ mods: { purchase: PURCHASE }, save: vi.fn() }) }));
   globalThis.fetch = vi.fn(async (url, opts = {}) => {
     const u = String(url);
@@ -64,7 +73,7 @@ beforeEach(() => {
     if (u.includes('/api/master/departments')) return res([{ id: 1, name: 'Printing', active: true }]);
     if (u.includes('/api/master/uoms')) return res([{ id: 1, name: 'Kg' }]);
     if (u.includes('/api/stores/locations')) return res([{ id: 1, name: 'A2', active: true }]);
-    if (u.includes('/units')) return res(UNITS);
+    if (u.includes('/units')) return res(unitsPayload);
     if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
     if (u.includes('/api/stores/grns')) return res([]);
     if (u.includes('/api/stores/txns')) return res([]);
@@ -179,6 +188,19 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     const body = posted.find((p) => p.u.includes('/returns')).body;
     expect(body.children).toHaveLength(2);              // "2 rolls" books two units
     expect(body.children.every((c) => c.qty === 40 && c.widthMm === 200)).toBe(true);
+  });
+
+  it('counts what has already come back off the roll, not just this screenful', async () => {
+    // 445 mm is already back off the 635 mm parent. Another 300 mm makes 745 — over.
+    unitsPayload = UNITS_WITH_PRIOR;
+    await openSplit();
+    setRow(1, { rolls: 1, width: 200, weight: 20 });
+    await waitFor(() => expect(screen.getByText(/already back off this one/)).toBeInTheDocument());
+
+    setRow(1, { rolls: 1, width: 435, weight: 20 });   // 445 + 435 = 880 > 635
+    fireEvent.click(screen.getByText('↙ Receive return'));
+    await waitFor(() => expect(screen.getByText(/already back off this roll/)).toBeInTheDocument());
+    expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });
 
   it('says so rather than half-booking a row that is missing its weight', async () => {
