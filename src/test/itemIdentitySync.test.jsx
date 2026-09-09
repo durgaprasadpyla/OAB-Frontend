@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth.jsx';
@@ -59,6 +59,8 @@ beforeEach(() => {
     return res(200, {});
   };
 });
+
+afterEach(() => { vi.restoreAllMocks(); });
 
 const mount = () => render(<MemoryRouter><AuthProvider><DataProvider><PDashboard /></DataProvider></AuthProvider></MemoryRouter>);
 const openItemMaster = async () => fireEvent.click(await screen.findByText('🗂 Item Master'));
@@ -133,6 +135,40 @@ describe('Padmin Item Master — an edit reaches the supplier mapping', () => {
     expect(blob.asl[0].moq).toBe('1000');
     // a different item code is left exactly as it was
     expect(blob.asl[2]).toEqual(ASL[2]);
+  });
+
+  it('takes the supplier mapping with it when the item is deleted', async () => {
+    // Leaving the mapping behind kept the item alive downstream — the item catch-up
+    // reads the supplier rows too — which is the "I deleted it and it is still there"
+    // the business hit. Deleting BLM500 must clear it from both ASL rows.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    await openItemMaster();
+    fireEvent.click(await screen.findByLabelText('Delete item BLM500'));
+
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    const blob = lastSaved();
+    expect(blob.itemsExtra.some((r) => r.itemCode === 'BLM500')).toBe(false);
+    expect(blob.asl.some((r) => String(r.itemCode).trim() === 'BLM500')).toBe(false);
+    // Cosmo First had only this item — the supplier row survives, item-less, so the
+    // company and its details are not lost with the mapping.
+    expect(blob.asl.some((r) => r.company === 'Cosmo First')).toBe(true);
+    // Aryan also supplies BLM900, which is untouched
+    expect(blob.asl.find((r) => r.itemCode === 'BLM900')).toMatchObject({ company: 'Aryan Petrochemicals', basicPrice: 55 });
+  });
+
+  it('warns that the mapping goes too, naming the suppliers', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mount();
+    await openItemMaster();
+    fireEvent.click(await screen.findByLabelText('Delete item BLM500'));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    const text = confirm.mock.calls[0][0];
+    expect(text).toMatch(/Aryan Petrochemicals/);
+    expect(text).toMatch(/Cosmo First/);
+    expect(text).toMatch(/stays receivable in Stores/);
+    expect(text).toMatch(/keeps its history/);
+    expect(saved).toHaveLength(0);   // cancelled — nothing written
   });
 
   it('says how many supplier rows followed the change', async () => {

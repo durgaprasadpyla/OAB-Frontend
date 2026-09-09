@@ -302,6 +302,38 @@ const GKEY = (r) => r.company || '(unnamed supplier)';
 // details and its certifications all live on the rows themselves.
 const ASL_ITEM_FIELDS = ['itemCode', 'materialType', 'subGroup', 'microns', 'specificMaterial', 'uom', 'basicPrice', 'moq', 'leadTime', 'specialty', 'department'];
 const blankItemFields = (r) => { const n = { ...r }; ASL_ITEM_FIELDS.forEach((f) => { n[f] = ''; }); n.status = 'Active'; return n; };
+/**
+ * Take one item code off the approved-supplier rows, the same way the ASL editor's own
+ * delete does: drop the row, unless it is that supplier's LAST item — then keep the row
+ * item-less so the supplier, its contact details and its certifications survive.
+ * Certifications live on the group's first row, so they are re-homed if that row goes.
+ *
+ * Used when the item is deleted from the Item Master: leaving the mapping behind would
+ * keep the item alive downstream (the item catch-up reads the supplier rows too), which
+ * is exactly the "I deleted it and it is still there" the business hit.
+ */
+function removeItemFromAsl(rows, itemCode) {
+  const code = String(itemCode || '').trim().toLowerCase();
+  if (!code) return { rows, removed: 0 };
+  const GK = (r) => String((r && r.company) || '').trim().toLowerCase();
+  let next = [];
+  let removed = 0;
+  const orphanedCerts = [];
+  (Array.isArray(rows) ? rows : []).forEach((r) => {
+    if (String(r.itemCode || '').trim().toLowerCase() !== code) { next.push(r); return; }
+    removed += 1;
+    const hasSibling = rows.some((o) => o !== r && GK(o) === GK(r)
+      && String(o.itemCode || '').trim().toLowerCase() !== code);
+    if (!hasSibling) { next.push(blankItemFields(r)); return; }   // keep the supplier
+    if (Array.isArray(r.certs) && r.certs.length) orphanedCerts.push([GK(r), r.certs]);
+  });
+  orphanedCerts.forEach(([company, certs]) => {
+    const k = next.findIndex((r) => GK(r) === company);
+    if (k >= 0) next = next.map((r, j) => (j === k ? { ...r, certs: [...certs, ...arr(r.certs)] } : r));
+  });
+  return { rows: next, removed };
+}
+
 const blankSupplier = () => ({ company: '', contact: '', phone: '', contact2: '', phone2: '', email: '', address: '', pincode: '', gstn: '', speciality: '', transportCharges: '', paymentTerms: '', materialType: '', subGroup: '', microns: '', specificMaterial: '', itemCode: '', uom: '', basicPrice: '', moq: '', leadTime: '', status: 'Active' });
 const supLabel = { fontSize: 11.5, color: 'var(--i2)', fontWeight: 700, display: 'block', marginBottom: 2 };
 const supInput = { width: '100%', fontSize: 13, height: 32 };
@@ -926,11 +958,29 @@ function ItemMaster() {
 
   async function delItem(i) {
     const code = extra[i]?.itemCode || '(no code)';
-    if (!window.confirm('Delete item ' + code + ' from the Item Master? This cannot be undone.')) return;
+    // The code also lives on the approved-supplier rows, and the item catch-up reads
+    // those too — so deleting only the Item Master copy left the item alive in the
+    // Stores GRN picker and the BOM. It goes from both, and the suppliers themselves
+    // (their details and certifications) stay exactly where they are.
+    const { rows: nextAsl, removed } = removeItemFromAsl(asl, code);
+    const suppliers = [...new Set(asl.filter((r) => String(r.itemCode || '').trim() === String(code).trim())
+      .map((r) => r.company).filter(Boolean))];
+    const warning = removed
+      ? `\n\nIt is mapped to ${suppliers.length} approved supplier(s) — ${suppliers.join(', ')}.`
+        + `\nThat mapping is removed too, otherwise the item stays receivable in Stores.`
+        + `\nThe supplier(s) themselves are kept.`
+      : '';
+    if (!window.confirm('Delete item ' + code + ' from the Item Master?' + warning
+      + '\n\nStock already received keeps its history and stays on the stock list until it runs out.'
+      + '\nThis cannot be undone.')) return;
     const next = extra.filter((_, j) => j !== i);
     setBusy(true);
-    try { await save('purchase', { ...purchase, itemsExtra: next }); setExtra(next); flash('g', '✓ Item ' + code + ' deleted.'); if (imEditIdx === i) cancelEditItem(); }
-    catch (e) { flash('r', 'Delete failed: ' + e.message); } finally { setBusy(false); }
+    try {
+      await save('purchase', { ...purchase, itemsExtra: next, asl: nextAsl });
+      setExtra(next);
+      flash('g', '✓ Item ' + code + ' deleted.' + (removed ? ` Removed from ${removed} supplier mapping(s).` : ''));
+      if (imEditIdx === i) cancelEditItem();
+    } catch (e) { flash('r', 'Delete failed: ' + e.message); } finally { setBusy(false); }
   }
 
   async function saveAll() {
@@ -1126,7 +1176,8 @@ function ItemMaster() {
                         aria-label={'Use supplier list wording for ' + r.itemCode}
                         title="Replace this row with what the Approved Supplier List says">⇄</button>
                     )}
-                    <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => delItem(i)} title="Delete item code">✕</button>
+                    <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }}
+                      onClick={() => delItem(i)} aria-label={'Delete item ' + (r.itemCode || i)} title="Delete item code">✕</button>
                   </td>
                 </tr>
               ))}
