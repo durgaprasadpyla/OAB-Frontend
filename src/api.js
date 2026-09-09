@@ -353,6 +353,13 @@ export const storesApi = {
   grn: (id) => api('/api/stores/grns/' + encodeURIComponent(id)),
   updateGrn: (id, body) => api('/api/stores/grns/' + encodeURIComponent(id), { method: 'PUT', body }),
   updateUnit: (unitId, body) => api('/api/stores/units/' + encodeURIComponent(unitId), { method: 'PUT', body }),
+  // 2026-09-09: deleting a receipt outright. Without `force` the server refuses (409)
+  // a receipt whose rolls have been issued, returned or allocated and says what it is
+  // holding; `force` is the Super Admin having read that and gone ahead anyway.
+  deleteGrn: (id, force) => api('/api/stores/grns/' + encodeURIComponent(id) + (force ? '?force=true' : ''), { method: 'DELETE' }),
+  // Clear the whole stores ledger so a stock report can be entered from scratch. The
+  // phrase is typed by the user and travels with the request — nothing else clears it.
+  purgeGrns: (confirm) => api('/api/stores/grns/purge', { method: 'POST', body: { confirm } }),
   rmPrices: () => api('/api/stores/rm-prices'),
   setItemPrice: (itemId, price) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/price', { method: 'PUT', body: { price } }),
   allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),

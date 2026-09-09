@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
 import { fmtDate, rupees, dash } from '../lib/format.js';
@@ -15,6 +15,12 @@ import { fmtDate, rupees, dash } from '../lib/format.js';
 // the floor has drawn on a roll, changing what was received would leave the issues
 // and the closing stock disagreeing. The server refuses it either way; the screen
 // just says so up front. Every save is written to the audit log.
+//
+// 2026-09-09 the business asked to be able to DELETE a receipt, and to clear the lot
+// so a stock report can be entered again from scratch. Both live here because both
+// are Super Admin's alone. A receipt does not go quietly: it takes the rolls it
+// created and their issue history with it, so the screen says what is at stake, and
+// a receipt the floor has already drawn on has to be confirmed a second time.
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const s = (v) => (v == null ? '' : String(v));
@@ -27,6 +33,8 @@ export default function GrnAdmin() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  // The receipt being deleted: { id, grnNo, units, phase: 'ask' | 'force', reason }.
+  const [del, setDel] = useState(null);
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
 
@@ -52,6 +60,27 @@ export default function GrnAdmin() {
   }
   function close() { setOpenId(null); setDetail(null); }
 
+  /**
+   * Delete the receipt being confirmed. The first attempt is the plain one; when the
+   * server refuses it (409) because the rolls have been drawn on, its reason becomes
+   * the second question rather than an error the user has to interpret.
+   */
+  async function removeGrn(force) {
+    if (busy || !del) return;
+    setBusy(true);
+    try {
+      const out = await storesApi.deleteGrn(del.id, force) || {};
+      flash('g', `✓ ${del.grnNo} deleted — ${num(out.units)} unit(s), ${num(out.txns)} issue/return entr`
+        + `${num(out.txns) === 1 ? 'y' : 'ies'} and ${num(out.allocations)} allocation(s) went with it.`);
+      if (openId === del.id) close();
+      setDel(null);
+      await load();
+    } catch (e) {
+      if (e.status === 409 && !force) setDel({ ...del, phase: 'force', reason: e.message });
+      else flash('r', e.message || 'Could not delete that receipt');
+    } finally { setBusy(false); }
+  }
+
   return (
     <>
       <div className="card">
@@ -72,7 +101,7 @@ export default function GrnAdmin() {
             <table>
               <thead><tr>
                 <th>GRN</th><th>Date</th><th>PO</th><th>Supplier</th><th>Invoice</th>
-                <th style={{ textAlign: 'right' }}>Units</th><th>By</th><th style={{ width: 90 }}></th>
+                <th style={{ textAlign: 'right' }}>Units</th><th>By</th><th style={{ width: 150 }}></th>
               </tr></thead>
               <tbody>
                 {filtered.length === 0 ? (
@@ -80,16 +109,51 @@ export default function GrnAdmin() {
                     {rows.length ? 'No receipt matches your search' : 'No goods receipts booked yet'}
                   </td></tr>
                 ) : filtered.map((r) => (
-                  <tr key={r.id} style={{ background: r.id === openId ? 'var(--gl)' : undefined }}>
-                    <td style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{r.grnNo}</td>
-                    <td style={{ fontSize: 11 }}>{fmtDate(r.grnDate)}</td>
-                    <td style={{ fontSize: 11 }}>{r.poNum || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{r.supplier || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{r.invoiceNo || '—'}</td>
-                    <td style={{ textAlign: 'right' }}>{r.units}</td>
-                    <td style={{ fontSize: 10, color: 'var(--i3)' }}>{r.actor || '—'}</td>
-                    <td><button className="btn btn-s" aria-label={`Edit ${r.grnNo}`} onClick={() => open(r.id)}>✎ Edit</button></td>
-                  </tr>
+                  <Fragment key={r.id}>
+                    <tr style={{ background: r.id === openId ? 'var(--gl)' : undefined }}>
+                      <td style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{r.grnNo}</td>
+                      <td style={{ fontSize: 11 }}>{fmtDate(r.grnDate)}</td>
+                      <td style={{ fontSize: 11 }}>{r.poNum || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{r.supplier || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{r.invoiceNo || '—'}</td>
+                      <td style={{ textAlign: 'right' }}>{r.units}</td>
+                      <td style={{ fontSize: 10, color: 'var(--i3)' }}>{r.actor || '—'}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-s" aria-label={`Edit ${r.grnNo}`} onClick={() => open(r.id)}>✎ Edit</button>{' '}
+                        <button className="btn btn-r" aria-label={`Delete ${r.grnNo}`} disabled={busy}
+                          onClick={() => { setMsg(null); setDel({ id: r.id, grnNo: r.grnNo, units: r.units, phase: 'ask' }); }}>
+                          🗑 Delete
+                        </button>
+                      </td>
+                    </tr>
+                    {del && del.id === r.id && (
+                      <tr><td colSpan={8} style={{ background: 'var(--bg)' }}>
+                        <div className={'al al-' + (del.phase === 'force' ? 'r' : 'y')} style={{ margin: 0 }}>
+                          {del.phase === 'force' ? (
+                            <>
+                              <strong>{del.reason}</strong>{' '}
+                              Deleting {del.grnNo} anyway removes that history as well, and the closing
+                              stock is recalculated without it. This cannot be undone.
+                            </>
+                          ) : (
+                            <>
+                              Delete <strong>{del.grnNo}</strong> and the {del.units} unit(s) it created?
+                              Their stock leaves the shelf figures with them. This cannot be undone.
+                            </>
+                          )}
+                          <div style={{ marginTop: 6 }}>
+                            <button className="btn btn-r" disabled={busy}
+                              aria-label={del.phase === 'force' ? `Delete ${del.grnNo} anyway` : `Confirm delete ${del.grnNo}`}
+                              onClick={() => removeGrn(del.phase === 'force')}>
+                              {busy ? 'Deleting…' : del.phase === 'force' ? 'Delete anyway' : 'Yes, delete it'}
+                            </button>{' '}
+                            <button className="btn btn-s" disabled={busy} aria-label={`Keep ${del.grnNo}`}
+                              onClick={() => setDel(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      </td></tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -103,7 +167,73 @@ export default function GrnAdmin() {
               onSaved={async (fresh) => { setDetail(fresh); await load(); }} onClose={close} />
           : <div className="card"><div className="pg-sub" style={{ margin: 0 }}>Opening receipt…</div></div>
       )}
+
+      <PurgeAllGrns count={rows.length} busy={busy} setBusy={setBusy}
+        onDone={async () => { close(); setDel(null); await load(); }} flash={flash} />
     </>
+  );
+}
+
+/** The words that have to be typed before the whole ledger goes. */
+export const PURGE_PHRASE = 'DELETE ALL GRNS';
+
+/**
+ * Clear every goods receipt — asked for so a stock report entered as a trial can be
+ * replaced by the real one in one go, instead of deleting a hundred receipts by hand.
+ *
+ * It is deliberately a second, slower door: shut by default, opened by a button that
+ * does nothing on its own, and it takes the phrase typed out before it will fire. The
+ * server asks for the same phrase again, so nothing here is the only thing standing
+ * between a stray click and the ledger.
+ */
+function PurgeAllGrns({ count, busy, setBusy, onDone, flash }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const ready = typed.trim().toUpperCase() === PURGE_PHRASE;
+
+  async function purge() {
+    if (busy || !ready) return;
+    setBusy(true);
+    try {
+      const out = await storesApi.purgeGrns(typed.trim()) || {};
+      flash('g', `✓ Stores ledger cleared — ${num(out.grns)} receipt(s), ${num(out.units)} unit(s), `
+        + `${num(out.txns)} issue/return entr${num(out.txns) === 1 ? 'y' : 'ies'} and ${num(out.allocations)} allocation(s) removed. `
+        + 'The GRN screen is ready for the new stock report.');
+      setOpen(false); setTyped('');
+      await onDone();
+    } catch (e) { flash('r', e.message || 'Could not clear the receipts'); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0, color: 'var(--red)' }}>⚠ Start the stock report again</div>
+        <span style={{ flex: 1 }} />
+        {!open && (
+          <button className="btn btn-r" disabled={busy || count === 0} aria-label="Clear all GRN data"
+            title={count === 0 ? 'There are no receipts to clear' : undefined}
+            onClick={() => setOpen(true)}>🗑 Clear all GRN data</button>
+        )}
+      </div>
+      {open && (
+        <div className="al al-r">
+          This removes <strong>every one of the {count} goods receipt(s)</strong>, every roll they
+          created and every issue, return and allocation booked against those rolls. Raw-material
+          stock goes back to nil so the new stock report can be entered from scratch. The item
+          master, suppliers, purchase orders and sale orders are not touched. <strong>This cannot
+          be undone.</strong>
+          <div className="fbar" style={{ marginTop: 8 }}>
+            <input value={typed} aria-label="Type the confirmation phrase" placeholder={PURGE_PHRASE}
+              onChange={(e) => setTyped(e.target.value)} style={{ minWidth: 220 }} />
+            <button className="btn btn-r" disabled={busy || !ready} aria-label="Clear every receipt now"
+              onClick={purge}>{busy ? 'Clearing…' : 'Clear everything'}</button>
+            <button className="btn btn-s" disabled={busy} aria-label="Cancel clearing"
+              onClick={() => { setOpen(false); setTyped(''); }}>Cancel</button>
+          </div>
+          <div className="pg-sub" style={{ margin: 0 }}>Type <strong>{PURGE_PHRASE}</strong> to enable the button.</div>
+        </div>
+      )}
+    </div>
   );
 }
 

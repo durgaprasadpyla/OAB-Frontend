@@ -44,8 +44,12 @@ const RM = [
 
 let calls;
 let grnDetail;
+// 2026-09-09: set by the delete tests to make the server refuse an unforced delete,
+// the way it does for a receipt the floor has already drawn on.
+let refuseUnforcedDelete;
 beforeEach(() => {
   calls = [];
+  refuseUnforcedDelete = false;
   grnDetail = JSON.parse(JSON.stringify(DETAIL));
   localStorage.clear();
   localStorage.setItem('blm_token', 't');
@@ -56,6 +60,19 @@ beforeEach(() => {
     const body = opts.body ? JSON.parse(opts.body) : null;
     calls.push({ u: u.replace(/^.*\/api/, '/api'), method, body });
     if (u.includes('/api/auth/me')) return res(200, { username: 'superadmin', role: 'superadmin' });
+    if (u.includes('/api/stores/grns/purge')) {
+      if (String((body && body.confirm) || '').trim().toUpperCase() !== 'DELETE ALL GRNS') {
+        return res(400, { detail: 'Type DELETE ALL GRNS to confirm.' });
+      }
+      return res(200, { grns: 2, units: 3, txns: 1, allocations: 0, itemsRecomputed: 2 });
+    }
+    if (method === 'DELETE' && u.match(/\/api\/stores\/grns\/\d+/)) {
+      const forced = u.includes('force=true');
+      if (refuseUnforcedDelete && !forced) {
+        return res(409, { detail: 'GRN/2026/1 has already been drawn on — 2 issue/return entries, 1 part-used roll. Deleting it removes that history too.' });
+      }
+      return res(200, { deleted: 'GRN/2026/1', units: 2, txns: forced ? 2 : 0, allocations: 0, forced });
+    }
     if (u.match(/\/api\/stores\/grns\/\d+$/)) {
       if (method === 'PUT') { Object.assign(grnDetail, body); return res(200, grnDetail); }
       return res(200, grnDetail);
@@ -275,6 +292,81 @@ describe('Issues 2.7 §4 — Super Admin edits RM prices', () => {
     fireEvent.change(screen.getByLabelText('Filter by material type'), { target: { value: 'INK' } });
     await waitFor(() => expect(screen.queryByText('FILM-1')).toBeNull());
     expect(screen.getByText('INK-1')).toBeInTheDocument();
+  });
+});
+
+/* ── deleting receipts (2026-09-09) ─────────────────────────────────────── */
+
+describe('Super Admin deletes GRN entries', () => {
+  it('asks before a receipt goes, and nothing is sent until the answer is yes', async () => {
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Delete GRN/2026/1'));
+
+    // the question names the receipt and what leaves with it
+    await screen.findByText(/and the 2 unit\(s\) it created/);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+
+    // and backing out leaves it alone
+    fireEvent.click(screen.getByLabelText('Keep GRN/2026/1'));
+    await waitFor(() => expect(screen.queryByText(/it created\?/)).toBeNull());
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+
+    fireEvent.click(screen.getByLabelText('Delete GRN/2026/1'));
+    fireEvent.click(await screen.findByLabelText('Confirm delete GRN/2026/1'));
+
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.u === '/api/stores/grns/1')).toBe(true));
+    // asked plainly first — force is the second question, never the first
+    expect(calls.find((c) => c.method === 'DELETE').u).not.toContain('force');
+    await screen.findByText(/GRN\/2026\/1 deleted/);
+    // and the list is refetched, so the screen shows what is actually left
+    expect(calls.filter((c) => c.method === 'GET' && c.u === '/api/stores/grns').length).toBeGreaterThan(1);
+  });
+
+  it('repeats the server\u2019s reason and only then offers to force it', async () => {
+    refuseUnforcedDelete = true;
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Delete GRN/2026/1'));
+    fireEvent.click(await screen.findByLabelText('Confirm delete GRN/2026/1'));
+
+    // the refusal is put to the user as the second question, not as an error
+    await screen.findByText(/2 issue\/return entries, 1 part-used roll/);
+    expect(calls.filter((c) => c.method === 'DELETE').length).toBe(1);
+
+    fireEvent.click(screen.getByLabelText('Delete GRN/2026/1 anyway'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.u.includes('force=true'))).toBe(true));
+    await screen.findByText(/GRN\/2026\/1 deleted/);
+  });
+
+  it('will not clear the whole ledger until the words are typed out', async () => {
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Clear all GRN data'));
+
+    // the warning says what goes and what does not
+    await screen.findByText(/every issue, return and allocation/);
+    expect(screen.getByLabelText('Clear every receipt now')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Type the confirmation phrase'), { target: { value: 'delete' } });
+    expect(screen.getByLabelText('Clear every receipt now')).toBeDisabled();
+
+    // the phrase, typed as the user pleases
+    fireEvent.change(screen.getByLabelText('Type the confirmation phrase'), { target: { value: ' delete all grns ' } });
+    expect(screen.getByLabelText('Clear every receipt now')).not.toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Clear every receipt now'));
+
+    await waitFor(() => expect(calls.some((c) => c.u === '/api/stores/grns/purge')).toBe(true));
+    expect(calls.find((c) => c.u === '/api/stores/grns/purge').body).toEqual({ confirm: 'delete all grns' });
+    await screen.findByText(/Stores ledger cleared/);
+  });
+
+  it('has nothing to clear when there are no receipts', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      if (String(url).includes('/api/stores/grns') && (opts.method || 'GET') === 'GET') return res(200, []);
+      return original(url, opts);
+    });
+    mount(<GrnAdmin />);
+    await screen.findByText(/No goods receipts booked yet/);
+    expect(screen.getByLabelText('Clear all GRN data')).toBeDisabled();
   });
 });
 
