@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi } from '../api.js';
 import { UOM_DEFAULTS } from '../lib/dropdowns.js';
-import { ITEM_IDENTITY, identityByCode, applyIdentity } from '../lib/itemIdentity.js';
+import { ITEM_IDENTITY, identityByCode, applyIdentity, fillGaps, identityConflicts } from '../lib/itemIdentity.js';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
@@ -720,7 +720,18 @@ function ItemMaster() {
   const { mods, save } = useData();
   const purchase = mods.purchase || {};
   const asl = arr(purchase.asl);
-  const [extra, setExtra] = useState(() => clone(arr(purchase.itemsExtra)));
+  // The blob keeps an item's identity TWICE — here in `itemsExtra`, and again on every
+  // approved-supplier row carrying the code — and nothing reconciled the two except a
+  // save. So one code could sit in the two lists below describing two different things
+  // (reported 2026-09-09: BLM309 read "320 MM" with no specialty here while the supplier
+  // list said "320 MM X 35 MIC / ANTIFOG"), with nothing on screen to say which was right
+  // — and the wrong one is what the sync pushed to Stores, the BOM and MIS.
+  //
+  // A GAP is not a disagreement: a field left blank here that the supplier row fills is
+  // simply missing, so it is filled in on load. Real disagreements — both sides filled,
+  // and different — are shown rather than guessed at (see `conflicts` below).
+  const [extra, setExtra] = useState(() => fillGaps(clone(arr(purchase.itemsExtra)),
+    identityByCode(arr(purchase.asl), { onlyFilled: true })));
   const [q, setQ] = useState('');
   const [matF, setMatF] = useState('');
   const [subF, setSubF] = useState('');
@@ -759,6 +770,29 @@ function ItemMaster() {
     }).catch(() => {});
     return () => { live = false; };
   }, []);
+
+  /** What the approved-supplier rows say about each code — only the fields they carry. */
+  const aslIdentity = useMemo(() => identityByCode(asl, { onlyFilled: true }), [asl]);
+  /** Codes the two lists describe differently: { code: { field: supplierValue } }. */
+  const conflicts = useMemo(() => identityConflicts(extra, aslIdentity), [extra, aslIdentity]);
+  const conflictCount = Object.keys(conflicts).length;
+
+  /**
+   * Adopt the Approved Supplier List's wording — for one row, or for every row that
+   * differs. Saving stamps it onto the supplier rows and re-syncs the normalized item
+   * master in the same request, so Stores, the BOM and MIS stop showing the old text too.
+   */
+  async function adoptSupplierIdentity(only) {
+    const next = extra.map((r, j) => (only != null && j !== only ? r : applyIdentity([r], aslIdentity)[0]));
+    setBusy(true);
+    try {
+      await save('purchase', { ...purchase, itemsExtra: next });
+      setExtra(next);
+      flash('g', only == null
+        ? '✓ ' + conflictCount + ' item(s) now read the same as the Approved Supplier List.'
+        : '✓ Item ' + (extra[only]?.itemCode || '') + ' updated from the Approved Supplier List.');
+    } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
+  }
 
   // Distinct items owned by the ASL (identity managed there → read-only reference here). (imMasterList 6795)
   const aslItems = useMemo(() => {
@@ -903,7 +937,10 @@ function ItemMaster() {
     setBusy(true);
     // Same reconciliation as a single save — every code in the master stamps its
     // identity onto the supplier rows that carry it.
-    const nextAsl = applyIdentity(asl, identityByCode(extra));
+    // onlyFilled: a field this list leaves blank must not ERASE what the supplier row
+    // carries. (A deliberate single-item edit in the form above still writes blanks —
+    // there the Purchase Admin cleared the box on purpose.)
+    const nextAsl = applyIdentity(asl, identityByCode(extra, { onlyFilled: true }));
     try {
       await save('purchase', { ...purchase, itemsExtra: extra, asl: nextAsl });
       flash('g', '✓ Item Master saved.');
@@ -1048,6 +1085,18 @@ function ItemMaster() {
           <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save'}</button>
         </div>
         <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 0 }}>Read-only — pick a row with its radio button to load it into the form above for editing.</p>
+        {conflictCount > 0 && (
+          <div className="al al-y" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ flex: 1, minWidth: 260 }}>
+              ⚠ {conflictCount} item code{conflictCount === 1 ? '' : 's'} {conflictCount === 1 ? 'is' : 'are'} described
+              differently here and on the Approved Supplier List. The wording in THIS list is what Stores, the BOM and
+              MIS use — the supplier-list wording is shown under it below.
+            </span>
+            <button className="btn btn-s" disabled={busy} onClick={() => adoptSupplierIdentity(null)}>
+              Use the supplier list wording on all {conflictCount}
+            </button>
+          </div>
+        )}
         <div className="tw sy" style={{ maxHeight: 360 }}>
           <table>
             <thead><tr><th style={{ width: 40 }}>Edit</th><th>Code</th>{IM_FIELDS.map((f) => <th key={f.k}>{f.label}</th>)}<th></th></tr></thead>
@@ -1058,9 +1107,25 @@ function ItemMaster() {
                     <input type="radio" name="im-edit-sel" checked={imEditIdx === i} onChange={() => startEditItem(i)}
                       aria-label={'Edit item ' + (r.itemCode || i)} />
                   </td>
-                  <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{r.itemCode}</td>
-                  {IM_FIELDS.map((f) => <td key={f.k} style={{ fontSize: 12 }}>{r[f.k] || '-'}</td>)}
-                  <td style={{ textAlign: 'center' }}>
+                  <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>
+                    {r.itemCode}{conflicts[r.itemCode] && <span title="Described differently on the Approved Supplier List" style={{ color: '#c99a2e' }}> ⚠</span>}
+                  </td>
+                  {IM_FIELDS.map((f) => {
+                    const other = (conflicts[r.itemCode] || {})[f.k];
+                    return (
+                      <td key={f.k} style={{ fontSize: 12 }}>
+                        {r[f.k] || '-'}
+                        {other && <div style={{ fontSize: 10, color: '#c99a2e' }} title="On the Approved Supplier List">ASL: {other}</div>}
+                      </td>
+                    );
+                  })}
+                  <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {conflicts[r.itemCode] && (
+                      <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: '#c99a2e' }}
+                        disabled={busy} onClick={() => adoptSupplierIdentity(i)}
+                        aria-label={'Use supplier list wording for ' + r.itemCode}
+                        title="Replace this row with what the Approved Supplier List says">⇄</button>
+                    )}
                     <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }} onClick={() => delItem(i)} title="Delete item code">✕</button>
                   </td>
                 </tr>
