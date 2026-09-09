@@ -71,3 +71,55 @@ export function identityDiffers(rows, byCode) {
     return patch && Object.keys(patch).some((f) => String(r[f] == null ? '' : r[f]) !== String(patch[f] == null ? '' : patch[f]));
   });
 }
+
+// ── gap-healing and conflict reporting ──────────────────────────────────────
+// Written by the parallel session against this file; recovered after a branch
+// switch removed the base from under its editor and left only the fragment
+// (which referenced `arr` and `identityCode` without them being in scope).
+
+/**
+ * Fill only the BLANK identity fields of `rows` from `byCode`. Unlike applyIdentity,
+ * a value already written on the row is never replaced — this is for healing gaps
+ * (an item whose Specialty is empty here but present on the supplier row), not for
+ * deciding who is right when both stores have an opinion.
+ */
+export function fillGaps(rows, byCode) {
+  if (!byCode || !Object.keys(byCode).length) return arr(rows);
+  return arr(rows).map((r) => {
+    const patch = byCode[identityCode(r)];
+    if (!patch) return r;
+    let out = r;
+    Object.keys(patch).forEach((f) => {
+      if (String(r[f] == null ? '' : r[f]).trim() !== '') return;
+      if (String(patch[f] == null ? '' : patch[f]).trim() === '') return;
+      if (out === r) out = { ...r };
+      out[f] = patch[f];
+    });
+    return out;
+  });
+}
+
+/**
+ * Where the two stores genuinely DISAGREE: both carry the field, and they differ.
+ * Gaps are not conflicts (fillGaps closes those silently) — this is the case no rule
+ * can settle on its own, so it is shown to the Purchase Admin instead of guessed at.
+ *
+ * Returns { [code]: { [field]: theOtherValue } } for the rows that differ.
+ */
+export function identityConflicts(rows, byCode) {
+  const out = {};
+  if (!byCode || !Object.keys(byCode).length) return out;
+  arr(rows).forEach((r) => {
+    const code = identityCode(r);
+    const patch = byCode[code];
+    if (!patch || out[code]) return;
+    const diff = {};
+    Object.keys(patch).forEach((f) => {
+      const mine = String(r[f] == null ? '' : r[f]).trim();
+      const theirs = String(patch[f] == null ? '' : patch[f]).trim();
+      if (mine && theirs && mine !== theirs) diff[f] = theirs;
+    });
+    if (Object.keys(diff).length) out[code] = diff;
+  });
+  return out;
+}
