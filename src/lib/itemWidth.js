@@ -19,14 +19,24 @@ export function parseWidthMm(v) {
 
 /**
  * The width an item's description states, for the items that predate the field.
- * The leading run of digits IS the width.
+ * The leading run of digits IS the width — "435 MM", "680 MM (AJ)", "700".
+ *
+ * The number has to END the description, or be followed by whitespace or MM.
+ * Without that boundary the grade codes read as widths (1018MA, 8656MK,
+ * 1615M23M32, 806-SILVER) and so do compound dimensions (950x185x MM,
+ * 800(150+150) MM), where the leading number is not the slitting width. A wrong
+ * width is worse than none — it silently becomes the cap the slit rule enforces.
  *
  * The 50 mm floor stops a description that merely BEGINS with a number ("3 PLY
  * LAMINATE") reading as a 3 mm roll — below that it is a count, not a width.
+ *
+ * Same rule as MasterDataService.widthFromName and the SQL backfill in
+ * migrate-issues-4-1.sql. All three must agree, or one item reads two different
+ * widths depending on who is asking.
  */
 export function widthFromName(name) {
   const t = String(name == null ? '' : name).trim();
-  const m = /^(\d+(?:\.\d+)?)/.exec(t);
+  const m = /^(\d+(?:\.\d+)?)(\s|mm|$)/i.exec(t);
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) && n >= 50 ? n : null;

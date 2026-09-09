@@ -190,6 +190,40 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
   });
 });
 
+/* ───────── the description-derived width, and where it must NOT guess ───────── */
+
+describe('widthFromName — a grade code is not a width', () => {
+  // Checked against the live item master: without the boundary rule these 11 codes
+  // were backfilled as widths. Kept in step with MasterDataService.widthFromName
+  // and the SQL backfill in migrate-issues-4-1.sql.
+  it('reads a width the description actually states', async () => {
+    const { widthFromName } = await import('../lib/itemWidth.js');
+    expect(widthFromName('435 MM')).toBe(435);
+    expect(widthFromName('680 MM (AJ)')).toBe(680);
+    expect(widthFromName('700')).toBe(700);
+    expect(widthFromName('435MM')).toBe(435);
+    expect(widthFromName('325 MM Paper Core')).toBe(325);
+  });
+
+  it('refuses a number that runs straight into something else', async () => {
+    const { widthFromName } = await import('../lib/itemWidth.js');
+    // real codes off the live master — grades, not widths
+    ['1018MA', '1018MK', '8656MK', '1015RA', '1018RA', '1615M23M32', '806-SILVER']
+      .forEach((n) => expect(widthFromName(n)).toBeNull());
+    // compound dimensions: the leading number is not the slitting width
+    expect(widthFromName('950x185x MM')).toBeNull();
+    expect(widthFromName('800(150+150) MM')).toBeNull();
+  });
+
+  it('refuses a count, and anything with no number at all', async () => {
+    const { widthFromName } = await import('../lib/itemWidth.js');
+    expect(widthFromName('3 PLY LAMINATE')).toBeNull();   // below the 50 mm floor
+    expect(widthFromName('TURBO MELT 8866')).toBeNull();
+    expect(widthFromName('')).toBeNull();
+    expect(widthFromName(null)).toBeNull();
+  });
+});
+
 /* ───────── 3 · the Padmin Item Master's numeric width ───────── */
 
 describe('Padmin Item Master — Width is a number, in mm', () => {
