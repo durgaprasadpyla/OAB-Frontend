@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
 import { fmtDate, rupees, dash } from '../lib/format.js';
@@ -53,12 +53,32 @@ export default function GrnAdmin() {
       .some((v) => s(v).toLowerCase().includes(t)));
   }, [rows, q]);
 
+  /**
+   * Only the receipt the user is actually looking at may paint the panel.
+   *
+   * There is one `detail` for whichever receipt is open, and opening a second one
+   * while the first is still in flight is an ordinary thing to do — the rows are one
+   * click apart. The two answers can land in either order, and the slower first one
+   * used to win: the panel then showed one receipt's lines under another's heading,
+   * and Save wrote to whichever id the panel was holding. So each open takes a ticket,
+   * and an answer whose ticket is no longer the current one is dropped.
+   */
+  const openSeq = useRef(0);
+
   async function open(id) {
+    const seq = ++openSeq.current;
     setOpenId(id); setDetail(null); setMsg(null);
-    try { setDetail(await storesApi.grn(id)); }
-    catch (e) { flash('r', e.message || 'Could not open that receipt'); setOpenId(null); }
+    try {
+      const fresh = await storesApi.grn(id);
+      if (seq !== openSeq.current) return;      // the user has moved on
+      setDetail(fresh);
+    } catch (e) {
+      if (seq !== openSeq.current) return;
+      flash('r', e.message || 'Could not open that receipt');
+      setOpenId(null);
+    }
   }
-  function close() { setOpenId(null); setDetail(null); }
+  function close() { openSeq.current += 1; setOpenId(null); setDetail(null); }
 
   /**
    * Delete the receipt being confirmed. The first attempt is the plain one; when the
