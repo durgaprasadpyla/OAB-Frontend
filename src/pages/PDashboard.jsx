@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { masterApi } from '../api.js';
 import { UOM_DEFAULTS } from '../lib/dropdowns.js';
+import { ITEM_IDENTITY, identityByCode, applyIdentity } from '../lib/itemIdentity.js';
 import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
@@ -421,7 +422,15 @@ function ASLEditor() {
     setBusy(true);
     try {
       const cleaned = rows.map((r) => ({ ...r, basicPrice: r.basicPrice === '' || r.basicPrice == null ? '' : num(r.basicPrice) }));
-      await save('purchase', { ...purchase, asl: cleaned });
+      // An item's identity edited HERE has to reach the Item Master too. Without it the
+      // edit looked saved and changed nothing downstream: the item sync reads
+      // itemsExtra first, so the Item Master's older copy kept winning in the Stores
+      // GRN, the stock list and the BOM. Only fields this row actually carries are
+      // pushed across, so a supplier row that never held (say) a department cannot
+      // blank the one the Item Master knows.
+      const identities = identityByCode(cleaned, { onlyFilled: true });
+      const nextExtra = applyIdentity(arr(purchase.itemsExtra), identities);
+      await save('purchase', { ...purchase, asl: cleaned, itemsExtra: nextExtra });
       flash('g', '✓ Approved Supplier List saved.');
     } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
   }
@@ -703,7 +712,9 @@ function pickCol(o, names) {
   }
   return '';
 }
-const IM_IDENT = ['specificMaterial', 'materialType', 'subGroup', 'specialty', 'microns', 'uom', 'department'];
+// The identity of an item, wherever it is written. Shared with the ASL tab and the
+// Excel import through lib/itemIdentity.js so all three agree on what "the item" is.
+const IM_IDENT = ITEM_IDENTITY;
 
 function ItemMaster() {
   const { mods, save } = useData();
@@ -860,11 +871,21 @@ function ItemMaster() {
     // row's own code (unchanged) when editing.
     f.itemCode = imEditIdx >= 0 ? String(extra[imEditIdx]?.itemCode || '').trim() || nextItemCode(asl, extra) : nextItemCode(asl, extra);
     const next = imEditIdx >= 0 ? extra.map((r, j) => (j === imEditIdx ? { ...r, ...f } : r)) : [f, ...extra];
+    // The same code is also written on every approved-supplier row that carries it,
+    // and those rows keep their own copy of the description, material, sub-group,
+    // speciality, microns, UOM and department. Left alone they went stale the moment
+    // the item was edited here, so the Approved Suppliers tab (and the supplier
+    // mapping the Stores GRN narrows by) still described the old item. The Item
+    // Master is the authority on what an item IS, so its identity is stamped across
+    // them. Each supplier's own price, MOQ and lead time are untouched.
+    const nextAsl = applyIdentity(asl, identityByCode([f]));
+    const mapped = nextAsl.filter((r, j) => r !== asl[j]).length;
     setBusy(true);
     try {
-      await save('purchase', { ...purchase, itemsExtra: next });
+      await save('purchase', { ...purchase, itemsExtra: next, asl: nextAsl });
       setExtra(next);
-      flash('g', imEditIdx >= 0 ? '✓ Item ' + f.itemCode + ' updated.' : '✓ Item ' + f.itemCode + ' added.');
+      flash('g', (imEditIdx >= 0 ? '✓ Item ' + f.itemCode + ' updated.' : '✓ Item ' + f.itemCode + ' added.')
+        + (mapped ? ` Supplier mapping updated on ${mapped} row(s).` : ''));
       cancelEditItem();
     } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
   }
@@ -880,8 +901,13 @@ function ItemMaster() {
 
   async function saveAll() {
     setBusy(true);
-    try { await save('purchase', { ...purchase, itemsExtra: extra }); flash('g', '✓ Item Master saved.'); }
-    catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
+    // Same reconciliation as a single save — every code in the master stamps its
+    // identity onto the supplier rows that carry it.
+    const nextAsl = applyIdentity(asl, identityByCode(extra));
+    try {
+      await save('purchase', { ...purchase, itemsExtra: extra, asl: nextAsl });
+      flash('g', '✓ Item Master saved.');
+    } catch (e) { flash('r', 'Save failed: ' + e.message); } finally { setBusy(false); }
   }
 
   // Export the Item Master exactly as it stands today (one row per item code). (imExportExcel 12236)
@@ -925,9 +951,10 @@ function ItemMaster() {
 
       const byCode = {}; parsed.forEach((r) => { byCode[r.code] = r; });
       // ASL rows carrying an imported code get their identity overwritten too.
-      const newAsl = asl.map((a) => (byCode[a.itemCode] ? { ...a, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[a.itemCode][f]; return o; }, {}) } : a));
+      const identities = identityByCode(Object.values(byCode));
+      const newAsl = applyIdentity(asl, identities);
       // Catalog-only rows: overwrite matches; append brand-new codes.
-      const newExtra = extra.map((r) => (byCode[r.itemCode] ? { ...r, ...IM_IDENT.reduce((o, f) => { o[f] = byCode[r.itemCode][f]; return o; }, {}) } : r));
+      const newExtra = applyIdentity(extra, identities);
       parsed.forEach((r) => { if (!existing.has(r.code)) newExtra.push({ itemCode: r.code, specificMaterial: r.specificMaterial, materialType: r.materialType, subGroup: r.subGroup, specialty: r.specialty, microns: r.microns, uom: r.uom, department: r.department }); });
 
       await save('purchase', { ...purchase, asl: newAsl, itemsExtra: newExtra });
