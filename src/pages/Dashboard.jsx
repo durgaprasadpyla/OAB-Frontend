@@ -816,6 +816,24 @@ function DeleteSOs() {
     if (newDate === null) return;
     const newLoc = window.prompt(`Edit Dispatch Location for SO ${row.so}:`, row.dispLoc || '');
     if (newLoc === null) return;
+    // The customer revises the quantity on a PO often enough that re-keying the whole
+    // order was the only way to record it. It is the one field here that MOVES money and
+    // material: the balance still to make is poQty minus what has gone out, the BOM
+    // requirement scales off it, and a short-close is judged against it. So unlike the
+    // other three it is checked rather than taken as typed.
+    const already = num(row.invDisp) + num(row.manDisp) + num(row.fg);
+    const newQtyRaw = window.prompt(
+      `Edit PO Qty for SO ${row.so} (${row.customer || ''}).\n\nCurrent: ${row.poQty}`
+      + (already ? `\nAlready dispatched: ${already} — the new quantity cannot be less than this.` : ''),
+      String(row.poQty ?? ''));
+    if (newQtyRaw === null) return;
+    const newQty = Number(String(newQtyRaw).trim());
+    if (!Number.isFinite(newQty) || newQty <= 0) { alert('PO Qty must be a number greater than zero.'); return; }
+    if (newQty < already) {
+      alert(`PO Qty cannot be ${newQty}: ${already} has already been dispatched against this order.`
+        + '\n\nTo reduce it below what has gone out, reverse the dispatch first.');
+      return;
+    }
     const next = clone(mods.oab);
     const arr = (next.OAB && next.OAB[row._key]) || [];
     const target = arr.find((x) => x.so === row.so);
@@ -823,6 +841,7 @@ function DeleteSOs() {
     target.poNum = newPO.trim();
     target.poDate = newDate.trim();
     target.dispLoc = newLoc.trim();
+    target.poQty = newQty;
     setBusy(true);
     try { await save('oab', next); }
     catch (e) { alert('Update failed: ' + e.message); } finally { setBusy(false); }
@@ -862,7 +881,7 @@ function DeleteSOs() {
         <div className="ctitle" style={{ margin: 0 }}>Delete / Edit Sales Orders <span className="tag tgr" style={{ fontSize: 9 }}>{rows.length} live</span></div>
         <input placeholder="Search SO / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="al al-y">Only <strong>live (open)</strong> sales orders are listed{closedCount ? <> — {closedCount} closed order{closedCount === 1 ? '' : 's'} {closedCount === 1 ? 'is' : 'are'} hidden because a closed order cannot be edited or deleted here</> : null}. Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit Spec to move an order to a different spec (its SKU, customer and sub-brand follow the new spec) or ✎ Edit PO# to correct the PO number, PO date or dispatch location — without deleting the order.</div>
+      <div className="al al-y">Only <strong>live (open)</strong> sales orders are listed{closedCount ? <> — {closedCount} closed order{closedCount === 1 ? '' : 's'} {closedCount === 1 ? 'is' : 'are'} hidden because a closed order cannot be edited or deleted here</> : null}. Deleting an SO removes it from the OAB permanently. Invoices already raised are not affected. Use ✎ Edit Spec to move an order to a different spec (its SKU, customer and sub-brand follow the new spec) or ✎ Edit PO# to correct the PO number, PO date, dispatch location or PO quantity — without deleting the order. A revised PO quantity cannot be set below what has already been dispatched.</div>
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 320px)' }}>
         <table>
           <thead><tr><th>SO</th><th>Sheet</th><th>Spec</th><th>Customer</th><th>Job</th><th>PO#</th><th>PO Date</th><th style={{ textAlign: 'right' }}>PO Qty</th><th style={{ textAlign: 'right' }}>Dispatched</th><th></th></tr></thead>
