@@ -31,7 +31,7 @@ import { snapshotBase, mergeOabModule } from './lib/merge.js';
  * writer got there first) — reload that module, show a non-destructive notice,
  * and let the user re-apply their edit. A 409 NEVER logs the user out.
  */
-export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8, fgLedger: 9, capa: 11, sales: 12, bom: 13 };
+export const KEY_TO_ID = { oab: 1, jss: 2, prices: 3, customers: 4, prodStatus: 5, purchase: 6, pmData: 7, scrap: 8, fgLedger: 9, projections: 10, capa: 11, sales: 12, bom: 13 };
 
 // Empty-but-valid shapes so every screen can render before anything is saved.
 export function emptyModules() {
@@ -45,6 +45,9 @@ export function emptyModules() {
     pmData: {},
     scrap: {},
     fgLedger: {},   // { [spec]: { prod:[], alloc:[] } }
+    // Future projections: what sales expect to sell, month by month. Actuals are
+    // never stored here - they are read off the OAB whenever the question is asked.
+    projections: { entries: [] },
     capa: [],       // QC CAPA records
     // Shared Sales system blob (CSA leads, Quotation Desk, Rep Portal).
     sales: {

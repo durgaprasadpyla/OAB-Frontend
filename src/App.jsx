@@ -31,6 +31,7 @@ import PpcDashboard from './pages/PpcDashboard.jsx';
 import MisStatus from './pages/MisStatus.jsx';
 import PlanReadiness from './pages/PlanReadiness.jsx';
 import Stores from './pages/Stores.jsx';
+import Projections from './pages/Projections.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="/rep" element={<RoleRoute path="/rep"><RepPortal /></RoleRoute>} />
         <Route path="/quotes" element={<RoleRoute path="/quotes"><QuotationDesk /></RoleRoute>} />
         <Route path="/sdashboard" element={<RoleRoute path="/sdashboard"><SalesAdmin /></RoleRoute>} />
+        <Route path="/projections" element={<RoleRoute path="/projections"><Projections /></RoleRoute>} />
         <Route path="/master" element={<RoleRoute path="/master"><MasterData /></RoleRoute>} />
         <Route path="/production" element={<RoleRoute path="/production"><Production /></RoleRoute>} />
         <Route path="/planner" element={<RoleRoute path="/planner"><WeeklyPlanner /></RoleRoute>} />

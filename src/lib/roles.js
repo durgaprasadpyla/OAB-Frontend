@@ -67,6 +67,9 @@ export function navTabs(role) {
   // NOT add a separate nav tab per planning screen (Enhancements 2.0: role-specific
   // landing pages, not extra tabs); the PPC / MIS / PLAN logins reach those directly.
   if (role === 'superadmin') tabs.push({ to: '/ppc', label: '🗂 Planning' });
+  // Future projections: what sales expect to sell before the POs exist. The Sales
+  // Admin owns the entry; Super Admin reads it alongside the rest of the business.
+  if (role === 'superadmin') tabs.push({ to: '/projections', label: '📈 Projections' });
   return tabs;
 }
 
@@ -101,6 +104,10 @@ export function canAccess(role, path) {
   if (p === '/plan') return role === 'plan' || role === 'superadmin';
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
   // the backend's module-12 grant {sadmin, quote, sales, superadmin}.
+  // Future projections. The Sales Admin makes them; the roles that have to BUY and
+  // PLAN against them read them — planning sees what is coming, purchase sees the
+  // material it implies. Writing is gated again on the backend (module 10).
+  if (p === '/projections') return ['sadmin', 'superadmin', 'ppc', 'mis', 'plan', 'planner', 'padmin', 'purchase'].includes(role);
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';
   if (p === '/quotes') return role === 'quote' || role === 'sadmin' || role === 'superadmin';
   if (p === '/rep') return role === 'sales';
