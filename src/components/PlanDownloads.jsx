@@ -125,7 +125,7 @@ export default function PlanDownloads({ compact = false }) {
       {/* §8: the PPC's plan, split the way the floor reads it — one block per department. */}
       <div className="fbar" style={{ marginTop: 4 }}>
         <span className="pg-sub" style={{ margin: 0 }}>Department-wise, from the PPC's plan:</span>
-        <select value={fmt} onChange={(e) => setFmt(e.target.value)} aria-label="Department-wise plan format" style={{ height: 28 }}>
+        <select value={fmt} onChange={(e) => setFmt(e.target.value)} aria-label="Department-wise plan format" style={{ height: 30 }}>
           <option value="xlsx">Excel</option>
           <option value="pdf">PDF</option>
         </select>

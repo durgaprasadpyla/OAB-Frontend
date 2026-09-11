@@ -64,6 +64,10 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
 .al-b{background:#EBF1FC;border:1px solid #B0C8F5;color:#1A3A7A}
 .g2>*,.g3>*,.g4>*{min-width:0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px}
+/* Up to four figures, keep the tiles a readable width instead of letting them stretch:
+   three tiles on a wide screen became 400px each, leaving each number marooned at the
+   left edge of an empty box. Five or more still share the row as before. */
+.stats:not(:has(> :nth-child(5))){grid-template-columns:repeat(auto-fit,minmax(150px,240px));justify-content:start}
 .stat{background:var(--wh);border:1px solid var(--bd);border-radius:8px;padding:10px 13px}
 .sl{font-size:10px;color:var(--i3);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .sv{font-size:20px;font-weight:700}.sv.red{color:var(--red)}.sv.grn{color:var(--g)}
@@ -90,6 +94,14 @@ input.kam-numinput,input.nospin{-moz-appearance:textfield;appearance:textfield}
 .fbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .fbar input,.fbar select{height:30px;border:1px solid var(--bd);border-radius:7px;padding:0 9px;font-size:12px;outline:none}
 .fbar input:focus,.fbar select:focus{border-color:var(--g)}
+/* A filter bar is one row of controls, so its buttons stand exactly as tall as the
+   boxes beside them - .btn is 34px on its own, which left every bar in the app a
+   few pixels ragged. A button that asks for its own height still gets it. */
+.fbar .btn{height:30px;font-size:12px;padding:0 12px}
+/* Actions that belong together (Export, Refresh) travel as one group, so a bar that
+   wraps moves them to the next line together instead of splitting them across two. */
+.fbar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.fbar-actions .btn{height:30px;font-size:12px;padding:0 12px}
 #upd-body td{height:56px}/* uniform ~3-line row height so long job names and the FG-available hint fit within each SO's row */
 #upd-body td .clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.25;max-height:calc(1.25em * 3)}
 .page.on{padding-bottom:0}

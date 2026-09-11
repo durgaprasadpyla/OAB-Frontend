@@ -274,16 +274,19 @@ function OnHand({ flash }) {
           <option value="">All stock</option>
           {UNIT_STATUSES.map((st) => <option key={st.v} value={st.v}>{st.label}</option>)}
         </select>
-        <span style={{ flex: 1 }} />
-        <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
-          title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
-          ⚙ Set MSL from 3-month average
-        </button>
-        <button className="btn btn-s" onClick={exportExcel} disabled={exporting || busy} aria-label="Export to Excel"
-          title="Every roll / can of the items shown, with its location and status">
-          {exporting ? 'Exporting…' : '⬇ Export to Excel'}
-        </button>
-        <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+        {/* Seven filters and three buttons do not fit one line: kept as a group, the
+            buttons wrap together instead of one of them being stranded on its own. */}
+        <div className="fbar-actions">
+          <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
+            title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
+            ⚙ Set MSL from 3-month average
+          </button>
+          <button className="btn btn-s" onClick={exportExcel} disabled={exporting || busy} aria-label="Export to Excel"
+            title="Every roll / can of the items shown, with its location and status">
+            {exporting ? 'Exporting…' : '⬇ Export to Excel'}
+          </button>
+          <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+        </div>
       </div>
 
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>

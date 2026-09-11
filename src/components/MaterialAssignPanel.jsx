@@ -85,7 +85,7 @@ export default function MaterialAssignPanel({ so, spec, material, onChange }) {
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <select value={pick.unitId} onChange={(e) => setPick({ ...pick, unitId: e.target.value })}
-          aria-label={`Free rolls for ${so}`} style={{ height: 28, minWidth: 320 }}>
+          aria-label={`Free rolls for ${so}`} style={{ height: 30, minWidth: 320 }}>
           <option value="">— free rolls, oldest first —</option>
           {free.map((u, i) => (
             <option key={u.unitId} value={u.unitId}>
@@ -95,8 +95,8 @@ export default function MaterialAssignPanel({ so, spec, material, onChange }) {
         </select>
         <input type="number" step="any" min="0" value={pick.qty} onChange={(e) => setPick({ ...pick, qty: e.target.value })}
           aria-label={`Quantity to assign to ${so}`} placeholder={selected ? `max ${qty(selected.free)}` : 'qty'}
-          style={{ width: 110, height: 28 }} />
-        <button className="btn btn-g" style={{ height: 28 }} disabled={busy} onClick={assign}>Assign material</button>
+          style={{ width: 110, height: 30 }} />
+        <button className="btn btn-g" style={{ height: 30 }} disabled={busy} onClick={assign}>Assign material</button>
         <label className="cb" style={{ fontSize: 11 }}>
           <input type="checkbox" checked={filterFilm} onChange={(e) => setFilterFilm(e.target.checked)}
             aria-label={`Only this spec's material for ${so}`} />
