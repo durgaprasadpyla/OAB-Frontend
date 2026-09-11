@@ -288,14 +288,29 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
 
       if (method === 'GET') {
         if (path === 'dashboard') return res(200, hr.dashboard || {});
+        // HR 2.0 reads (mirror HrController's new endpoints)
+        if (path === 'overview') return res(200, (hr.employees || []).filter((e) => !['Left', 'Resigned', 'Terminated', 'Inactive'].includes(e.status)));
+        if (path === 'increments') return res(200, hr.increments || []);
+        if (path === 'bonus') return res(200, hr.bonus || []);
+        if (path === 'advances') return res(200, (hr.advances || []).filter((a) => query.includeClosed || a.status !== 'Closed'));
+        if (path === 'payroll') return res(200, hr.payroll || { month: query.month, runId: null, status: 'Preview', lines: [] });
+        if (/^employees\/\d+\/salary-history$/.test(path)) return res(200, hr.salaryHistory || []);
+        if (/^documents\/\d+\/file$/.test(path)) return res(200, { id: Number(path.split('/')[1]), title: 'aadhaar.pdf', docType: 'Aadhaar', data: 'data:application/pdf;base64,AAAA' });
         if (path === 'meta') {
-          return res(200, hr.meta || { statuses: ['Active', 'On Notice', 'Inactive', 'Resigned', 'Terminated', 'On Leave'], employmentTypes: ['Full-time'], genders: ['Male', 'Female', 'Other'] });
+          return res(200, hr.meta || {
+            statuses: ['Active', 'On Notice', 'Inactive', 'Resigned', 'Terminated', 'On Leave', 'Left'],
+            employmentTypes: ['Permanent', 'Casual', 'Intern', 'Training'], genders: ['Male', 'Female', 'Other'],
+            workLocations: ['Unit 1', 'Unit 2', 'Head Office'],
+            leftReasons: ['Served notice period', 'Absconding', 'Asked to leave'],
+            docTypes: ['Aadhaar', 'PAN', 'Previous employment', 'Bank statement'],
+          });
         }
         if (path === 'employees') {
           let list = hr.employees || [];
           if (query.q) list = list.filter((e) => [e.fullName, e.empCode].some((v) => String(v || '').toLowerCase().includes(query.q.toLowerCase())));
           if (query.status) list = list.filter((e) => e.status === query.status);
           if (query.departmentId) list = list.filter((e) => String(e.departmentId) === String(query.departmentId));
+          if (query.current) list = list.filter((e) => !['Left', 'Resigned', 'Terminated', 'Inactive'].includes(e.status));
           return res(200, list);
         }
         // Mirror HrController: default = active-only; includeInactive=1 lists all.
@@ -304,7 +319,7 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
         const activeOnly = (list) => (query.includeInactive === '1' || query.includeInactive === 'true'
           ? list : list.filter((r) => r.active !== false));
         if (path === 'departments') return res(200, activeOnly(hr.departments || []));
-        if (path === 'designations') return res(200, activeOnly(hr.designations || []));
+        if (path === 'designations') return res(200, activeOnly(hr.designations || []).filter((d) => !query.departmentId || String(d.departmentId) === String(query.departmentId)));
         if (path === 'leave-types') return res(200, activeOnly(hr.leaveTypes || []));
         if (path === 'leave-requests') {
           let list = hr.leaveRequests || [];
@@ -342,16 +357,85 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
         return res(201, row);
       }
       if (path === 'employees' && method === 'POST') {
-        // Mirror HrService.createEmployee's two rejections so the UI's error
-        // handling is exercised against the real contract, not a permissive stub.
-        if (!body.empCode) return res(400, 'Employee ID is required');
+        // Mirror HrService.createEmployee's rejections so the UI's error handling is
+        // exercised against the real contract, not a permissive stub. HR 2.0: the
+        // employee code is generated when blank.
         if (!body.firstName) return res(400, 'First name is required');
-        if ((hr.employees || []).some((e) => e.empCode === body.empCode)) {
+        if (body.empCode && (hr.employees || []).some((e) => e.empCode === body.empCode)) {
           return res(409, `Employee ID '${body.empCode}' already exists`);
         }
-        const row = { id: (hr.employees || []).length + 900, fullName: `${body.firstName} ${body.lastName || ''}`.trim(), ...body };
+        const n = (hr.employees || []).length + 1;
+        const row = { id: (hr.employees || []).length + 900, empCode: body.empCode || ('EMP-' + String(n).padStart(4, '0')),
+          fullName: `${body.firstName} ${body.lastName || ''}`.trim(), ...body, status: body.status || 'Active' };
         hr.employees = [...(hr.employees || []), row];
         return res(201, row);
+      }
+      if (/^employees\/\d+$/.test(path) && method === 'PUT') {
+        const id = Number(path.split('/')[1]);
+        hr.employees = (hr.employees || []).map((e) => (e.id === id ? { ...e, ...body, salary: body.salary ? { ...(e.salary || {}), ...body.salary } : e.salary } : e));
+        return res(200, hr.employees.find((e) => e.id === id));
+      }
+      if (/^employees\/\d+\/exit$/.test(path)) {
+        const id = Number(path.split('/')[1]);
+        hr.employees = (hr.employees || []).map((e) => (e.id === id
+          ? (body.left ? { ...e, status: 'Left', exitDate: body.lastWorkingDay, leftReason: body.leftReason } : { ...e, status: 'Active', exitDate: null, leftReason: null })
+          : e));
+        const emp = hr.employees.find((e) => e.id === id);
+        return res(200, { ...emp, experienceYears: 2.4, experienceText: '2 years 5 months' });
+      }
+      if (/^employees\/\d+\/increments$/.test(path)) {
+        const id = Number(path.split('/')[1]);
+        const row = { id: 800 + (hr.salaryHistory || []).length, kind: 'INCREMENT', employeeId: id, ...body, ctc: body.revisedCtc, takeHome: body.revisedTakeHome, apb: body.revisedApb, monthlyCash: body.revisedCash };
+        hr.salaryHistory = [...(hr.salaryHistory || []), row];
+        return res(201, row);
+      }
+      if (/^employees\/\d+\/bonus$/.test(path)) {
+        const id = Number(path.split('/')[1]);
+        hr.bonus = (hr.bonus || []).map((b) => (b.employeeId === id ? { ...b, ...body, pending: Math.max(0, (body.annualBonus ?? b.annualBonus) - (b.paid || 0)) } : b));
+        return res(200, hr.bonus.find((b) => b.employeeId === id) || { employeeId: id, ...body });
+      }
+      if (/^employees\/\d+\/documents$/.test(path) && method === 'POST') {
+        const id = Number(path.split('/')[1]);
+        const row = { id: 600 + (hr.documents || []).length, employeeId: id, docType: body.docType, title: body.title, hasFile: !!body.data };
+        hr.documents = [...(hr.documents || []), row];
+        const flag = body.docType === 'Aadhaar' ? 'aadhaar' : body.docType === 'PAN' ? 'pan' : body.docType === 'Previous employment' ? 'previousEmployment' : 'bankStatement';
+        hr.employees = (hr.employees || []).map((e) => (e.id === id ? { ...e, docs: { ...(e.docs || {}), [flag]: true } } : e));
+        return res(201, row);
+      }
+      if (path === 'advances' && method === 'POST') {
+        const emp = (hr.employees || []).find((e) => e.id === Number(body.employeeId)) || {};
+        const row = { id: 400 + (hr.advances || []).length, employeeId: body.employeeId, empCode: emp.empCode, fullName: emp.fullName,
+          currentTakeHome: emp.salary ? emp.salary.takeHome : null, amount: body.amount, installments: body.installments,
+          instalmentAmount: Math.round((body.amount / body.installments) * 100) / 100, repaid: 0, balance: body.amount,
+          balanceInstalments: body.installments, takenOn: body.takenOn, note: body.note, status: 'Open' };
+        hr.advances = [...(hr.advances || []), row];
+        return res(201, row);
+      }
+      if (/^advances\/\d+$/.test(path) && method === 'PUT') {
+        const id = Number(path.split('/')[1]);
+        hr.advances = (hr.advances || []).map((a) => (a.id === id ? { ...a, ...body } : a));
+        return res(200, hr.advances.find((a) => a.id === id));
+      }
+      if (path === 'payroll' && method === 'POST') {
+        hr.payroll = { ...(hr.payroll || { lines: [] }), month: body.month, runId: 77, status: 'Draft' };
+        hr.payroll.lines = (hr.payroll.lines || []).map((l, i) => ({ id: l.id || i + 1, ...l }));
+        return res(201, hr.payroll);
+      }
+      if (/^payroll\/\d+\/lines\/\d+$/.test(path)) {
+        if (hr.payroll && hr.payroll.status === 'Finalised') return res(409, { message: 'The salary run is finalised' });
+        const lineId = Number(path.split('/')[3]);
+        hr.payroll.lines = hr.payroll.lines.map((l) => {
+          if (l.id !== lineId) return l;
+          const n = { ...l, ...body, edited: true };
+          n.netPayable = Math.max(0, (n.takeHome || 0) - (n.advanceDeduction || 0) - (n.canteenDeduction || 0) - (n.otherDeductions || 0) - (n.lopDeduction || 0) + (n.bonusIncluded || 0));
+          return n;
+        });
+        return res(200, hr.payroll.lines.find((l) => l.id === lineId));
+      }
+      if (/^payroll\/\d+\/finalise$/.test(path)) {
+        if (hr.payroll && hr.payroll.status === 'Finalised') return res(409, { message: 'Already finalised' });
+        hr.payroll = { ...hr.payroll, status: 'Finalised' };
+        return res(200, hr.payroll);
       }
       if (/^employees\/\d+\/status$/.test(path)) {
         const id = Number(path.split('/')[1]);

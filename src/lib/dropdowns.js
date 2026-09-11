@@ -34,6 +34,10 @@ export const DROPDOWN_DEFS = [
   // master for the same reason as Departments and Store Locations — the PAdmin
   // Item Master, which is where the picker is used, cannot read the sales blob.
   { key: 'uoms', label: 'UOM', where: 'PAdmin — Item Master · Stores GRN', type: 'list', master: 'uom' },
+  // HR 2.0: "designations I shall add for the drop-down options from the super admin
+  // in the dashboard under drop-down selections … with respect to the department".
+  // Backed by hr_designation (per department) — the HR login only picks from it.
+  { key: 'hrDesignations', label: 'Designations (HR)', where: 'HR — Employee details', type: 'list', master: 'designation' },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.

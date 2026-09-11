@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
-import { masterApi, storesApi } from '../api.js';
+import { masterApi, storesApi, hrApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, UOM_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
 import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
 
@@ -81,6 +81,18 @@ export default function DropdownAdmin() {
     } catch (e) { setUomErr(e && e.message ? e.message : 'Could not reach the unit master'); }
   }, []);
   useEffect(() => { if (role === 'superadmin') loadUoms(); }, [loadUoms, role]);
+
+  // HR 2.0 — designations per department, for the HR login's Employee details.
+  const [desigs, setDesigs] = useState([]);
+  const [desigErr, setDesigErr] = useState('');
+  const loadDesigs = useCallback(async () => {
+    setDesigErr('');
+    try {
+      const r = await hrApi.listDesignations({ includeInactive: 1 });
+      setDesigs(Array.isArray(r) ? r : []);
+    } catch (e) { setDesigErr(e && e.message ? e.message : 'Could not reach the designation list'); }
+  }, []);
+  useEffect(() => { if (role === 'superadmin') loadDesigs(); }, [loadDesigs, role]);
 
   const def = DEFS.find((d) => d.key === sel) || DEFS[0];
   // The QC Add-JSS Dispatch Form reads the normalized dispatch-type master, so
@@ -168,7 +180,8 @@ export default function DropdownAdmin() {
                       {d.label} <span style={{ fontWeight: 500, color: 'var(--i3)' }}>({d.master === 'machine' ? machines.filter((x) => x.active !== false).length
                         : d.master === 'storeloc' ? locs.filter((x) => x.active !== false).length
                           : d.master === 'uom' ? (uoms.filter((x) => x.active !== false).length || UOM_DEFAULTS.length)
-                            : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
+                            : d.master === 'designation' ? desigs.filter((x) => x.active !== false).length
+                              : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
                       {!d.master && ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 1 }}>{d.where}</div>
@@ -186,6 +199,8 @@ export default function DropdownAdmin() {
         <StoreLocationsPanel locations={locs} reload={loadLocs} error={locErr} />
       ) : def.master === 'uom' ? (
         <UomPanel uoms={uoms} reload={loadUoms} error={uomErr} />
+      ) : def.master === 'designation' ? (
+        <DesignationsPanel desigs={desigs} departments={depts} reload={loadDesigs} error={desigErr} />
       ) : def.master ? (
         <DepartmentsPanel depts={depts} reload={loadDepts} error={deptErr} loaded={deptLoaded} />
       ) : (
@@ -449,6 +464,87 @@ If material is already put away there it is retired instead, so those units keep
  * the PAdmin Item Master reads the same source. Add / rename / enable-disable; writes are
  * Super Admin only (enforced server-side).
  */
+/**
+ * HR 2.0 — the designations an employee can hold, per department. "Designation
+ * dropdown should be with respect to the department selection: first I will select
+ * a department and then assign the designations under it." Departments are the
+ * production master above; the HR login picks from this list and never edits it.
+ */
+function DesignationsPanel({ desigs, departments, reload, error }) {
+  const [title, setTitle] = useState('');
+  const [deptId, setDeptId] = useState('');
+  const [filterDept, setFilterDept] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
+  const deptList = (departments || []).filter((d) => d.active !== false);
+  const list = (Array.isArray(desigs) ? desigs : []).filter((d) => !filterDept || String(d.departmentId) === String(filterDept));
+
+  async function add() {
+    const t = title.trim();
+    if (!t || !deptId) return;
+    setBusy(true);
+    try { await hrApi.createDesignation({ title: t, departmentId: Number(deptId) }); setTitle(''); flash('g', `Added “${t}”.`); await reload(); }
+    catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function rename(d, next) {
+    const t = String(next || '').trim();
+    if (!t || t === d.title) return;
+    try { await hrApi.updateDesignation(d.id, { title: t }); await reload(); }
+    catch (e) { flash('r', e.message || 'Rename failed'); }
+  }
+  async function toggle(d) {
+    try { await hrApi.updateDesignation(d.id, { active: d.active === false }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+
+  return (
+    <div className="card">
+      <div className="ctitle">Designations (HR) <span className="tag tgr">{list.filter((d) => d.active !== false).length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        The designations offered on the HR login&rsquo;s Employee details, under each department. The same
+        title may exist in two departments; a designation that is retired stays on the employees who hold it.
+      </div>
+      {error && (
+        <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>Couldn’t load the designations — {error}.</span>
+          <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={reload}>Retry</button>
+        </div>
+      )}
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="fbar">
+        <select value={deptId} onChange={(e) => setDeptId(e.target.value)} aria-label="Department for the new designation" style={{ minWidth: 160 }}>
+          <option value="">— department —</option>
+          {deptList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <input placeholder="New designation (e.g. Line Supervisor)" value={title} aria-label="New designation"
+          onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ minWidth: 220 }} />
+        <button className="btn btn-g" onClick={add} disabled={busy || !title.trim() || !deptId}>＋ Add</button>
+        <span style={{ flex: 1 }} />
+        <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} aria-label="Show designations of department">
+          <option value="">All departments</option>
+          {deptList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </div>
+      <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
+        <table>
+          <thead><tr><th>Department</th><th>Designation</th><th style={{ width: 90, textAlign: 'center' }}>Active</th></tr></thead>
+          <tbody>
+            {list.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No designations yet — pick a department and add one.</td></tr>
+              : list.map((d) => (
+                <tr key={d.id} style={d.active === false ? { opacity: 0.55 } : undefined}>
+                  <td style={{ fontSize: 12 }}>{d.departmentName || '-'}</td>
+                  <td><input defaultValue={d.title} aria-label={`Designation ${d.title}`} onBlur={(e) => rename(d, e.target.value)} style={{ width: '100%' }} /></td>
+                  <td style={{ textAlign: 'center' }}><input type="checkbox" checked={d.active !== false} aria-label={`${d.title} active`} onChange={() => toggle(d)} /></td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DepartmentsPanel({ depts, reload, error, loaded }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);

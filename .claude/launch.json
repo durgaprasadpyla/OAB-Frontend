@@ -4,8 +4,22 @@
     {
       "name": "oab-frontend",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5173", "--strictPort"],
+      "runtimeArgs": [
+        "node_modules/vite/bin/vite.js",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
       "port": 5173
+    },
+    {
+      "name": "oab-backend-h2",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "D:\\projects\\OAB\\OAB-back\\OAB-Backend\\scripts\\dev\\dev-h2.cmd"
+      ],
+      "port": 8080
     }
   ]
 }
