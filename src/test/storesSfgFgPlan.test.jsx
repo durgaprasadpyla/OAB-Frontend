@@ -20,7 +20,11 @@ const SFG = [{
   materials: [{ itemCode: 'FILM-BOPP20', itemName: 'BOPP Film 20mic', uom: 'Kg', qty: 250 }],
   inProcess: [{ so: '26/900', department: 'Printing', stage_seq: 1, qty_in: 10000, qty_completed: 4000, qty_wastage: 120, status: 'In Progress' }],
 }];
-const FG = [{ spec: 'A2', customer: 'Bharat', jobName: 'Roll B', poQty: 8000, fgQty: 2000, dispatched: 400, orders: 2 }];
+// Stores 5.1: the FG tab is the FG Entry sheet — fed by the JSS (module 2) and the
+// FG ledger (module 9), the same two the Super Admin's page reads.
+const JSS = [{ spec: 'A2', customer: 'Bharat', jobName: 'Roll B', status: 'Active' }];
+const LEDGER = { A2: { prod: [{ date: '2026-09-01', qty: 2000, ts: 1, id: 'p1' }], alloc: [{ date: '2026-09-02', qty: 400, ts: 2, so: '26/1', src: 'new-po' }] } };
+const FLAGS = [{ spec: 'A2', moving: true, price: 12 }];
 const SUGG = [
   { itemId: 1, code: 'FILM-BOPP20', name: 'BOPP Film 20mic', uom: 'Kg', currentMsl: 500, consumed: 600, months: 3, suggestedMsl: 200, hasHistory: true },
   { itemId: 2, code: 'INK-CYAN', name: 'Cyan Ink', uom: 'Kg', currentMsl: 10, consumed: 0, months: 3, suggestedMsl: 0, hasHistory: false },
@@ -51,7 +55,7 @@ beforeEach(() => {
     calls.push({ u, method, body });
     if (u.includes('/api/auth/me')) return res(200, { username: 'store1', role: 'stores' });
     if (u.includes('/api/stores/sfg')) return res(200, SFG);
-    if (u.includes('/api/stores/fg')) return res(200, FG);
+    if (u.includes('/api/stores/fg-flags')) return res(200, FLAGS);
     if (u.includes('/api/stores/msl-suggestions/apply')) return res(200, { applied: 1, months: 3 });
     if (u.includes('/api/stores/msl-suggestions')) return res(200, SUGG);
     if (u.includes('/api/stores/on-hand')) return res(200, BOARD);
@@ -67,7 +71,12 @@ beforeEach(() => {
     if (u.match(/\/api\/stores\/items\/\d+\/units/)) return res(200, []);
     if (u.includes('/api/stores/txns') || u.includes('/api/stores/grns') || u.includes('/api/stores/po-eta')) return res(200, []);
     if (u.includes('/api/master/items')) return res(200, []);
-    if (u.includes('/rest/v1/oab_data')) return res(200, []);
+    if (u.includes('/rest/v1/oab_data')) {
+      return res(200, [
+        { id: 2, data: JSON.stringify(JSS), version: 1 },
+        { id: 9, data: JSON.stringify(LEDGER), version: 1 },
+      ]);
+    }
     return res(200, []);
   });
 });
@@ -96,14 +105,19 @@ describe('Stores — stock in SFG and FG form', () => {
     expect(screen.getByText('4,000')).toBeInTheDocument();             // completed at that stage
   });
 
-  it('lists finished goods per spec with what is still in hand', async () => {
+  it('lists finished goods per spec with what is still in hand — the FG Entry sheet itself', async () => {
     const user = userEvent.setup();
     mountStores();
     await user.click(screen.getByText(/FG \(finished\)/));
     const row = (await screen.findByText('A2')).closest('tr');
-    expect(within(row).getByText('2,000')).toBeInTheDocument();        // FG booked
-    expect(within(row).getByText('400')).toBeInTheDocument();          // dispatched
+    expect(within(row).getByText('2,000')).toBeInTheDocument();        // produced
+    expect(within(row).getByText('400')).toBeInTheDocument();          // allocated to a sale order
     expect(within(row).getByText('1,600')).toBeInTheDocument();        // still in hand
+    expect(within(row).getByText(/19,200/)).toBeInTheDocument();       // 1,600 × the mirrored price
+    // and the desk can book production here, exactly as the Super Admin does
+    expect(screen.getByLabelText('JSS / Spec #')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('JSS / Spec #'), 'A2');
+    expect(await screen.findByLabelText('FG status')).toHaveValue('moving');
   });
 });
 

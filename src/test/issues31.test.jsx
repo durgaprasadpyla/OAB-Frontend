@@ -88,9 +88,14 @@ describe('GRN — the receipt is worked paperwork first (Issues 3.1)', () => {
     expect(offered.join('|')).not.toContain('—');
 
     fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: 'BLM031' } });
-    await waitFor(() => expect(screen.getByLabelText('Item description line 1')).toHaveValue('460 MM'));
+    // Stores 5.1: the description box is itself a picker over the narrowed items —
+    // "the stores person need not know the item code" — so it now READS the item
+    // chosen by code, and choosing from it fills the code the other way round.
+    const desc = screen.getByLabelText('Item description line 1');
+    await waitFor(() => expect(desc.tagName).toBe('SELECT'));
+    await waitFor(() => expect(desc.selectedOptions[0].textContent).toContain('460 MM'));
     expect(screen.getByLabelText('Item identity line 1')).toHaveValue('FILM · AF BOPP · Surface');
-    expect(screen.getByLabelText('Item description line 1')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('Item description line 1').tagName).toBe('SELECT');   // Stores 5.1: a picker, not a read-back
   });
 
   it('starts the price at what THIS supplier last charged, and leaves it editable', async () => {
@@ -130,7 +135,10 @@ describe('Issues & returns — pickers, not free text (Issues 3.1)', () => {
     await screen.findByLabelText('Sale order');
     await waitFor(() => expect(screen.getByLabelText('Sale order').tagName).toBe('SELECT'));
     expect([...screen.getByLabelText('Sale order').options].map((o) => o.value).filter(Boolean)).toEqual(['26/697', '26/698']);
-    expect(screen.getByText(/\(planned today\)/)).toBeInTheDocument();
+    // Stores 5.1: every open order is offered until planning hands them over; the
+    // ones PPC planned today are marked and listed first.
+    expect([...screen.getByLabelText('Sale order').options].filter((o) => /planned today/.test(o.textContent)).length).toBe(2);
+    expect(screen.getByText(/2 planned today are listed first/)).toBeInTheDocument();
   });
 
   it('keeps the item code and its description in separate fields', async () => {

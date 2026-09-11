@@ -170,7 +170,9 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
 
   it('refuses child rolls that together weigh more than the parent', async () => {
     await openSplit();
-    setRow(1, { rolls: 1, width: 435, weight: 100 });
+    // Stores 5.1: only widths of the roll's own family (FILM / AF BOPP) are offered —
+    // 435 is PEARLISED BOPP and is not on the list — so two 200s carry the weight.
+    setRow(1, { rolls: 1, width: 200, weight: 100 });
     fireEvent.click(screen.getByText('＋ Another roll back'));
     setRow(2, { rolls: 1, width: 200, weight: 100 });
 
@@ -182,12 +184,25 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
   it('books a split that fits, one roll per sticker', async () => {
     await openSplit();
     setRow(1, { rolls: 2, width: 200, weight: 40 });     // 400 mm and 80 Kg — inside both caps
+    // Stores 5.1: the width names its item code, and the rolls are booked under it
+    expect(screen.getByLabelText('Returned item code 1')).toHaveValue('BLM020');
     fireEvent.click(screen.getByText('↙ Receive return'));
 
     await waitFor(() => expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(1));
     const body = posted.find((p) => p.u.includes('/returns')).body;
     expect(body.children).toHaveLength(2);              // "2 rolls" books two units
-    expect(body.children.every((c) => c.qty === 40 && c.widthMm === 200)).toBe(true);
+    expect(body.children.every((c) => c.qty === 40 && c.widthMm === 200 && c.itemId === 20)).toBe(true);
+  });
+
+  it('offers only the widths of the roll’s own material family, no wider than the roll', async () => {
+    await openSplit();
+    const w = screen.getByLabelText('Returned width 1');
+    const offered = [...w.options].map((o) => o.value).filter((v) => v && v !== '__other__');
+    // 200 and 445 are AF BOPP codes narrower than 635; 435 is PEARLISED BOPP and is
+    // not offered — "it is not possible for me to get 600 mm x 600 mm rolls of LDPE
+    // if I give an anti-fog BOPP"; 635 itself is the parent's own width.
+    expect(offered).toEqual(['200', '445', '635']);
+    expect([...w.options].find((o) => o.value === '445').textContent).toContain('BLM044');
   });
 
   it('counts what has already come back off the roll, not just this screenful', async () => {
@@ -197,7 +212,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     setRow(1, { rolls: 1, width: 200, weight: 20 });
     await waitFor(() => expect(screen.getByText(/already back off this one/)).toBeInTheDocument());
 
-    setRow(1, { rolls: 1, width: 435, weight: 20 });   // 445 + 435 = 880 > 635
+    setRow(1, { rolls: 1, width: 200, weight: 20 });   // 445 + 200 = 645 > 635
     fireEvent.click(screen.getByText('↙ Receive return'));
     await waitFor(() => expect(screen.getByText(/already back off this roll/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
@@ -205,7 +220,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
 
   it('says so rather than half-booking a row that is missing its weight', async () => {
     await openSplit();
-    setRow(1, { rolls: 1, width: 435 });
+    setRow(1, { rolls: 1, width: 200 });
     fireEvent.click(screen.getByText('↙ Receive return'));
     await waitFor(() => expect(screen.getByText(/half filled in/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);

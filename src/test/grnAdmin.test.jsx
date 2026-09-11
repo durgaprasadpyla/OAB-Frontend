@@ -137,7 +137,10 @@ describe('Issues 2.7 §1-2 — the GRN Qty and Price boxes', () => {
     const width = (el) => el.closest('table').querySelectorAll('th')[
       [...el.closest('tr').children].indexOf(el.closest('td'))].style.width;
     expect(width(qty)).toBe(width(price));
-    expect(parseInt(width(price), 10)).toBeGreaterThanOrEqual(128);
+    // Stores 5.1: "reduce the width of the [quantity and price] fields a little bit
+    // so that, for selecting the location, I need not have a horizontal scroll" —
+    // still wide enough for a five-figure quantity with decimals.
+    expect(parseInt(width(price), 10)).toBeGreaterThanOrEqual(96);
   });
 
   it('still accepts a decimal price typed by hand', async () => {

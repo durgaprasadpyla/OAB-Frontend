@@ -2,8 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
+import FgEntryPanel from '../components/FgEntryPanel.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
+import { exportAOA } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 
 // Stores Login. Four desks, in the order the day runs:
@@ -58,7 +60,9 @@ export default function Stores() {
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       {tab === 'onhand' && <OnHand flash={flash} />}
       {tab === 'sfg' && <Sfg flash={flash} />}
-      {tab === 'fg' && <Fg flash={flash} />}
+      {/* Stores 5.1: the FG tab IS the FG Entry sheet of the Super Admin login — one
+          screen, one ledger, one moving / non-moving report, entered from either. */}
+      {tab === 'fg' && <FgEntryPanel heading={false} />}
       {tab === 'pos' && <PurchaseOrders flash={flash} />}
       {tab === 'grn' && <Grn flash={flash} />}
       {tab === 'issues' && <IssuesReturns flash={flash} />}
@@ -89,6 +93,7 @@ function OnHand({ flash }) {
   // force. Manual entry stays; this is the "going forward" automatic figure.
   const [sugg, setSugg] = useState({});
   const [suggAny, setSuggAny] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -198,10 +203,57 @@ function OnHand({ flash }) {
     } catch (e) { flash('r', e.message); }
   }
 
+  /**
+   * Stores 5.1: "the Raw Material On Hand page should have an Export to Excel. When
+   * I click on that I would want the detailed row-wise entries to be listed in the
+   * Excel, with the location and also the status of the material, whether it is
+   * moving, non-moving, sample, or rejected." One row per roll / can, for the items
+   * the filters currently show, and — with a disposition chosen — only rolls of it.
+   */
+  async function exportExcel() {
+    setExporting(true);
+    try {
+      const all = (await storesApi.allUnits(false)) || [];
+      const ids = new Set(visible.map((r) => String(r.id)));
+      const picked = all.filter((u) => ids.has(String(u.itemId)) && (!fStatus || (u.status || 'MOVING') === fStatus));
+      if (!picked.length) { flash('y', 'Nothing to export — no rolls or cans match these filters.'); return; }
+      const header = ['Item Code', 'Description', 'Material', 'Sub-Group', 'Speciality', 'Microns', 'Department',
+        'Internal Code', 'GRN', 'Supplier', 'Supplier Label', 'Location', 'Width (mm)', 'Received', 'Remaining', 'UOM',
+        'Price', 'Value', 'Status', 'Expiry', 'Received on'];
+      const body = picked.map((u) => [
+        u.itemCode || '', u.itemName || '', u.materialType || '', u.subGroup || '', u.specialtyName || '', u.microns || '',
+        u.departmentName || '', u.internalCode || '', u.grnNo || '', u.supplier || '', u.supplierCode || '', u.location || '',
+        num(u.widthMm) || '', num(u.qtyReceived), num(u.qtyRemaining), u.uom || '', num(u.price) || '',
+        Math.round(num(u.qtyRemaining) * num(u.price) * 100) / 100, statusLabel(u.status || 'MOVING'),
+        u.expiryDate || '', u.receivedAt ? String(u.receivedAt).slice(0, 10) : '',
+      ]);
+      exportAOA([header, ...body], `Raw_Material_On_Hand_${today()}.xlsx`, 'Material on hand');
+      flash('g', `Exported ${picked.length} roll(s) / can(s) to Excel.`);
+    } catch (e) { flash('r', e.message); } finally { setExporting(false); }
+  }
+
   return (
     <div className="card">
-      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+      {/* Stores 5.1: "the data items listed below MSL stock value, all of them, to move
+          to the top and the filters to be closer to the table" — so the figures come
+          first, and the filters with Refresh sit directly above the rows they act on. */}
+      <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
         <div className="ctitle" style={{ margin: 0 }}>Material on hand <span className="tag tgr">{totals.items}</span></div>
+      </div>
+      <div className="stats" style={{ marginBottom: 6 }}>
+        <div className="stat"><div className="sl">Items listed</div><div className="sv">{totals.items}</div></div>
+        <div className="stat"><div className="sl">Below MSL</div><div className="sv" style={{ color: totals.below ? 'var(--red)' : undefined }}>{totals.below}</div></div>
+        <div className="stat">
+          <div className="sl">{fStatus ? `Value — ${statusLabel(fStatus)}` : 'Stock value'}</div>
+          <div className="sv">{inr(Math.round(totals.value))}</div>
+        </div>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
+        MSL can be typed per item, or set for every item at once from the average of the last three months&rsquo; consumption.
+      </div>
+
+      <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
         <input placeholder="Search item / code…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 200 }} />
         <select value={fMat} onChange={(e) => setFMat(e.target.value)} aria-label="Filter by material">
           <option value="">All materials</option>{opts('materialType').map((v) => <option key={v} value={v}>{v}</option>)}
@@ -227,21 +279,11 @@ function OnHand({ flash }) {
           title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
           ⚙ Set MSL from 3-month average
         </button>
+        <button className="btn btn-s" onClick={exportExcel} disabled={exporting || busy} aria-label="Export to Excel"
+          title="Every roll / can of the items shown, with its location and status">
+          {exporting ? 'Exporting…' : '⬇ Export to Excel'}
+        </button>
         <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
-      </div>
-
-      <div className="stats" style={{ marginBottom: 8 }}>
-        <div className="stat"><div className="sl">Items listed</div><div className="sv">{totals.items}</div></div>
-        <div className="stat"><div className="sl">Below MSL</div><div className="sv" style={{ color: totals.below ? 'var(--red)' : undefined }}>{totals.below}</div></div>
-        <div className="stat">
-          <div className="sl">{fStatus ? `Value — ${statusLabel(fStatus)}` : 'Stock value'}</div>
-          <div className="sv">{inr(Math.round(totals.value))}</div>
-        </div>
-      </div>
-
-      <div className="pg-sub" style={{ marginTop: 0 }}>
-        Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
-        MSL can be typed per item, or set for every item at once from the average of the last three months&rsquo; consumption.
       </div>
 
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
@@ -588,6 +630,11 @@ function Grn({ flash }) {
   const asl = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.asl) ? mods.purchase.asl : []), [mods.purchase]);
   const [locations, setLocations] = useState([]);
   const [openGrn, setOpenGrn] = useState(null);   // which receipt is opened out
+  // Stores 5.1: "I should be able to view the internal label number that is
+  // generated automatically so that I'll be able to write it at the time when I'm
+  // making a GRN." The next numbers in the sequence, read from the server; each
+  // line without a hand-typed code shows the one it will get.
+  const [nextCodes, setNextCodes] = useState([]);
 
   /**
    * Issues 2.4 §9 — every supplier the business buys from, for the header picker.
@@ -621,9 +668,17 @@ function Grn({ flash }) {
       setItems(its || []); setGrns(gs || []);
       // §13: put-away racks come from the Super Admin's list, not free text.
       try { setLocations(await storesApi.locations() || []); } catch { /* not provisioned yet — the box stays a text field */ }
+      try { setNextCodes(((await storesApi.nextCodes(40)) || {}).codes || []); } catch { setNextCodes([]); }
     } catch (e) { flash('r', e.message); }
   }, [flash]);
   useEffect(() => { load(); }, [load]);
+
+  /** The sticker number line `i` will get: the next unused number after the lines above it. */
+  const projectedCode = (i) => {
+    let k = 0;
+    for (let j = 0; j < i; j++) if (!String(lines[j].internalCode || '').trim()) k++;
+    return nextCodes[k] || '';
+  };
 
   const distinct = (arr, f) => [...new Set(arr.map((x) => String(x[f] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const norm = (v) => String(v || '').trim().toLowerCase();
@@ -944,24 +999,25 @@ function Grn({ flash }) {
             makes the declared widths authoritative, and the natural minimum keeps them
             from being scaled down; the wrapper already scrolls (.tw), so the page itself
             does not grow. */}
-        <div className="tw"><table style={{ minWidth: 1470, tableLayout: 'fixed' }}>
+        {/* Stores 5.1: "Let us reduce the width of the [quantity and price] fields a
+            little bit so that, for selecting the location, I need not have a
+            horizontal scroll. The item code width also can go down as the item code
+            is a maximum of 7 letters." The row now fits a normal desk screen. */}
+        <div className="tw"><table style={{ minWidth: 1195, tableLayout: 'fixed' }}>
           <thead><tr>
             {/* Issues 3.1: "let us not club the item code and item description into
                 one" — the code is picked, the description and the item's material
                 identity read back from the Item Master beside it. */}
-            <th style={{ width: 170 }}>Item Code *</th><th style={{ width: 200 }}>Description</th>
-            <th style={{ width: 160 }}>Material / Sub-Group</th><th style={{ width: 130 }}>Supplier Label Code</th>
-            <th style={{ width: 120 }}>Internal Code</th>
-            {/* Issues 2.7: Qty and Price are the two numbers the stores desk types on
-                every line, so they get the same comfortable width and neither is
-                cramped. The stepper arrows are gone (.nospin), which is where most of
-                the room came from — the table itself is no wider than before. */}
+            <th style={{ width: 112 }}>Item Code *</th><th style={{ width: 170 }}>Description</th>
+            <th style={{ width: 140 }}>Material / Sub-Group</th><th style={{ width: 115 }}>Supplier Label Code</th>
+            <th style={{ width: 125 }}>Internal Code</th>
+            {/* Issues 2.7: the stepper arrows are gone (.nospin), so a 90 px box still
+                shows a five-figure quantity or a four-figure price comfortably. */}
             {/* Issues 3.0: Width is gone — it is fixed on the item in the Item Master,
-                so typing it per receipt could only ever disagree with it. The room it
-                freed goes to Qty and Price, the two numbers actually typed here. */}
-            <th style={{ width: 150 }}>Qty *</th><th style={{ width: 70 }}>UOM</th>
-            <th style={{ width: 150 }}>Price</th><th style={{ width: 140 }}>Location</th>
-            <th style={{ width: 145 }}>Expiry</th><th style={{ width: 44 }}></th>
+                so typing it per receipt could only ever disagree with it. */}
+            <th style={{ width: 100 }}>Qty *</th><th style={{ width: 55 }}>UOM</th>
+            <th style={{ width: 100 }}>Price</th><th style={{ width: 125 }}>Location</th>
+            <th style={{ width: 120 }}>Expiry</th><th style={{ width: 36 }}></th>
           </tr></thead>
           <tbody>
             {lines.map((l, i) => {
@@ -995,9 +1051,24 @@ function Grn({ flash }) {
                       </div>
                     )}
                   </td>
-                  <td><input value={(itemById(l.itemId) || {}).name || ''} readOnly tabIndex={-1}
-                    aria-label={`Item description line ${i + 1}`} placeholder="from the Item Master"
-                    style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
+                  <td>
+                    {/* Stores 5.1: "the stores person need not know the item code so I
+                        want a dropdown of material, subgroup, and specialty also while
+                        making a GRN … there are around 500 item codes". The three
+                        pickers above narrow the list; this picks the item by its
+                        DESCRIPTION from what is left, and the code fills itself in.
+                        Typing the code in the box beside it still works the other way. */}
+                    <select value={l.itemId || ''} disabled={!head.supplier} style={{ width: '100%' }}
+                      aria-label={`Item description line ${i + 1}`}
+                      onChange={(e) => { if (e.target.value) pickItem(i, e.target.value); else setLine(i, { itemId: '', uom: '', _search: '' }); }}>
+                      <option value="">{!head.supplier ? 'choose a supplier first'
+                        : narrowed.length ? '— pick by description —' : '— nothing matches the pickers above —'}</option>
+                      {narrowed.map((it) => <option key={it.id} value={it.id}>{it.name} · {it.code}</option>)}
+                      {l.itemId && !narrowed.some((it) => String(it.id) === String(l.itemId)) && (
+                        <option value={l.itemId}>{(itemById(l.itemId) || {}).name} · {(itemById(l.itemId) || {}).code}</option>
+                      )}
+                    </select>
+                  </td>
                   <td><input
                     value={[(itemById(l.itemId) || {}).materialType, (itemById(l.itemId) || {}).subGroup,
                       (itemById(l.itemId) || {}).specialtyName].filter(Boolean).join(' · ')}
@@ -1005,7 +1076,21 @@ function Grn({ flash }) {
                     title="Material type · sub-group · speciality, from the Item Master"
                     style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
                   <td><input value={l.supplierCode} onChange={(e) => setLine(i, { supplierCode: e.target.value })} aria-label={`Supplier code line ${i + 1}`} /></td>
-                  <td><input value={l.internalCode} placeholder="auto" onChange={(e) => setLine(i, { internalCode: e.target.value })} aria-label={`Internal code line ${i + 1}`} /></td>
+                  <td>
+                    {/* Stores 5.1: the sticker number this roll will get, shown before the
+                        receipt is booked so it can be written on the roll now. Typing a
+                        code of your own overrides it. It is fixed when Receive is pressed —
+                        the confirmation repeats the numbers actually booked. */}
+                    <input value={l.internalCode} placeholder={projectedCode(i) || 'auto'}
+                      onChange={(e) => setLine(i, { internalCode: e.target.value })} aria-label={`Internal code line ${i + 1}`}
+                      title={projectedCode(i) ? `Will be ${projectedCode(i)} unless you type another code` : 'Assigned on receive'} />
+                    {!String(l.internalCode || '').trim() && projectedCode(i) && (
+                      <div style={{ fontSize: 10, marginTop: 2, fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}
+                        aria-label={`Sticker for line ${i + 1}`} title="Write this on the roll — fixed when you press Receive">
+                        🏷 {projectedCode(i)}
+                      </div>
+                    )}
+                  </td>
                   <td><input type="number" step="any" min="0" className="nospin" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label={`Quantity line ${i + 1}`} /></td>
                   <td><input value={l.uom} readOnly tabIndex={-1} aria-label={`UOM line ${i + 1}`}
                     title="Taken from the Item Master — change it there, not on the receipt"
@@ -1036,7 +1121,10 @@ function Grn({ flash }) {
           <button className="btn btn-s" onClick={addLine}>＋ Add line</button>
           <button className="btn btn-g" onClick={submit} disabled={busy}>{busy ? 'Receiving…' : '📥 Receive material'}</button>
         </div>
-        <div className="pg-sub">Each line becomes one physical unit with its own internal code — that code is what goes on the sticker.</div>
+        <div className="pg-sub">
+          Each line becomes one physical unit with its own internal code — that code is what goes on the sticker. The number shown
+          under Internal Code is the one the roll will get; it is fixed the moment you press Receive.
+        </div>
       </div>
 
       <div className="card">
@@ -1068,7 +1156,21 @@ function Grn({ flash }) {
 // One line of a roll that came back slit: N rolls, each `widthMm` wide and `weightKg`
 // heavy. Rolls is a COUNT (two 445 mm rolls is one line, not two), which is what makes
 // "these add up to more than the roll they came off" a question with an answer.
-const blankChild = () => ({ rolls: '1', widthMm: '', weightKg: '', internalCode: '', location: '' });
+// Stores 5.1: `itemId` is the item code for that width — a 600 mm roll cut from a
+// 1200 mm one is booked under the 600 mm code, picked from the same family.
+const blankChild = () => ({ rolls: '1', widthMm: '', weightKg: '', internalCode: '', location: '', itemId: '' });
+
+/**
+ * Which sale orders the Issues & Returns desk may book against (Stores 5.1).
+ *
+ *   'open'    — every open sale order on the OAB, with today's planned ones marked
+ *               and listed first. "Until the sale orders are given by the planning
+ *               department, let us give a selection of all the open sale orders."
+ *   'planned' — only what PPC has planned. "Once that functionality comes into
+ *               place … we will restrict the dropdown options to the sale orders
+ *               that are planned." Flip this one constant when the business says so.
+ */
+export const SO_SOURCE = 'open';
 
 function IssuesReturns({ flash }) {
   const { mods } = useData();
@@ -1089,6 +1191,22 @@ function IssuesReturns({ flash }) {
   const [locations, setLocations] = useState([]);
   const [plannedSos, setPlannedSos] = useState(null);   // null = the plan is unreadable here
   const [masterItems, setMasterItems] = useState([]);
+  // Stores 5.1: material → sub-group → speciality ahead of the item code, because
+  // "it is not practically possible for the stores person … to remember all the
+  // item codes" — the same road in as the GRN's.
+  const [fMat, setFMat] = useState('');
+  const [fSub, setFSub] = useState('');
+  const [fSpec, setFSpec] = useState('');
+  // Stores 5.1: "once a sale order is selected, then based on the sale order root,
+  // the departments dropdown will be populated" — the route's stages for that SO.
+  const [soRoute, setSoRoute] = useState(null);   // { so, departments: [names] } | null
+  // Stores 5.1: "I would want the internal code to be shown so that I'll be able to
+  // write it on the roll" — the numbers the returned rolls will get.
+  const [nextCodes, setNextCodes] = useState([]);
+
+  const loadNextCodes = useCallback(async () => {
+    try { setNextCodes(((await storesApi.nextCodes(40)) || {}).codes || []); } catch { setNextCodes([]); }
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -1104,9 +1222,8 @@ function IssuesReturns({ flash }) {
       .then((r) => { if (live && Array.isArray(r)) setLocations(r); })
       .catch(() => { /* not provisioned yet */ });
     // "Sale orders should be a drop down with the sale orders that are planned for
-    // that particular day under PPC." Today's plan is the right shortlist; if it is
-    // empty or unreadable the full open list stands in, because a return still has
-    // to be bookable against an order nobody planned today.
+    // that particular day under PPC." Today's plan is read so those orders can be
+    // marked and listed first; the open list stands behind it (SO_SOURCE).
     planningApi.week(today(), today())
       .then((w) => {
         if (!live) return;
@@ -1114,36 +1231,87 @@ function IssuesReturns({ flash }) {
         setPlannedSos(list);
       })
       .catch(() => { if (live) setPlannedSos(null); });
+    loadNextCodes();
     return () => { live = false; };
-  }, []);
+  }, [loadNextCodes]);
 
-  /**
-   * The widths a returned roll may be cut to: the ones the business has item codes
-   * for. Width is not a field on an item — it is written into the item's NAME
-   * ("460 MM", "680 MM (AJ)", "700"), which is exactly how codes are allocated by
-   * width — so the list is read from there, plus every width already on a roll.
-   */
-  const knownWidths = useMemo(() => {
-    const set = new Set();
-    units.forEach((u) => { if (num(u.widthMm) > 0) set.add(String(num(u.widthMm))); });
-    // Issues 4.1: the item's own numeric Width (mm) field, set on the Padmin Item
-    // Master. Items that predate the field still state it in their description
-    // ("460 MM", "680 MM (AJ)", "700"), which itemWidthMm falls back to.
-    (masterItems.length ? masterItems : items).forEach((it) => {
-      const w = itemWidthMm(it);
-      if (w != null) set.add(String(w));
-    });
-    return [...set].sort((a, b) => Number(a) - Number(b));
-  }, [units, items, masterItems]);
+  /* ── the sale order comes first, and its route names the departments ── */
 
   const openSos = useMemo(() => {
     const oab = (mods.oab && mods.oab.OAB) || {};
     return ['SF', 'OT'].flatMap((k) => (oab[k] || []).filter((r) => !r.closed).map((r) => r.so)).filter(Boolean);
   }, [mods.oab]);
-  const soOptions = (plannedSos && plannedSos.length) ? plannedSos : openSos;
-  const soFromPlan = !!(plannedSos && plannedSos.length);
+  const plannedSet = useMemo(() => new Set(plannedSos || []), [plannedSos]);
+  const soOptions = useMemo(() => {
+    const planned = plannedSos || [];
+    if (SO_SOURCE === 'planned' && planned.length) return planned;
+    // planned first, then every other open order, each once
+    return [...new Set([...planned, ...openSos])];
+  }, [plannedSos, openSos]);
+  const soFromPlan = SO_SOURCE === 'planned' && !!(plannedSos && plannedSos.length);
+
+  useEffect(() => {
+    const so = String(form.so || '').trim();
+    if (!so) { setSoRoute(null); return undefined; }
+    let live = true;
+    planningApi.soPlan(so)
+      .then((p) => {
+        if (!live) return;
+        const names = ((p && p.departments) || []).map((d) => d.departmentName).filter(Boolean);
+        setSoRoute({ so, departments: [...new Set(names)] });
+      })
+      .catch(() => { if (live) setSoRoute({ so, departments: [] }); });
+    return () => { live = false; };
+  }, [form.so]);
+
+  // The departments offered: the SO's route when it has one, else the whole master.
+  const routeDepts = soRoute && soRoute.so === String(form.so || '').trim() ? soRoute.departments : [];
+  const deptOptions = routeDepts.length ? routeDepts : departments.map((d) => d.name);
+  const deptFromRoute = routeDepts.length > 0;
+  // A department chosen for one order does not silently carry over to another whose
+  // route does not go through it.
+  useEffect(() => {
+    if (deptFromRoute && form.department && !routeDepts.includes(form.department)) {
+      setForm((f) => ({ ...f, department: '' }));
+    }
+  }, [deptFromRoute, routeDepts, form.department]);
+
+  /* ── the material: type → sub-group → speciality → item code ── */
 
   useEffect(() => { storesApi.onHand().then((r) => setItems((r || []).filter((x) => num(x.closingStock) > 0 || x.unitCount > 0))).catch(() => {}); }, []);
+
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  /** Each picker offers only what the other two leave — the same narrowing as the board. */
+  const opts = (key) => {
+    const chosen = { materialType: fMat, subGroup: fSub, specialtyName: fSpec };
+    const pool = items.filter((r) => Object.keys(chosen).every((k) => k === key || !chosen[k] || norm(r[k]) === norm(chosen[k])));
+    const set = new Set(pool.map((r) => String(r[key] || '').trim()).filter(Boolean));
+    if (chosen[key]) set.add(chosen[key]);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  };
+  const visibleItems = useMemo(() => items.filter((r) => (
+    (!fMat || norm(r.materialType) === norm(fMat))
+    && (!fSub || norm(r.subGroup) === norm(fSub))
+    && (!fSpec || norm(r.specialtyName) === norm(fSpec))
+  )), [items, fMat, fSub, fSpec]);
+  // Narrowing away the chosen item drops it — the code must always agree with the pickers.
+  useEffect(() => {
+    if (itemId && !visibleItems.some((it) => String(it.id) === String(itemId))) {
+      setItemId(''); setForm((f) => ({ ...f, unitId: '' }));
+    }
+  }, [visibleItems, itemId]);
+
+  /** Choosing a code the other way round fills the three pickers from the item. */
+  function chooseItem(id) {
+    setItemId(id);
+    setForm((f) => ({ ...f, unitId: '' }));
+    const it = items.find((x) => String(x.id) === String(id));
+    if (it) {
+      setFMat(String(it.materialType || '').trim());
+      setFSub(String(it.subGroup || '').trim());
+      setFSpec(String(it.specialtyName || '').trim());
+    }
+  }
 
   const loadUnits = useCallback(async (id) => {
     if (!id) { setUnits([]); return; }
@@ -1167,11 +1335,55 @@ function IssuesReturns({ flash }) {
      existed must still be returnable — and the panel says so rather than pretending. */
   const chosenItem = useMemo(() => items.find((it) => String(it.id) === String(itemId)) || null, [items, itemId]);
   const chosenMaster = useMemo(() => {
-    const code = String((chosenItem || {}).code || '').trim().toLowerCase();
-    return code ? masterItems.find((it) => String(it.code || '').trim().toLowerCase() === code) || null : null;
+    const code = norm((chosenItem || {}).code);
+    return code ? masterItems.find((it) => norm(it.code) === code) || null : null;
   }, [masterItems, chosenItem]);
   const parentWidth = selectedUnit ? unitWidthMm(selectedUnit, chosenMaster || chosenItem) : null;
   const parentWeight = selectedUnit ? num(selectedUnit.qtyReceived) : 0;
+
+  /**
+   * Stores 5.1 — the widths a returned roll may be cut to, and the item code each
+   * one is. "If I give a 1,200 mm anti-fog BOPP roll, I will get two rolls of
+   * 700 mm x 500 mm or 600 mm x 600 mm anti-fog BOPP rolls only … It is not possible
+   * for me to get 600 mm x 600 mm rolls of LDPE." So the list is the widths of the
+   * item codes in the SAME material / sub-group / speciality as the roll being
+   * returned — the Item Master's own mapping of available widths — no wider than
+   * the parent. Each width carries its code, so picking the width books the roll
+   * under it. A family with no widths on file falls back to every width the
+   * business has a code for, so the desk is never stranded.
+   */
+  const familyWidths = useMemo(() => {
+    const base = chosenMaster || chosenItem;
+    const pool = masterItems.length ? masterItems : items;
+    const same = (a, b) => norm(a) === norm(b);
+    const specOf = (it) => norm(it.specialtyName ?? it.specialty);
+    // The family is the sub-group ("anti-fog BOPP") within the material type. A
+    // speciality narrows it only when both sides name one and they differ — a code
+    // with no speciality on file is still the same film.
+    const family = base ? pool.filter((it) => same(it.materialType, base.materialType)
+      && same(it.subGroup, base.subGroup)
+      && (!specOf(it) || !specOf(base) || specOf(it) === specOf(base))) : [];
+    const list = (family.length ? family : pool)
+      .map((it) => ({ width: itemWidthMm(it), item: it }))
+      .filter((x) => x.width != null && x.width > 0)
+      .filter((x) => parentWidth == null || x.width <= parentWidth + 1e-6);
+    // one entry per width — the first code wins, the rest are named in the title
+    const byWidth = new Map();
+    list.forEach((x) => {
+      const k = String(x.width);
+      if (!byWidth.has(k)) byWidth.set(k, { width: x.width, items: [] });
+      byWidth.get(k).items.push(x.item);
+    });
+    // Widths already on this item's rolls stay offered (a roll booked before the
+    // master carried widths); with no code of their own they book under the parent's.
+    units.forEach((u) => {
+      const w = num(u.widthMm);
+      if (w > 0 && (parentWidth == null || w <= parentWidth + 1e-6) && !byWidth.has(String(w))) byWidth.set(String(w), { width: w, items: [] });
+    });
+    return { fromFamily: family.length > 0, widths: [...byWidth.values()].sort((a, b) => a.width - b.width) };
+  }, [masterItems, items, units, chosenMaster, chosenItem, parentWidth]);
+  const knownWidths = familyWidths.widths.map((w) => String(w.width));
+  const itemForWidth = (w) => { const hit = familyWidths.widths.find((x) => String(x.width) === String(w)); return hit ? hit.items[0] : null; };
 
   /** What the rows below come to — and which of them are half-filled. */
   const splitTotals = useMemo(() => {
@@ -1192,9 +1404,14 @@ function IssuesReturns({ flash }) {
    * and 600 mm tomorrow has produced 1300 mm off a 1200 mm parent, even though
    * neither return broke the cap on its own. The server counts the same way; this
    * is here so the screen agrees with it instead of promising a save that fails.
+   * Stores 5.1: the roll carries its own totals now (its children may be booked
+   * under other item codes); older rows without them are added up from the list.
    */
   const prior = useMemo(() => {
     if (!selectedUnit) return { width: 0, weight: 0, rolls: 0 };
+    if (selectedUnit.childCount != null) {
+      return { width: num(selectedUnit.childWidth), weight: num(selectedUnit.childWeight), rolls: num(selectedUnit.childCount) };
+    }
     return units.reduce((acc, u) => (String(u.parentUnitId) === String(selectedUnit.id)
       ? { width: acc.width + num(u.widthMm), weight: acc.weight + num(u.qtyReceived), rolls: acc.rolls + 1 }
       : acc), { width: 0, weight: 0, rolls: 0 });
@@ -1205,12 +1422,26 @@ function IssuesReturns({ flash }) {
   const overWidth = parentWidth != null && totalWidth > parentWidth + 1e-6;
   const overWeight = parentWeight > 0 && totalWeight > parentWeight + 1e-6;
 
+  /** The sticker numbers row `i` will get: the next unused ones after the rows above it. */
+  const projectedCodes = (i) => {
+    let k = 0;
+    for (let j = 0; j < i; j++) {
+      const n = Math.max(0, Math.floor(num(children[j].rolls)));
+      if (n === 1 && String(children[j].internalCode || '').trim()) continue;
+      k += n;
+    }
+    const n = Math.max(0, Math.floor(num(children[i].rolls)));
+    return nextCodes.slice(k, k + n);
+  };
+
+  const setChild = (i, patch) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+
   async function doIssue() {
     if (!form.unitId || num(form.qty) <= 0) { flash('r', 'Pick a roll and enter the quantity to issue.'); return; }
     setBusy(true);
     try {
       await storesApi.issue({ unitId: Number(form.unitId), qty: Number(form.qty), so: form.so || undefined, department: form.department || undefined, note: form.note || undefined });
-      flash('g', `Issued ${form.qty} from ${selectedUnit ? selectedUnit.internalCode : 'the roll'}${form.so ? ' to ' + form.so : ''}.`);
+      flash('g', `Issued ${form.qty} from ${selectedUnit ? selectedUnit.internalCode : 'the roll'}${form.so ? ' to ' + form.so : ''}${form.department ? ' (' + form.department + ')' : ''}.`);
       setForm((f) => ({ ...f, qty: '', note: '' }));
       await loadUnits(itemId); await loadTxns();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
@@ -1253,11 +1484,14 @@ function IssuesReturns({ flash }) {
         const w = parseWidthMm(c.widthMm);
         const kg = num(c.weightKg);
         if (n <= 0 || w === null || kg <= 0) return;
+        const item = c.itemId ? c.itemId : (itemForWidth(w) || {}).id;
         for (let k = 0; k < n; k++) {
           kids.push({
             qty: kg, widthMm: w,
             internalCode: n === 1 && c.internalCode ? c.internalCode : undefined,
             location: c.location || undefined, status: 'RETURNED',
+            // Stores 5.1: the item code of that width, when the master has one.
+            itemId: item ? Number(item) : undefined,
           });
         }
       });
@@ -1270,14 +1504,16 @@ function IssuesReturns({ flash }) {
     try {
       const r = await storesApi.receiveReturn(body);
       flash('g', split
-        ? `Returned as ${(r.returned || []).length} roll(s): ${(r.returned || []).map((x) => x.internalCode).join(', ')}. The original roll is now zero.`
+        ? `Returned as ${(r.returned || []).length} roll(s): ${(r.returned || []).map((x) => x.internalCode).join(', ')} — write these on the rolls. The original roll is now zero.`
         : `Returned ${form.qty} to ${selectedUnit ? selectedUnit.internalCode : 'the roll'}.`);
       setForm((f) => ({ ...f, qty: '', note: '' }));
       setChildren([blankChild()]);
       setSplit(false);
-      await loadUnits(itemId); await loadTxns();
+      await loadUnits(itemId); await loadTxns(); await loadNextCodes();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
+
+  const itemDesc = (chosenItem || {}).name || '';
 
   return (
     <>
@@ -1287,18 +1523,85 @@ function IssuesReturns({ flash }) {
           Rolls are listed oldest first — <strong>issue from the top</strong> (FIFO). Issues and returns move the closing
           stock on the Material on Hand board immediately.
         </div>
+
+        {/* Stores 5.1: "the first selection should be for Sale Order and then … the
+            departments dropdown will be populated [from the sale order route] and per
+            department I should be able to allocate the material." */}
+        <div className="ctitle" style={{ fontSize: 11, margin: '6px 0 2px' }}>① The order and the department</div>
         <div className="g4">
+          <div className="fg">
+            <label>Sale order {soFromPlan ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(planned)</span> : null}</label>
+            {/* Every open order, today's planned ones first and marked; with no list
+                readable it falls back to a plain box rather than leaving the desk
+                unable to say which order the material went to. */}
+            {soOptions.length ? (
+              <select value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value, department: '' })} aria-label="Sale order">
+                <option value="">— none —</option>
+                {soOptions.map((v) => <option key={v} value={v}>{v}{plannedSet.has(v) ? ' · planned today' : ''}</option>)}
+                {form.so && !soOptions.includes(form.so) && <option value={form.so}>{form.so}</option>}
+              </select>
+            ) : (
+              <input value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })}
+                aria-label="Sale order" placeholder={plannedSos === null ? 'type the SO' : 'nothing planned today — type the SO'} />
+            )}
+            <div className="pg-sub" style={{ margin: '3px 0 0' }}>
+              {SO_SOURCE === 'planned'
+                ? 'Only sale orders PPC has planned are offered.'
+                : `All open sale orders${plannedSet.size ? `; ${plannedSet.size} planned today are listed first` : ''}.`}
+            </div>
+          </div>
+          <div className="fg">
+            <label>Department {deptFromRoute ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(from the route of {form.so})</span> : null}</label>
+            {deptOptions.length ? (
+              <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department">
+                <option value="">— none —</option>
+                {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                {form.department && !deptOptions.includes(form.department) && <option value={form.department}>{form.department}</option>}
+              </select>
+            ) : (
+              <input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department" placeholder="e.g. Printing" />
+            )}
+            {form.so && soRoute && soRoute.so === String(form.so).trim() && !deptFromRoute && (
+              <div className="pg-sub" style={{ margin: '3px 0 0', color: '#B7770D' }}>
+                No route on file for {form.so} yet — every department is offered.
+              </div>
+            )}
+          </div>
+          <div className="fg"><label>Note</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} aria-label="Note" /></div>
+        </div>
+
+        {/* Stores 5.1: "the next items should be: Material, Subgroup, Specialty,
+            including the item code. All of these should be the dropdown selections." */}
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The material</div>
+        <div className="g4">
+          <div className="fg"><label>Material type</label>
+            <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type">
+              <option value="">Any material</option>{opts('materialType').map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <div className="fg"><label>Sub group</label>
+            <select value={fSub} onChange={(e) => { setFSub(e.target.value); setFSpec(''); }} aria-label="Sub group">
+              <option value="">Any sub-group</option>{opts('subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <div className="fg"><label>Speciality</label>
+            <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Speciality">
+              <option value="">Any speciality</option>{opts('specialtyName').map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
           {/* Issues 3.1: "the item code should be different and the description should
               be different" — the code is what is stencilled on the roll, so it is what
               is picked; the description reads back beside it. */}
-          <div className="fg"><label>Item code</label>
-            <select value={itemId} onChange={(e) => { setItemId(e.target.value); setForm((f) => ({ ...f, unitId: '' })); }} aria-label="Item">
+          <div className="fg"><label>Item code <span style={{ fontWeight: 400, color: 'var(--i3)' }}>({visibleItems.length} in stock)</span></label>
+            <select value={itemId} onChange={(e) => chooseItem(e.target.value)} aria-label="Item">
               <option value="">— select an item code —</option>
-              {items.map((it) => <option key={it.id} value={it.id}>{it.code}</option>)}
+              {visibleItems.map((it) => <option key={it.id} value={it.id}>{it.code}</option>)}
             </select>
           </div>
+        </div>
+        <div className="g4">
           <div className="fg"><label>Item description</label>
-            <input value={(items.find((it) => String(it.id) === String(itemId)) || {}).name || ''} readOnly tabIndex={-1}
+            <input value={itemDesc} readOnly tabIndex={-1}
               aria-label="Item description" placeholder="pick a code first"
               style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} />
           </div>
@@ -1312,38 +1615,14 @@ function IssuesReturns({ flash }) {
               ))}
             </select>
           </div>
-          <div className="fg">
-            <label>Sale order {soFromPlan ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(planned today)</span> : null}</label>
-            {/* A picker over the day's plan. With nothing planned and no order list
-                readable, it falls back to a plain box rather than leaving the desk
-                unable to say which order the material went to. */}
-            {soOptions.length ? (
-              <select value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })} aria-label="Sale order">
-                <option value="">— none —</option>
-                {soOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-                {form.so && !soOptions.includes(form.so) && <option value={form.so}>{form.so}</option>}
-              </select>
-            ) : (
-              <input value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })}
-                aria-label="Sale order" placeholder="nothing planned today — type the SO" />
-            )}
-          </div>
-          <div className="fg"><label>Department</label>
-            {departments.length ? (
-              <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department">
-                <option value="">— none —</option>
-                {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
-                {form.department && !departments.some((d) => d.name === form.department) && <option value={form.department}>{form.department}</option>}
-              </select>
-            ) : (
-              <input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department" placeholder="e.g. Printing" />
-            )}
-          </div>
           <div className="fg"><label>Quantity</label>
             <input type="number" step="any" min="0" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
               aria-label="Quantity" disabled={split} placeholder={selectedUnit ? `max ${qty(selectedUnit.qtyRemaining)}` : ''} />
           </div>
-          <div className="fg"><label>Note</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} aria-label="Note" /></div>
+          <div className="fg"><label>Internal code</label>
+            <input value={selectedUnit ? selectedUnit.internalCode : ''} readOnly tabIndex={-1} aria-label="Internal code of the roll"
+              placeholder="pick a roll" style={{ background: 'var(--bg)', color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, cursor: 'not-allowed' }} />
+          </div>
         </div>
 
         <label className="cb" style={{ fontSize: 12, marginTop: 4 }}>
@@ -1356,13 +1635,15 @@ function IssuesReturns({ flash }) {
               A 1200&nbsp;mm roll issued and returned as 700 + 500&nbsp;mm: enter each returned roll below. Each becomes its own
               roll with its own sticker, and the original roll is left at zero. Say how many rolls of each width came
               back and what one of them weighs — <strong>the widths and the weights cannot add up to more than the roll
-              they were cut from</strong>.
+              they were cut from</strong>. The width list is the item codes of the same material, sub-group and speciality,
+              and the roll is booked under the code of its width.
             </div>
             {/* Issues 3.1: the parent-child link, said out loud — every roll entered
                 below is recorded as having come off this one. */}
             {selectedUnit && (
               <div className="al al-b" style={{ margin: '6px 0' }}>
                 Cut from <b>{selectedUnit.internalCode}</b>
+                {chosenItem ? ` (${chosenItem.code})` : ''}
                 {parentWidth != null ? ` · ${qty(parentWidth)} mm` : ''}
                 {parentWeight > 0 ? ` · ${qty(parentWeight)} ${selectedUnit.uom || ''}` : ''}
                 {selectedUnit.location ? ` · ${selectedUnit.location}` : ''} — each roll below is linked back to it.
@@ -1375,11 +1656,17 @@ function IssuesReturns({ flash }) {
                     Width (mm) on the Padmin Item Master.
                   </div>
                 )}
+                {!familyWidths.fromFamily && knownWidths.length > 0 && (
+                  <div style={{ fontSize: 11, color: '#B7770D', marginTop: 3 }}>
+                    No other item code shares this roll&rsquo;s material, sub-group and speciality — every width on file is offered.
+                  </div>
+                )}
               </div>
             )}
             <div className="tw"><table>
               <thead><tr>
-                <th style={{ width: 90 }}>Rolls *</th><th style={{ width: 140 }}>Width (mm) *</th>
+                <th style={{ width: 80 }}>Rolls *</th><th style={{ width: 150 }}>Width (mm) *</th>
+                <th style={{ width: 120 }}>Item code</th>
                 {/* Issues 4.1 — "there should be one more field for the child rolls'
                     weight". One roll's weight, so N rolls of it is N × this, and the
                     cumulative figure can be held against the parent roll's weight. */}
@@ -1387,78 +1674,108 @@ function IssuesReturns({ flash }) {
                 <th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th>
               </tr></thead>
               <tbody>
-                {children.map((c, i) => (
-                  <tr key={i}>
-                    <td><input type="number" step="1" min="1" className="nospin" value={c.rolls}
-                      aria-label={`Returned rolls ${i + 1}`} placeholder="1"
-                      onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, rolls: e.target.value } : x)))} /></td>
-                    <td>
-                      {/* Issues 3.1: item codes are allocated by width, so a returned
-                          roll may only be cut to a width already on file. A width that
-                          is missing is the Super Admin's to add, not the desk's. */}
-                      {knownWidths.length ? (
-                        <>
-                          <select value={c._other ? '__other__' : c.widthMm} aria-label={`Returned width ${i + 1}`} style={{ width: '100%' }}
-                            onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i
-                              ? (e.target.value === '__other__' ? { ...x, _other: true, widthMm: '' } : { ...x, _other: false, widthMm: e.target.value })
-                              : x)))}>
-                            <option value="">— width —</option>
-                            {knownWidths.map((w) => <option key={w} value={w}>{w} mm</option>)}
-                            {c.widthMm && !c._other && !knownWidths.includes(String(c.widthMm)) && <option value={c.widthMm}>{c.widthMm} mm</option>}
-                            <option value="__other__">＋ Other width…</option>
-                          </select>
-                          {c._other && (
-                            <>
-                              <input type="number" step="any" min="0" value={c.widthMm} className="nospin"
-                                aria-label={`Returned width ${i + 1} other`} placeholder="mm" style={{ marginTop: 3 }}
-                                onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} />
-                              <div style={{ fontSize: 9, color: '#B7770D', marginTop: 2 }}>
-                                No item code for this width yet — ask the Super Admin to add one.
-                              </div>
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        <input type="number" step="any" min="0" value={c.widthMm} aria-label={`Returned width ${i + 1}`}
-                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, widthMm: e.target.value } : x)))} />
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }} value={c.weightKg}
-                          aria-label={`Returned weight ${i + 1}`} placeholder="per roll"
-                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, weightKg: e.target.value } : x)))} />
-                        <span style={{ fontSize: 10, color: 'var(--i3)' }}>{(selectedUnit && selectedUnit.uom) || 'kg'}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <input value={c.internalCode} placeholder="auto" aria-label={`Returned internal code ${i + 1}`}
-                        disabled={Math.floor(num(c.rolls)) > 1}
-                        onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, internalCode: e.target.value } : x)))} />
-                      {Math.floor(num(c.rolls)) > 1 && (
-                        <div style={{ fontSize: 9, color: 'var(--i3)', marginTop: 2 }}>
-                          {Math.floor(num(c.rolls))} stickers — the codes are assigned.
+                {children.map((c, i) => {
+                  const codes = projectedCodes(i);
+                  const n = Math.floor(num(c.rolls));
+                  const codeItem = c.itemId ? (masterItems.find((it) => String(it.id) === String(c.itemId))
+                    || items.find((it) => String(it.id) === String(c.itemId))) : null;
+                  return (
+                    <tr key={i}>
+                      <td><input type="number" step="1" min="1" className="nospin" value={c.rolls}
+                        aria-label={`Returned rolls ${i + 1}`} placeholder="1"
+                        onChange={(e) => setChild(i, { rolls: e.target.value })} /></td>
+                      <td>
+                        {/* Issues 3.1: item codes are allocated by width, so a returned
+                            roll may only be cut to a width already on file. A width that
+                            is missing is the Super Admin's to add, not the desk's.
+                            Stores 5.1: the list is the roll's own material family, and
+                            picking a width picks its item code. */}
+                        {knownWidths.length ? (
+                          <>
+                            <select value={c._other ? '__other__' : c.widthMm} aria-label={`Returned width ${i + 1}`} style={{ width: '100%' }}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === '__other__') setChild(i, { _other: true, widthMm: '', itemId: '' });
+                                else setChild(i, { _other: false, widthMm: v, itemId: (itemForWidth(v) || {}).id || '' });
+                              }}>
+                              <option value="">— width —</option>
+                              {familyWidths.widths.map((w) => (
+                                <option key={w.width} value={String(w.width)} title={w.items.map((it) => it.code).join(', ')}>
+                                  {w.width} mm{w.items.length ? ` · ${w.items[0].code}` : ''}{w.items.length > 1 ? ` (+${w.items.length - 1})` : ''}
+                                </option>
+                              ))}
+                              {c.widthMm && !c._other && !knownWidths.includes(String(c.widthMm)) && <option value={c.widthMm}>{c.widthMm} mm</option>}
+                              <option value="__other__">＋ Other width…</option>
+                            </select>
+                            {c._other && (
+                              <>
+                                <input type="number" step="any" min="0" value={c.widthMm} className="nospin"
+                                  aria-label={`Returned width ${i + 1} other`} placeholder="mm" style={{ marginTop: 3 }}
+                                  onChange={(e) => setChild(i, { widthMm: e.target.value, itemId: '' })} />
+                                <div style={{ fontSize: 9, color: '#B7770D', marginTop: 2 }}>
+                                  No item code for this width yet — booked under {chosenItem ? chosenItem.code : 'the parent roll’s code'}; ask the Super Admin to add one.
+                                </div>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          <input type="number" step="any" min="0" value={c.widthMm} aria-label={`Returned width ${i + 1}`}
+                            onChange={(e) => setChild(i, { widthMm: e.target.value })} />
+                        )}
+                      </td>
+                      <td>
+                        {/* Stores 5.1: "Based on that selection I want the item code also
+                            to be populated." Read-only: it follows the width. */}
+                        <input value={codeItem ? codeItem.code : (c.widthMm && chosenItem ? chosenItem.code : '')} readOnly tabIndex={-1}
+                          aria-label={`Returned item code ${i + 1}`} placeholder="from the width"
+                          title={codeItem ? codeItem.name : (c.widthMm && chosenItem ? 'No code for this width — stays under the parent roll’s item' : '')}
+                          style={{ background: 'var(--bg)', color: codeItem ? 'var(--blu)' : 'var(--i3)', fontFamily: 'monospace', fontWeight: 700, cursor: 'not-allowed' }} />
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }} value={c.weightKg}
+                            aria-label={`Returned weight ${i + 1}`} placeholder="per roll"
+                            onChange={(e) => setChild(i, { weightKg: e.target.value })} />
+                          <span style={{ fontSize: 10, color: 'var(--i3)' }}>{(selectedUnit && selectedUnit.uom) || 'kg'}</span>
                         </div>
-                      )}
-                    </td>
-                    <td>
-                      {/* Issues 3.1: the rack is picked from the Super Admin's list, the
-                          same list the GRN puts material away into. */}
-                      {locations.length ? (
-                        <select value={c.location} aria-label={`Returned location ${i + 1}`} style={{ width: '100%' }}
-                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, location: e.target.value } : x)))}>
-                          <option value="">— rack —</option>
-                          {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
-                          {c.location && !locations.some((loc) => loc.name === c.location) && <option value={c.location}>{c.location}</option>}
-                        </select>
-                      ) : (
-                        <input value={c.location} aria-label={`Returned location ${i + 1}`}
-                          onChange={(e) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, location: e.target.value } : x)))} />
-                      )}
-                    </td>
-                    <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => setChildren((cs) => (cs.length === 1 ? cs : cs.filter((_, j) => j !== i)))}>✕</button></td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        <input value={c.internalCode} placeholder={n === 1 && codes[0] ? codes[0] : 'auto'} aria-label={`Returned internal code ${i + 1}`}
+                          disabled={n > 1}
+                          title={n === 1 && codes[0] ? `Will be ${codes[0]} unless you type another code` : ''}
+                          onChange={(e) => setChild(i, { internalCode: e.target.value })} />
+                        {/* Stores 5.1: the sticker number(s) this row will get, so they
+                            can be written on the rolls now; fixed when Receive return
+                            is pressed, and repeated in the confirmation. */}
+                        {n > 1 ? (
+                          <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
+                            aria-label={`Stickers for returned row ${i + 1}`}>
+                            🏷 {codes.length ? `${codes[0]} … ${codes[codes.length - 1]}` : `${n} stickers, assigned on receive`}
+                          </div>
+                        ) : (!String(c.internalCode || '').trim() && codes[0] ? (
+                          <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
+                            aria-label={`Stickers for returned row ${i + 1}`}>🏷 {codes[0]}</div>
+                        ) : null)}
+                      </td>
+                      <td>
+                        {/* Issues 3.1: the rack is picked from the Super Admin's list, the
+                            same list the GRN puts material away into. */}
+                        {locations.length ? (
+                          <select value={c.location} aria-label={`Returned location ${i + 1}`} style={{ width: '100%' }}
+                            onChange={(e) => setChild(i, { location: e.target.value })}>
+                            <option value="">— rack —</option>
+                            {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
+                            {c.location && !locations.some((loc) => loc.name === c.location) && <option value={c.location}>{c.location}</option>}
+                          </select>
+                        ) : (
+                          <input value={c.location} aria-label={`Returned location ${i + 1}`}
+                            onChange={(e) => setChild(i, { location: e.target.value })} />
+                        )}
+                      </td>
+                      <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => setChildren((cs) => (cs.length === 1 ? cs : cs.filter((_, j) => j !== i)))}>✕</button></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table></div>
             <button className="btn btn-s" onClick={() => setChildren((cs) => [...cs, blankChild()])}>＋ Another roll back</button>
@@ -1637,138 +1954,6 @@ function Sfg({ flash }) {
                 )}
               </Fragment>
             ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ────────────────────────── FG — finished, per spec ─────────────────────── */
-
-function Fg({ flash }) {
-  const [rows, setRows] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [q, setQ] = useState('');
-  // Issues 3.1: "how much of our money is blocked in moving FG and how much in
-  // non-moving FG". Purely an internal segregation — it changes no quantity, and FG
-  // is still offered against a new sale order either way.
-  const [fMove, setFMove] = useState('');
-  const [saving, setSaving] = useState('');
-
-  const load = useCallback(async () => {
-    setBusy(true);
-    try { setRows(await storesApi.fg() || []); }
-    catch (e) { flash('r', e.message); }
-    finally { setBusy(false); }
-  }, [flash]);
-  useEffect(() => { load(); }, [load]);
-
-  const visible = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return rows.filter((r) => {
-      const moving = r.moving !== false;
-      if (fMove === 'moving' && !moving) return false;
-      if (fMove === 'non' && moving) return false;
-      if (!t) return true;
-      return [r.spec, r.customer, r.jobName].some((v) => String(v || '').toLowerCase().includes(t));
-    });
-  }, [rows, q, fMove]);
-  const totalFg = visible.reduce((t, r) => t + num(r.fgQty), 0);
-  // The money, split the way it was asked for. Value comes from the sale price the
-  // server holds against the spec; a spec with no price contributes nothing rather
-  // than being guessed at.
-  const money = useMemo(() => rows.reduce((t, r) => {
-    const v = num(r.value);
-    if (r.moving === false) return { ...t, non: t.non + v };
-    return { ...t, moving: t.moving + v };
-  }, { moving: 0, non: 0 }), [rows]);
-  const unpriced = rows.filter((r) => r.value == null).length;
-
-  async function setMovement(r, moving) {
-    setSaving(r.spec);
-    try {
-      await storesApi.setFgMovement(r.spec, moving);
-      setRows((rs) => rs.map((x) => (x.spec === r.spec ? { ...x, moving } : x)));
-      flash('g', `${r.spec} marked ${moving ? 'moving' : 'non-moving'}.`);
-    } catch (e) { flash('r', e.message); }
-    finally { setSaving(''); }
-  }
-
-  return (
-    <div className="card">
-      <div className="fbar" style={{ flexWrap: 'wrap' }}>
-        <div className="ctitle" style={{ margin: 0 }}>Finished goods, per spec <span className="tag tgr">{visible.length}</span></div>
-        <input placeholder="Search spec / customer / job…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search FG" style={{ minWidth: 220 }} />
-        <select value={fMove} onChange={(e) => setFMove(e.target.value)} aria-label="Filter by movement">
-          <option value="">All FG</option>
-          <option value="moving">Moving FG</option>
-          <option value="non">Non-moving FG</option>
-        </select>
-        <span style={{ flex: 1 }} />
-        <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
-      </div>
-      <div className="stats" style={{ marginBottom: 8 }}>
-        <div className="stat"><div className="sl">Specs holding FG</div><div className="sv">{visible.length}</div></div>
-        <div className="stat"><div className="sl">Finished pieces</div><div className="sv" style={{ color: 'var(--g)' }}>{totalFg.toLocaleString('en-IN')}</div></div>
-        <div className="stat">
-          <div className="sl">Money in moving FG</div>
-          <div className="sv" style={{ color: 'var(--g)' }}>{inr(Math.round(money.moving))}</div>
-        </div>
-        <div className="stat">
-          <div className="sl">Money in non-moving FG</div>
-          <div className="sv" style={{ color: money.non > 0 ? 'var(--red)' : undefined }}>{inr(Math.round(money.non))}</div>
-        </div>
-      </div>
-      {unpriced > 0 && (
-        <div className="pg-sub" style={{ marginTop: 0 }}>
-          {unpriced} spec(s) have no sale price on file, so they add nothing to either figure.
-        </div>
-      )}
-      <div className="pg-sub" style={{ marginTop: 0 }}>Booked on the FG Entry sheet, gathered per spec number.</div>
-      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
-        <table>
-          <thead><tr>
-            <th>Spec</th><th style={{ minWidth: 200 }}>Job Name</th><th>Customer</th>
-            <th style={{ textAlign: 'right' }}>Orders</th><th style={{ textAlign: 'right' }}>PO Qty</th>
-            <th style={{ textAlign: 'right' }}>FG</th><th style={{ textAlign: 'right' }}>Dispatched</th>
-            <th style={{ textAlign: 'right' }}>FG in hand</th>
-            <th style={{ textAlign: 'right' }}>Value</th>
-            <th style={{ width: 150 }}>Movement</th>
-          </tr></thead>
-          <tbody>
-            {visible.length === 0 ? (
-              <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
-                No finished goods booked yet — they arrive from the FG Entry sheet.
-              </td></tr>
-            ) : visible.map((r) => {
-              const inHand = num(r.fgQty) - num(r.dispatched);
-              return (
-                <tr key={r.spec}>
-                  <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec}</span></td>
-                  <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.jobName || '—'}</td>
-                  <td style={{ fontSize: 11 }}>{r.customer || '—'}</td>
-                  <td style={{ textAlign: 'right' }}>{r.orders}</td>
-                  <td style={{ textAlign: 'right' }}>{qty(r.poQty)}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{qty(r.fgQty)}</td>
-                  <td style={{ textAlign: 'right' }}>{qty(r.dispatched)}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700 }}>{inHand > 0 ? inHand.toLocaleString('en-IN') : '—'}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    {r.value == null ? <span style={{ color: 'var(--i3)' }} title="No sale price on file for this spec">—</span>
-                      : inr(Math.round(num(r.value)))}
-                  </td>
-                  <td>
-                    <select value={r.moving === false ? 'non' : 'moving'} disabled={saving === r.spec}
-                      aria-label={`Movement for ${r.spec}`}
-                      onChange={(e) => setMovement(r, e.target.value === 'moving')}
-                      style={{ height: 26, fontSize: 11, color: r.moving === false ? 'var(--red)' : undefined }}>
-                      <option value="moving">Moving</option>
-                      <option value="non">Non-moving</option>
-                    </select>
-                  </td>
-                </tr>
-              );
-            })}
           </tbody>
         </table>
       </div>

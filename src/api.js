@@ -150,10 +150,11 @@ export const hrApi = {
   addDocument: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/documents`, { method: 'POST', body }),
   deleteDocument: (docId) => api('/api/hr/documents/' + encodeURIComponent(docId), { method: 'DELETE' }),
 
+  // HR 2.0: departments are the Super Admin's department master (read here; edited
+  // under Dashboard → Drop-down selections → Departments).
   listDepartments: (p) => api('/api/hr/departments' + qs(p)),
-  createDepartment: (body) => api('/api/hr/departments', { method: 'POST', body }),
-  updateDepartment: (id, body) => api('/api/hr/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
 
+  // Designations per department — kept by the Super Admin under Drop-down selections.
   listDesignations: (p) => api('/api/hr/designations' + qs(p)),
   createDesignation: (body) => api('/api/hr/designations', { method: 'POST', body }),
   updateDesignation: (id, body) => api('/api/hr/designations/' + encodeURIComponent(id), { method: 'PUT', body }),
@@ -168,6 +169,25 @@ export const hrApi = {
   rejectLeave: (id, comment) => api(`/api/hr/leave-requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { comment } }),
 
   audit: (p) => api('/api/hr/audit' + qs(p)),
+
+  // ── HR 2.0 (the "HR MODULE" brief, 2026-09) ──
+  overview: () => api('/api/hr/overview'),
+  getDocumentFile: (docId) => api('/api/hr/documents/' + encodeURIComponent(docId) + '/file'),
+  salaryHistory: (id) => api(`/api/hr/employees/${encodeURIComponent(id)}/salary-history`),
+  listIncrements: () => api('/api/hr/increments'),
+  addIncrement: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/increments`, { method: 'POST', body }),
+  listBonus: () => api('/api/hr/bonus'),
+  setBonus: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/bonus`, { method: 'PUT', body }),
+  addBonusPayout: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/bonus-payouts`, { method: 'POST', body }),
+  listAdvances: (p) => api('/api/hr/advances' + qs(p)),
+  createAdvance: (body) => api('/api/hr/advances', { method: 'POST', body }),
+  updateAdvance: (id, body) => api('/api/hr/advances/' + encodeURIComponent(id), { method: 'PUT', body }),
+  addRepayment: (id, body) => api(`/api/hr/advances/${encodeURIComponent(id)}/repayments`, { method: 'POST', body }),
+  payroll: (month) => api('/api/hr/payroll?month=' + encodeURIComponent(month)),
+  createPayroll: (month) => api('/api/hr/payroll', { method: 'POST', body: { month } }),
+  updatePayrollLine: (runId, lineId, body) => api(`/api/hr/payroll/${encodeURIComponent(runId)}/lines/${encodeURIComponent(lineId)}`, { method: 'PUT', body }),
+  finalisePayroll: (runId) => api(`/api/hr/payroll/${encodeURIComponent(runId)}/finalise`, { method: 'POST' }),
+  setExit: (id, body) => api(`/api/hr/employees/${encodeURIComponent(id)}/exit`, { method: 'POST', body }),
 };
 
 /** Forced password change after a first login or an admin reset. */
@@ -337,6 +357,16 @@ export const storesApi = {
   // Issues 3.1: mark a spec's finished goods moving or non-moving — an internal
   // segregation; it changes no quantity and FG is offered on a sale order either way.
   setFgMovement: (spec, moving) => api('/api/stores/fg/' + encodeURIComponent(spec) + '/movement', { method: 'PUT', body: { moving } }),
+  // Stores 5.1: every spec's moving / non-moving flag (+ the mirrored sale price) —
+  // the classification column of the FG sheet both logins now share.
+  fgFlags: () => api('/api/stores/fg-flags'),
+  // Stores 5.1: the internal label numbers the next N rolls will get, so the sticker
+  // can be written while the GRN (or the split return) is being made. A preview —
+  // the number is fixed when the booking lands.
+  nextCodes: (count = 1) => api('/api/stores/next-codes?count=' + encodeURIComponent(count)),
+  // Stores 5.1: every roll / can with its item, location and disposition — the
+  // row-wise Excel behind Raw Material on Hand.
+  allUnits: (includeEmpty) => api('/api/stores/units' + (includeEmpty ? '?includeEmpty=1' : '')),
   // The MSL the last three months' consumption suggests, and adopting it.
   mslSuggestions: (months = 3) => api('/api/stores/msl-suggestions?months=' + encodeURIComponent(months)),
   applyMslSuggestions: (months = 3) => api('/api/stores/msl-suggestions/apply?months=' + encodeURIComponent(months), { method: 'POST' }),

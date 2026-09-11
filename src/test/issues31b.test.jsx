@@ -112,19 +112,69 @@ describe('Super Admin — raw material price master', () => {
   });
 });
 
-describe('Stores — FG moving / non-moving', () => {
+describe('Stores — FG moving / non-moving (the shared FG sheet)', () => {
+  // Stores 5.1: the Stores FG tab IS the Super Admin's FG Entry sheet — same ledger
+  // (module 9), same specs (module 2), same moving / non-moving report — so the tab
+  // is fed the ledger, and the flags come from the server.
+  const JSS = [
+    { spec: 'A1', jobName: 'Pouch A', customer: 'Amazon', status: 'Active' },
+    { spec: 'A2', jobName: 'Pouch B', customer: 'Nandi', status: 'Active' },
+    { spec: 'A3', jobName: 'Pouch C', customer: 'Acme', status: 'Active' },
+  ];
+  const LEDGER = {
+    A1: { prod: [{ date: '2026-09-01', qty: 500, ts: 1, id: 'p1' }], alloc: [{ date: '2026-09-02', qty: 100, ts: 2, so: '26/1', src: 'new-po' }] },  // 400 in hand
+    A2: { prod: [{ date: '2026-09-01', qty: 200, ts: 3, id: 'p2' }], alloc: [] },                                                                    // 200 in hand
+    A3: { prod: [{ date: '2026-09-01', qty: 50, ts: 4, id: 'p3' }], alloc: [] },                                                                     // 50, unpriced
+  };
+  const FLAGS = [
+    { spec: 'A1', moving: true, price: 25 },
+    { spec: 'A2', moving: false, price: 30 },
+  ];
+  let saved;
+  beforeEach(() => {
+    saved = [];
+    vi.doMock('../data.jsx', () => ({
+      useData: () => ({
+        mods: { purchase: PURCHASE, jss: JSS, fgLedger: LEDGER },
+        save: vi.fn(async (key, fn) => { const next = fn(LEDGER); saved.push({ key, next }); return next; }),
+      }),
+    }));
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      const u = String(url);
+      if ((opts.method || 'GET') !== 'GET') { posted.push({ u, method: opts.method, body: JSON.parse(opts.body || '{}') }); return res({}); }
+      if (u.includes('/api/stores/fg-flags')) return res(FLAGS);
+      if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
+      if (u.includes('/api/stores/grns')) return res([]);
+      return res([]);
+    });
+  });
+
   async function mount() {
     const { default: Stores } = await import('../pages/Stores.jsx');
     render(<Stores />);
-    fireEvent.click(await screen.findByText('✅ FG (finished)'));
-    return screen.findByText('A1');
+    fireEvent.click(await screen.findByText(/FG \(finished\)/));
+    await screen.findByText('A1');
+    // the flags have landed once A2 reads non-moving
+    await waitFor(() => expect(screen.getByLabelText('Movement for A2')).toHaveValue('non'));
   }
+
+  it('is the FG Entry sheet — the same specs, ledger and figures as the Super Admin login', async () => {
+    await mount();
+    expect(screen.getByText('All Specs — FG Summary')).toBeInTheDocument();
+    expect(screen.getByLabelText('JSS / Spec #')).toBeInTheDocument();
+    const row = screen.getByText('A1').closest('tr');
+    expect(within(row).getByText('500')).toBeInTheDocument();   // produced
+    expect(within(row).getByText('100')).toBeInTheDocument();   // allocated
+    expect(within(row).getByText('400')).toBeInTheDocument();   // available
+  });
 
   it('splits the money between moving and non-moving', async () => {
     await mount();
+    // A1: 400 × 25 = 10,000 moving; A2: 200 × 30 = 6,000 non-moving; A3 unpriced
     expect(within(statCard('Money in moving FG')).getByText(/10,000/)).toBeInTheDocument();
     expect(within(statCard('Money in non-moving FG')).getByText(/6,000/)).toBeInTheDocument();
-    // A3 has no sale price, so it is counted in neither and said so
+    expect(within(statCard('Moving FG')).getByText('450')).toBeInTheDocument();
+    expect(within(statCard('Non-moving FG')).getByText('200')).toBeInTheDocument();
     expect(screen.getByText(/1 spec\(s\) have no sale price/)).toBeInTheDocument();
   });
 
@@ -133,10 +183,10 @@ describe('Stores — FG moving / non-moving', () => {
     fireEvent.change(screen.getByLabelText('Filter by movement'), { target: { value: 'non' } });
     await waitFor(() => expect(screen.queryByText('A1')).toBeNull());
     expect(screen.getByText('A2')).toBeInTheDocument();
-
     fireEvent.change(screen.getByLabelText('Filter by movement'), { target: { value: 'moving' } });
-    await waitFor(() => expect(screen.getByText('A1')).toBeInTheDocument());
-    expect(screen.queryByText('A2')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('A2')).toBeNull());
+    expect(screen.getByText('A1')).toBeInTheDocument();
+    expect(screen.getByText('A3')).toBeInTheDocument();   // unclassified reads as moving
   });
 
   it('marks a spec non-moving from the line', async () => {
@@ -152,6 +202,29 @@ describe('Stores — FG moving / non-moving', () => {
     await mount();
     const row = screen.getByText('A3').closest('tr');
     expect(within(row).getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('defaults a new entry to Moving, and books Non-moving when changed', async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText('JSS / Spec #'), { target: { value: 'A3' } });
+    const status = await screen.findByLabelText('FG status');
+    expect(status).toHaveValue('moving');                       // the default
+    fireEvent.change(screen.getByLabelText('FG Produced on this date'), { target: { value: '25' } });
+    fireEvent.change(status, { target: { value: 'non' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add Production/ }));
+    await waitFor(() => expect(saved.length).toBe(1));
+    expect(saved[0].key).toBe('fgLedger');
+    expect(saved[0].next.A3.prod).toHaveLength(2);
+    await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/fg/A3/movement') && p.body.moving === false)).toBe(true));
+  });
+
+  it('leaves the flag alone when a Moving entry is booked on an unclassified spec', async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText('JSS / Spec #'), { target: { value: 'A3' } });
+    fireEvent.change(await screen.findByLabelText('FG Produced on this date'), { target: { value: '25' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add Production/ }));
+    await waitFor(() => expect(saved.length).toBe(1));
+    expect(posted.filter((p) => p.u.includes('/movement')).length).toBe(0);
   });
 });
 
