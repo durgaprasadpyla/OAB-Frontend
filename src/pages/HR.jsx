@@ -362,8 +362,18 @@ function Employees() {
 
           <div className="ctitle" style={{ fontSize: 11, margin: '8px 0 2px' }}>Position</div>
           <div className="g4">
+            {/* Issues 6 §4: only the Super Admin's ACTIVE departments are offered. An
+                employee still filed under a retired (HR-added) department keeps reading
+                it, and is told to pick an approved one on the next save. */}
             <Select label="Department" v={editing.departmentId} on={(v) => setF({ departmentId: v, designationId: '' })}
-              opts={(depts.data || []).map((d) => ({ v: d.id, l: d.name }))} hint="From the Super Admin's department list" />
+              opts={[
+                ...(depts.data || []).map((d) => ({ v: d.id, l: d.name })),
+                ...(editing.departmentId && !(depts.data || []).some((d) => String(d.id) === String(editing.departmentId))
+                  ? [{ v: editing.departmentId, l: (editing.department || editing.departmentName || 'retired department') + ' (retired)' }] : []),
+              ]}
+              hint={editing.departmentId && !(depts.data || []).some((d) => String(d.id) === String(editing.departmentId))
+                ? 'This department was retired by the Super Admin — pick an approved one.'
+                : "From the Super Admin's department list (Dashboard → Drop-down selections)"} />
             <Select label="Designation" v={editing.designationId} on={(v) => setF({ designationId: v })} opts={desigOpts}
               disabled={!editing.departmentId}
               hint={editing.departmentId ? (desigOpts.length ? undefined : 'No designations for this department yet — Super Admin → Drop-down selections → Designations') : 'Pick the department first'} />

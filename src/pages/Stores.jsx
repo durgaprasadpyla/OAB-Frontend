@@ -7,6 +7,7 @@ import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
+import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
 
 // Stores Login. Four desks, in the order the day runs:
 //   Material on Hand — the landing board: every item with its characteristics,
@@ -62,7 +63,8 @@ export default function Stores() {
       {tab === 'sfg' && <Sfg flash={flash} />}
       {/* Stores 5.1: the FG tab IS the FG Entry sheet of the Super Admin login — one
           screen, one ledger, one moving / non-moving report, entered from either. */}
-      {tab === 'fg' && <FgEntryPanel heading={false} />}
+      {/* Issues 6 §15: no costing on the stores desk — quantities only. */}
+      {tab === 'fg' && <FgEntryPanel heading={false} costing="none" />}
       {tab === 'pos' && <PurchaseOrders flash={flash} />}
       {tab === 'grn' && <Grn flash={flash} />}
       {tab === 'issues' && <IssuesReturns flash={flash} />}
@@ -73,8 +75,14 @@ export default function Stores() {
 /* ───────────────────────── Material on Hand (landing) ───────────────────── */
 
 function OnHand({ flash }) {
+  const { role } = useAuth() || {};
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
+  // Issues 6 §2: items deleted from the Item Master that still hold stock. Off the
+  // board, off every picker — listed here so the stock is not lost, and so the Super
+  // Admin can move it onto the code that replaced them (360 was a duplicate of 082).
+  const [withdrawn, setWithdrawn] = useState([]);
+  const [moveTo, setMoveTo] = useState({});   // withdrawn itemId → target itemId
   const [q, setQ] = useState('');
   const [fMat, setFMat] = useState('');
   const [fSub, setFSub] = useState('');
@@ -100,8 +108,23 @@ function OnHand({ flash }) {
     try { setRows(await storesApi.onHand() || []); }
     catch (e) { flash('r', e.message); }
     finally { setBusy(false); }
+    try { setWithdrawn((await storesApi.withdrawn()) || []); } catch { setWithdrawn([]); }
   }, [flash]);
   useEffect(() => { load(); }, [load]);
+
+  async function moveStock(w) {
+    const to = moveTo[w.id];
+    if (!to) { flash('r', `Pick the item code that replaced ${w.code} first.`); return; }
+    const target = rows.find((r) => String(r.id) === String(to));
+    if (!window.confirm(`Move every roll of ${w.code} (${qty(w.closingStock)} ${w.uom || ''}) onto ${target ? target.code : to}?
+
+The rolls keep their stickers, GRN and history — only the item they belong to changes.`)) return;
+    try {
+      const r = await storesApi.moveUnits(w.id, Number(to));
+      flash('g', `Moved ${r.units} roll(s) of ${r.from} onto ${r.to}.`);
+      await load();
+    } catch (e) { flash('r', e.message); }
+  }
 
   const loadSuggestions = useCallback(async () => {
     try {
@@ -252,6 +275,46 @@ function OnHand({ flash }) {
         Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
         MSL can be typed per item, or set for every item at once from the average of the last three months&rsquo; consumption.
       </div>
+      {withdrawn.length > 0 && (
+        <div className="al al-y" style={{ marginBottom: 6 }} aria-label="Withdrawn items holding stock">
+          <b>{withdrawn.length} item{withdrawn.length === 1 ? '' : 's'} deleted from the Item Master still hold stock.</b>{' '}
+          They are no longer offered anywhere in Stores and cannot be issued.
+          {role === 'superadmin'
+            ? ' Move each one’s stock onto the item code that replaced it:'
+            : ' Ask the Super Admin to move that stock onto the retained item code.'}
+          <div className="tw" style={{ marginTop: 6 }}><table>
+            <thead><tr><th>Item code</th><th>Description</th><th>Material</th><th style={{ textAlign: 'right' }}>Stock</th><th style={{ textAlign: 'right' }}>Rolls</th>
+              {role === 'superadmin' && <th style={{ minWidth: 260 }}>Move stock onto</th>}</tr></thead>
+            <tbody>
+              {withdrawn.map((w) => {
+                const same = rows.filter((r) => String(r.materialType || '').trim().toLowerCase() === String(w.materialType || '').trim().toLowerCase()
+                  && String(r.subGroup || '').trim().toLowerCase() === String(w.subGroup || '').trim().toLowerCase());
+                return (
+                  <tr key={w.id}>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--red)' }}>{w.code}</td>
+                    <td style={{ fontSize: 11 }}>{w.name}</td>
+                    <td style={{ fontSize: 11 }}>{[w.materialType, w.subGroup, w.specialtyName].filter(Boolean).join(' / ') || '—'}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(w.closingStock)} {w.uom || ''}</td>
+                    <td style={{ textAlign: 'right' }}>{w.unitCount}</td>
+                    {role === 'superadmin' && (
+                      <td>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <select value={moveTo[w.id] || ''} onChange={(e) => setMoveTo((m) => ({ ...m, [w.id]: e.target.value }))}
+                            aria-label={`Move ${w.code} stock onto`} style={{ flex: 1 }}>
+                            <option value="">— same material / sub-group —</option>
+                            {same.map((r) => <option key={r.id} value={r.id}>{r.code} — {r.name}</option>)}
+                          </select>
+                          <button className="btn btn-s" onClick={() => moveStock(w)} aria-label={`Move ${w.code} stock`}>Move</button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        </div>
+      )}
 
       <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
         <input placeholder="Search item / code…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 200 }} />
@@ -1066,9 +1129,11 @@ function Grn({ flash }) {
                       onChange={(e) => { if (e.target.value) pickItem(i, e.target.value); else setLine(i, { itemId: '', uom: '', _search: '' }); }}>
                       <option value="">{!head.supplier ? 'choose a supplier first'
                         : narrowed.length ? '— pick by description —' : '— nothing matches the pickers above —'}</option>
-                      {narrowed.map((it) => <option key={it.id} value={it.id}>{it.name} · {it.code}</option>)}
+                      {/* Issues 6 §1: the description alone — the code is already picked beside it,
+                          and repeating it here only made the list harder to read. */}
+                      {narrowed.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
                       {l.itemId && !narrowed.some((it) => String(it.id) === String(l.itemId)) && (
-                        <option value={l.itemId}>{(itemById(l.itemId) || {}).name} · {(itemById(l.itemId) || {}).code}</option>
+                        <option value={l.itemId}>{(itemById(l.itemId) || {}).name}</option>
                       )}
                     </select>
                   </td>
@@ -1183,12 +1248,13 @@ function IssuesReturns({ flash }) {
   const [txns, setTxns] = useState([]);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ unitId: '', qty: '', so: '', department: '', note: '' });
+  const [mode, setMode] = useState('issue');   // 'issue' | 'return'
   const [split, setSplit] = useState(false);
-  // Issues 4.1 — a returned roll row is now "N rolls, each W mm wide and K kg", which
-  // is how the desk says it out loud, and is what makes the two caps below checkable.
+  // Issues 4.1 — a returned roll row is "N rolls, each W mm wide and K kg", which is
+  // how the desk says it out loud, and is what makes the two caps below checkable.
   const [children, setChildren] = useState([blankChild()]);
   // Issues 3.1: department, sale order, split width and location are all pickers
-  // here now. Typed free-hand they drifted — "Printing", "printing", "PRINTING" —
+  // here. Typed free-hand they drifted — "Printing", "printing", "PRINTING" —
   // and nothing that groups issues by department could add them up.
   const [departments, setDepartments] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -1200,9 +1266,16 @@ function IssuesReturns({ flash }) {
   const [fMat, setFMat] = useState('');
   const [fSub, setFSub] = useState('');
   const [fSpec, setFSpec] = useState('');
-  // Stores 5.1: "once a sale order is selected, then based on the sale order root,
-  // the departments dropdown will be populated" — the route's stages for that SO.
-  const [soRoute, setSoRoute] = useState(null);   // { so, departments: [names] } | null
+  // Issues 6 §3/§7/§8: the sale order's route AND its BOM, read through its JSS
+  // (GET /api/stores/so-context). The old screen asked the planning row alone, which
+  // is empty until the Plant marks the order ready — so 26/747 read "no route on
+  // file" with a route sitting on its JSS the whole time.
+  const [ctx, setCtx] = useState(null);       // { so, found, spec, route:{departments}, bom:{items}, message }
+  const [ctxBusy, setCtxBusy] = useState(false);
+  // Issues 6 §13: several rolls go out to one department for one sale order on ONE
+  // numbered slip, and the slip prints itself when Issue is pressed.
+  const [basket, setBasket] = useState([]);   // [{ unitId, internalCode, itemId, itemCode, itemName, uom, widthMm, location, qty, max }]
+  const [lastSlip, setLastSlip] = useState(null);
   // Stores 5.1: "I would want the internal code to be shown so that I'll be able to
   // write it on the roll" — the numbers the returned rolls will get.
   const [nextCodes, setNextCodes] = useState([]);
@@ -1215,7 +1288,7 @@ function IssuesReturns({ flash }) {
     let live = true;
     masterApi.listDepartments()
       .then((r) => { if (live && Array.isArray(r)) setDepartments(r); })
-      .catch(() => { /* master unreachable - the box falls back to free text */ });
+      .catch(() => { /* master unreachable - the box stays empty */ });
     // Widths come from the whole Item Master, not only what is in stock: a code
     // exists for a width whether or not there is a roll of it on the floor today.
     masterApi.listItems()
@@ -1238,7 +1311,7 @@ function IssuesReturns({ flash }) {
     return () => { live = false; };
   }, [loadNextCodes]);
 
-  /* ── the sale order comes first, and its route names the departments ── */
+  /* ── the sale order comes first; its route names the departments, its BOM the materials ── */
 
   const openSos = useMemo(() => {
     const oab = (mods.oab && mods.oab.OAB) || {};
@@ -1255,48 +1328,66 @@ function IssuesReturns({ flash }) {
 
   useEffect(() => {
     const so = String(form.so || '').trim();
-    if (!so) { setSoRoute(null); return undefined; }
+    if (!so) { setCtx(null); return undefined; }
     let live = true;
-    planningApi.soPlan(so)
-      .then((p) => {
-        if (!live) return;
-        const names = ((p && p.departments) || []).map((d) => d.departmentName).filter(Boolean);
-        setSoRoute({ so, departments: [...new Set(names)] });
-      })
-      .catch(() => { if (live) setSoRoute({ so, departments: [] }); });
+    setCtxBusy(true);
+    storesApi.soContext(so)
+      .then((c) => { if (live) setCtx(c && typeof c === 'object' ? { ...c, so } : { so, found: false, route: { departments: [] }, bom: { items: [] } }); })
+      .catch((e) => { if (live) setCtx({ so, found: false, route: { departments: [] }, bom: { items: [] }, message: e && e.message ? e.message : 'Could not read the sale order' }); })
+      .finally(() => { if (live) setCtxBusy(false); });
     return () => { live = false; };
   }, [form.so]);
 
-  // The departments offered: the SO's route when it has one, else the whole master.
-  const routeDepts = soRoute && soRoute.so === String(form.so || '').trim() ? soRoute.departments : [];
-  const deptOptions = routeDepts.length ? routeDepts : departments.map((d) => d.name);
-  const deptFromRoute = routeDepts.length > 0;
+  const soChosen = !!String(form.so || '').trim();
+  const ctxReady = !!(ctx && ctx.so === String(form.so || '').trim());
+  // §7: with a sale order chosen the department list IS the route — nothing else.
+  // Without one, the Super Admin's department master (the only source there is).
+  const routeDepts = ctxReady ? (((ctx.route || {}).departments) || []).map((d) => d.departmentName).filter(Boolean) : [];
+  const deptOptions = soChosen ? [...new Set(routeDepts)] : departments.filter((d) => d.active !== false).map((d) => d.name);
+  const routeMissing = soChosen && ctxReady && routeDepts.length === 0;
+  // §8: with a sale order chosen the material list IS the BOM — nothing else.
+  const bomItems = ctxReady ? (((ctx.bom || {}).items) || []) : [];
+  const bomMissing = soChosen && ctxReady && bomItems.length === 0;
+  const bomIds = useMemo(() => new Set(bomItems.map((b) => String(b.itemId))), [bomItems]);
+  const bomDeptOf = (id) => [...new Set(bomItems.filter((b) => String(b.itemId) === String(id)).map((b) => b.departmentName).filter(Boolean))];
+
   // A department chosen for one order does not silently carry over to another whose
   // route does not go through it.
   useEffect(() => {
-    if (deptFromRoute && form.department && !routeDepts.includes(form.department)) {
+    if (soChosen && ctxReady && form.department && !routeDepts.includes(form.department)) {
       setForm((f) => ({ ...f, department: '' }));
     }
-  }, [deptFromRoute, routeDepts, form.department]);
+  }, [soChosen, ctxReady, routeDepts, form.department]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── the material: type → sub-group → speciality → item code ── */
 
-  useEffect(() => { storesApi.onHand().then((r) => setItems((r || []).filter((x) => num(x.closingStock) > 0 || x.unitCount > 0))).catch(() => {}); }, []);
+  useEffect(() => { storesApi.onHand().then((r) => setItems((r || []).filter((x) => x.active !== false && (num(x.closingStock) > 0 || x.unitCount > 0)))).catch(() => {}); }, []);
 
   const norm = (v) => String(v || '').trim().toLowerCase();
+  // Issuing against an order: only the BOM's materials that are in stock. Returning,
+  // or issuing with no order named: everything in stock.
+  const pool = useMemo(() => (
+    (mode === 'issue' && soChosen) ? items.filter((it) => bomIds.has(String(it.id))) : items
+  ), [items, mode, soChosen, bomIds]);
+  const bomNoStock = useMemo(() => {
+    if (!(mode === 'issue' && soChosen)) return [];
+    const inStock = new Set(items.map((it) => String(it.id)));
+    const seen = new Set();
+    return bomItems.filter((b) => !inStock.has(String(b.itemId)) && !seen.has(String(b.itemId)) && seen.add(String(b.itemId)));
+  }, [bomItems, items, mode, soChosen]);
   /** Each picker offers only what the other two leave — the same narrowing as the board. */
   const opts = (key) => {
     const chosen = { materialType: fMat, subGroup: fSub, specialtyName: fSpec };
-    const pool = items.filter((r) => Object.keys(chosen).every((k) => k === key || !chosen[k] || norm(r[k]) === norm(chosen[k])));
-    const set = new Set(pool.map((r) => String(r[key] || '').trim()).filter(Boolean));
+    const p = pool.filter((r) => Object.keys(chosen).every((k) => k === key || !chosen[k] || norm(r[k]) === norm(chosen[k])));
+    const set = new Set(p.map((r) => String(r[key] || '').trim()).filter(Boolean));
     if (chosen[key]) set.add(chosen[key]);
     return [...set].sort((a, b) => a.localeCompare(b));
   };
-  const visibleItems = useMemo(() => items.filter((r) => (
+  const visibleItems = useMemo(() => pool.filter((r) => (
     (!fMat || norm(r.materialType) === norm(fMat))
     && (!fSub || norm(r.subGroup) === norm(fSub))
     && (!fSpec || norm(r.specialtyName) === norm(fSpec))
-  )), [items, fMat, fSub, fSpec]);
+  )), [pool, fMat, fSub, fSpec]);
   // Narrowing away the chosen item drops it — the code must always agree with the pickers.
   useEffect(() => {
     if (itemId && !visibleItems.some((it) => String(it.id) === String(itemId))) {
@@ -1323,19 +1414,20 @@ function IssuesReturns({ flash }) {
   useEffect(() => { loadUnits(itemId); }, [itemId, loadUnits]);
 
   const loadTxns = useCallback(async () => {
-    try { setTxns((await storesApi.txns({ limit: 50 })) || []); } catch { /* history is best-effort */ }
+    try { setTxns((await storesApi.txns({ limit: 60 })) || []); } catch { /* history is best-effort */ }
   }, []);
   useEffect(() => { loadTxns(); }, [loadTxns]);
 
   const selectedUnit = units.find((u) => String(u.id) === String(form.unitId)) || null;
   const withStock = units.filter((u) => num(u.qtyRemaining) > 0);
+  // what the basket already holds of a roll, so the same roll cannot be over-promised
+  const inBasket = (unitId) => basket.filter((b) => String(b.unitId) === String(unitId)).reduce((s, b) => s + num(b.qty), 0);
 
   /* ── Issues 4.1: a slit roll cannot come back bigger than it went out ────────
      "The total width should not be more than the initial film width", and the same
      for weight. Both caps come off the PARENT roll: the width stamped on it when it
      was received, or failing that its item's Width (mm); and the weight it was
-     received at. An unknown cap is not enforced — a roll booked before either field
-     existed must still be returnable — and the panel says so rather than pretending. */
+     received at. */
   const chosenItem = useMemo(() => items.find((it) => String(it.id) === String(itemId)) || null, [items, itemId]);
   const chosenMaster = useMemo(() => {
     const code = norm((chosenItem || {}).code);
@@ -1345,48 +1437,34 @@ function IssuesReturns({ flash }) {
   const parentWeight = selectedUnit ? num(selectedUnit.qtyReceived) : 0;
 
   /**
-   * Stores 5.1 — the widths a returned roll may be cut to, and the item code each
-   * one is. "If I give a 1,200 mm anti-fog BOPP roll, I will get two rolls of
-   * 700 mm x 500 mm or 600 mm x 600 mm anti-fog BOPP rolls only … It is not possible
-   * for me to get 600 mm x 600 mm rolls of LDPE." So the list is the widths of the
-   * item codes in the SAME material / sub-group / speciality as the roll being
-   * returned — the Item Master's own mapping of available widths — no wider than
-   * the parent. Each width carries its code, so picking the width books the roll
-   * under it. A family with no widths on file falls back to every width the
-   * business has a code for, so the desk is never stranded.
+   * Issues 6 §9-§10 — the widths a returned roll may be cut to: ONLY the item codes
+   * of the SAME material type and sub-group (and speciality, where both sides name
+   * one) as the roll being returned, no wider than the parent, from the Item Master.
+   * "If I have a 1,200 mm anti-fog BOPP roll, it'll come out as 700 and 500 mm
+   * anti-fog BOPP rolls only and it'll never become an LDPE roll."
+   *
+   * One option PER ITEM CODE (Issues 6 §12): two codes of the same width used to
+   * collapse into "340 mm · BLM312 (+1)", which told the desk nothing about the
+   * second code. Each code is now its own line, naming its width and description.
+   * There is no "other width" and no free text: a width with no code is the Super
+   * Admin's to add in the Item Master, and the screen says exactly that.
    */
-  const familyWidths = useMemo(() => {
+  const familyCodes = useMemo(() => {
     const base = chosenMaster || chosenItem;
-    const pool = masterItems.length ? masterItems : items;
+    if (!base || !selectedUnit) return [];
     const same = (a, b) => norm(a) === norm(b);
     const specOf = (it) => norm(it.specialtyName ?? it.specialty);
-    // The family is the sub-group ("anti-fog BOPP") within the material type. A
-    // speciality narrows it only when both sides name one and they differ — a code
-    // with no speciality on file is still the same film.
-    const family = base ? pool.filter((it) => same(it.materialType, base.materialType)
-      && same(it.subGroup, base.subGroup)
-      && (!specOf(it) || !specOf(base) || specOf(it) === specOf(base))) : [];
-    const list = (family.length ? family : pool)
-      .map((it) => ({ width: itemWidthMm(it), item: it }))
+    const poolAll = masterItems.length ? masterItems : items;
+    return poolAll
+      .filter((it) => it.active !== false)
+      .filter((it) => same(it.materialType, base.materialType) && same(it.subGroup, base.subGroup)
+        && (!specOf(it) || !specOf(base) || specOf(it) === specOf(base)))
+      .map((it) => ({ item: it, width: itemWidthMm(it) }))
       .filter((x) => x.width != null && x.width > 0)
-      .filter((x) => parentWidth == null || x.width <= parentWidth + 1e-6);
-    // one entry per width — the first code wins, the rest are named in the title
-    const byWidth = new Map();
-    list.forEach((x) => {
-      const k = String(x.width);
-      if (!byWidth.has(k)) byWidth.set(k, { width: x.width, items: [] });
-      byWidth.get(k).items.push(x.item);
-    });
-    // Widths already on this item's rolls stay offered (a roll booked before the
-    // master carried widths); with no code of their own they book under the parent's.
-    units.forEach((u) => {
-      const w = num(u.widthMm);
-      if (w > 0 && (parentWidth == null || w <= parentWidth + 1e-6) && !byWidth.has(String(w))) byWidth.set(String(w), { width: w, items: [] });
-    });
-    return { fromFamily: family.length > 0, widths: [...byWidth.values()].sort((a, b) => a.width - b.width) };
-  }, [masterItems, items, units, chosenMaster, chosenItem, parentWidth]);
-  const knownWidths = familyWidths.widths.map((w) => String(w.width));
-  const itemForWidth = (w) => { const hit = familyWidths.widths.find((x) => String(x.width) === String(w)); return hit ? hit.items[0] : null; };
+      .filter((x) => parentWidth == null || x.width <= parentWidth + 1e-6)
+      .sort((a, b) => a.width - b.width || String(a.item.code).localeCompare(String(b.item.code)));
+  }, [masterItems, items, chosenMaster, chosenItem, selectedUnit, parentWidth]);
+  const codeById = (id) => familyCodes.find((x) => String(x.item.id) === String(id)) || null;
 
   /** What the rows below come to — and which of them are half-filled. */
   const splitTotals = useMemo(() => {
@@ -1395,8 +1473,8 @@ function IssuesReturns({ flash }) {
       const n = Math.floor(num(c.rolls));
       const w = parseWidthMm(c.widthMm);
       const kg = num(c.weightKg);
-      if (!n && w === null && !kg) return;          // an untouched spare row
-      if (n <= 0 || w === null || kg <= 0) { incomplete = true; return; }
+      if (!n && w === null && !kg && !c.itemId) return;          // an untouched spare row
+      if (n <= 0 || w === null || kg <= 0 || !c.itemId) { incomplete = true; return; }
       rolls += n; width += n * w; weight += n * kg;
     });
     return { rolls, width, weight, incomplete };
@@ -1405,10 +1483,7 @@ function IssuesReturns({ flash }) {
    * What this roll has ALREADY produced. The rule is cumulative — "the cumulative
    * weight of the child rolls from one parent roll" — so a roll slit 700 mm today
    * and 600 mm tomorrow has produced 1300 mm off a 1200 mm parent, even though
-   * neither return broke the cap on its own. The server counts the same way; this
-   * is here so the screen agrees with it instead of promising a save that fails.
-   * Stores 5.1: the roll carries its own totals now (its children may be booked
-   * under other item codes); older rows without them are added up from the list.
+   * neither return broke the cap on its own. The server counts the same way.
    */
   const prior = useMemo(() => {
     if (!selectedUnit) return { width: 0, weight: 0, rolls: 0 };
@@ -1424,6 +1499,8 @@ function IssuesReturns({ flash }) {
   const totalWeight = splitTotals.weight + prior.weight;
   const overWidth = parentWidth != null && totalWidth > parentWidth + 1e-6;
   const overWeight = parentWeight > 0 && totalWeight > parentWeight + 1e-6;
+  // §11: "show remaining available weight"
+  const remainingWeight = parentWeight > 0 ? Math.max(0, parentWeight - totalWeight) : null;
 
   /** The sticker numbers row `i` will get: the next unused ones after the rows above it. */
   const projectedCodes = (i) => {
@@ -1439,15 +1516,51 @@ function IssuesReturns({ flash }) {
 
   const setChild = (i, patch) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
+  /* ── issuing: build the slip, then book it and print it ── */
+
+  function addToBasket() {
+    if (!selectedUnit) { flash('r', 'Pick a roll to put on the slip.'); return; }
+    const q = num(form.qty);
+    if (q <= 0) { flash('r', 'Enter the quantity to issue from ' + selectedUnit.internalCode + '.'); return; }
+    const free = num(selectedUnit.qtyRemaining) - inBasket(selectedUnit.id);
+    if (q > free + 1e-9) {
+      flash('r', `Only ${qty(free)} ${selectedUnit.uom || ''} of ${selectedUnit.internalCode} is left${inBasket(selectedUnit.id) ? ' after what is already on this slip' : ''}.`);
+      return;
+    }
+    setBasket((b) => [...b, {
+      unitId: selectedUnit.id, internalCode: selectedUnit.internalCode, itemId: chosenItem ? chosenItem.id : itemId,
+      itemCode: chosenItem ? chosenItem.code : '', itemName: chosenItem ? chosenItem.name : '', uom: selectedUnit.uom || (chosenItem || {}).uom || '',
+      widthMm: selectedUnit.widthMm, location: selectedUnit.location, qty: q,
+    }]);
+    setForm((f) => ({ ...f, qty: '', unitId: '' }));
+  }
+
   async function doIssue() {
-    if (!form.unitId || num(form.qty) <= 0) { flash('r', 'Pick a roll and enter the quantity to issue.'); return; }
+    if (!basket.length) { flash('r', 'Add at least one roll to the slip first (pick a roll, enter the quantity, ＋ Add to slip).'); return; }
+    if (!String(form.department || '').trim()) { flash('r', 'Pick the department this material goes to.'); return; }
+    if (soChosen && routeMissing) { flash('r', (ctx && ctx.message) || `No route allocated to ${form.so}.`); return; }
     setBusy(true);
     try {
-      await storesApi.issue({ unitId: Number(form.unitId), qty: Number(form.qty), so: form.so || undefined, department: form.department || undefined, note: form.note || undefined });
-      flash('g', `Issued ${form.qty} from ${selectedUnit ? selectedUnit.internalCode : 'the roll'}${form.so ? ' to ' + form.so : ''}${form.department ? ' (' + form.department + ')' : ''}.`);
-      setForm((f) => ({ ...f, qty: '', note: '' }));
+      const slip = await storesApi.issueBatch({
+        so: form.so || undefined, department: form.department, note: form.note || undefined,
+        lines: basket.map((b) => ({ unitId: Number(b.unitId), qty: Number(b.qty) })),
+      });
+      setLastSlip(slip);
+      let pdfNote = '';
+      try { pdfNote = ' Slip ' + saveIssueSlipPdf(slip) + ' downloaded — print it and hand it over with the material.'; }
+      catch (e) { pdfNote = ' (The slip PDF could not be generated here: ' + (e && e.message ? e.message : e) + ' — use ⬇ PDF in the history below.)'; }
+      flash('g', `✓ ${slip.slipNo}: ${(slip.lines || []).length} roll(s), ${qty(slip.totalQty)} issued to ${slip.department}${slip.so ? ' for ' + slip.so : ''}.${pdfNote}`);
+      setBasket([]);
+      setForm((f) => ({ ...f, qty: '', note: '', unitId: '' }));
       await loadUnits(itemId); await loadTxns();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
+  }
+
+  async function reprint(slipNo) {
+    try {
+      const slip = await storesApi.slip(slipNo);
+      saveIssueSlipPdf(slip);
+    } catch (e) { flash('r', e.message); }
   }
 
   async function doReturn() {
@@ -1458,7 +1571,7 @@ function IssuesReturns({ flash }) {
       // returned roll" is the wrong thing to say to someone who has entered three
       // quarters of one.
       if (splitTotals.incomplete) {
-        flash('r', 'Every returned roll needs a count, a width and a weight — one of the rows below is half filled in.');
+        flash('r', 'Every returned roll needs a count, a width (item code) and a weight — one of the rows below is half filled in.');
         return;
       }
       if (!splitTotals.rolls) { flash('r', 'Enter at least one returned roll.'); return; }
@@ -1486,15 +1599,14 @@ function IssuesReturns({ flash }) {
         const n = Math.floor(num(c.rolls));
         const w = parseWidthMm(c.widthMm);
         const kg = num(c.weightKg);
-        if (n <= 0 || w === null || kg <= 0) return;
-        const item = c.itemId ? c.itemId : (itemForWidth(w) || {}).id;
+        if (n <= 0 || w === null || kg <= 0 || !c.itemId) return;
         for (let k = 0; k < n; k++) {
           kids.push({
             qty: kg, widthMm: w,
             internalCode: n === 1 && c.internalCode ? c.internalCode : undefined,
             location: c.location || undefined, status: 'RETURNED',
-            // Stores 5.1: the item code of that width, when the master has one.
-            itemId: item ? Number(item) : undefined,
+            // Issues 6 §9-10: the item code of that width, always — the server refuses a roll without one.
+            itemId: Number(c.itemId),
           });
         }
       });
@@ -1517,6 +1629,7 @@ function IssuesReturns({ flash }) {
   }
 
   const itemDesc = (chosenItem || {}).name || '';
+  const basketTotal = basket.reduce((s, b) => s + num(b.qty), 0);
 
   return (
     <>
@@ -1524,7 +1637,13 @@ function IssuesReturns({ flash }) {
         <div className="ctitle">🔄 Issue to the shop floor / receive a return</div>
         <div className="al al-b">
           Rolls are listed oldest first — <strong>issue from the top</strong> (FIFO). Issues and returns move the closing
-          stock on the Material on Hand board immediately.
+          stock on the Material on Hand board immediately. With a sale order chosen, the department comes from
+          its <strong>route</strong> and the material from its <strong>BOM</strong> — nothing else is offered.
+        </div>
+
+        <div className="step-bar" style={{ marginBottom: 6 }}>
+          <div className={'step-tab' + (mode === 'issue' ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setMode('issue')} role="tab" aria-selected={mode === 'issue'}>↗ Issue material</div>
+          <div className={'step-tab' + (mode === 'return' ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => { setMode('return'); setBasket([]); }} role="tab" aria-selected={mode === 'return'}>↙ Receive a return</div>
         </div>
 
         {/* Stores 5.1: "the first selection should be for Sale Order and then … the
@@ -1534,48 +1653,59 @@ function IssuesReturns({ flash }) {
         <div className="g4">
           <div className="fg">
             <label>Sale order {soFromPlan ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(planned)</span> : null}</label>
-            {/* Every open order, today's planned ones first and marked; with no list
-                readable it falls back to a plain box rather than leaving the desk
-                unable to say which order the material went to. */}
             {soOptions.length ? (
-              <select value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value, department: '' })} aria-label="Sale order">
+              <select value={form.so} onChange={(e) => { setForm({ ...form, so: e.target.value, department: '' }); setBasket([]); setItemId(''); }} aria-label="Sale order">
                 <option value="">— none —</option>
                 {soOptions.map((v) => <option key={v} value={v}>{v}{plannedSet.has(v) ? ' · planned today' : ''}</option>)}
                 {form.so && !soOptions.includes(form.so) && <option value={form.so}>{form.so}</option>}
               </select>
             ) : (
-              <input value={form.so} onChange={(e) => setForm({ ...form, so: e.target.value })}
+              <input value={form.so} onChange={(e) => { setForm({ ...form, so: e.target.value }); setBasket([]); }}
                 aria-label="Sale order" placeholder={plannedSos === null ? 'type the SO' : 'nothing planned today — type the SO'} />
             )}
             <div className="pg-sub" style={{ margin: '3px 0 0' }}>
-              {SO_SOURCE === 'planned'
-                ? 'Only sale orders PPC has planned are offered.'
-                : `All open sale orders${plannedSet.size ? `; ${plannedSet.size} planned today are listed first` : ''}.`}
+              {ctxBusy ? 'Reading the route and BOM…'
+                : ctxReady && ctx.found
+                  ? <>JSS <b>{ctx.spec || '—'}</b>{ctx.customer ? ` · ${ctx.customer}` : ''}{ctx.jobName ? ` · ${ctx.jobName}` : ''}
+                    {ctx.route && ctx.route.routeName ? ` · route ${ctx.route.routeName}` : ''}</>
+                  : SO_SOURCE === 'planned'
+                    ? 'Only sale orders PPC has planned are offered.'
+                    : `All open sale orders${plannedSet.size ? `; ${plannedSet.size} planned today are listed first` : ''}.`}
             </div>
           </div>
           <div className="fg">
-            <label>Department {deptFromRoute ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(from the route of {form.so})</span> : null}</label>
-            {deptOptions.length ? (
-              <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department">
-                <option value="">— none —</option>
-                {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-                {form.department && !deptOptions.includes(form.department) && <option value={form.department}>{form.department}</option>}
-              </select>
-            ) : (
-              <input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department" placeholder="e.g. Printing" />
-            )}
-            {form.so && soRoute && soRoute.so === String(form.so).trim() && !deptFromRoute && (
-              <div className="pg-sub" style={{ margin: '3px 0 0', color: '#B7770D' }}>
-                No route on file for {form.so} yet — every department is offered.
+            <label>Department {soChosen && ctxReady && routeDepts.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(from the route of {form.so})</span> : null}</label>
+            <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} aria-label="Department"
+              disabled={soChosen && (!ctxReady || routeMissing)}>
+              <option value="">{soChosen && routeMissing ? '— no route allocated —' : '— select —'}</option>
+              {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {routeMissing && (
+              <div className="pg-sub" style={{ margin: '3px 0 0', color: 'var(--red)' }} role="alert">
+                No route is allocated to {form.so}{ctx && ctx.spec ? ` (JSS ${ctx.spec})` : ''} — ask QC / the Super Admin to allocate it under Route and BOM. Material cannot be issued against this order until then.
               </div>
+            )}
+            {!soChosen && (
+              <div className="pg-sub" style={{ margin: '3px 0 0' }}>Departments are the Super Admin&rsquo;s list. Pick a sale order to narrow this to its route.</div>
             )}
           </div>
           <div className="fg"><label>Note</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} aria-label="Note" /></div>
         </div>
 
         {/* Stores 5.1: "the next items should be: Material, Subgroup, Specialty,
-            including the item code. All of these should be the dropdown selections." */}
-        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The material</div>
+            including the item code. All of these should be the dropdown selections."
+            Issues 6 §8: with a sale order chosen, only the BOM's materials. */}
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The material{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}</span> : null}</div>
+        {mode === 'issue' && bomMissing && (
+          <div className="al al-r" role="alert">
+            No BOM is allocated to {form.so}{ctx && ctx.spec ? ` (JSS ${ctx.spec})` : ''} — ask QC / the Super Admin to allocate it under Route and BOM. Material cannot be issued against this order until then.
+          </div>
+        )}
+        {mode === 'issue' && bomNoStock.length > 0 && (
+          <div className="pg-sub" style={{ marginTop: 0, color: '#B7770D' }}>
+            On the BOM but not in stock: {bomNoStock.map((b) => b.itemCode).join(', ')}.
+          </div>
+        )}
         <div className="g4">
           <div className="fg"><label>Material type</label>
             <select value={fMat} onChange={(e) => { setFMat(e.target.value); setFSub(''); setFSpec(''); }} aria-label="Material type">
@@ -1595,10 +1725,14 @@ function IssuesReturns({ flash }) {
           {/* Issues 3.1: "the item code should be different and the description should
               be different" — the code is what is stencilled on the roll, so it is what
               is picked; the description reads back beside it. */}
-          <div className="fg"><label>Item code <span style={{ fontWeight: 400, color: 'var(--i3)' }}>({visibleItems.length} in stock)</span></label>
-            <select value={itemId} onChange={(e) => chooseItem(e.target.value)} aria-label="Item">
+          <div className="fg"><label>Item code <span style={{ fontWeight: 400, color: 'var(--i3)' }}>({visibleItems.length} {mode === 'issue' && soChosen ? 'on the BOM, in stock' : 'in stock'})</span></label>
+            <select value={itemId} onChange={(e) => chooseItem(e.target.value)} aria-label="Item" disabled={mode === 'issue' && soChosen && (!ctxReady || bomMissing)}>
               <option value="">— select an item code —</option>
-              {visibleItems.map((it) => <option key={it.id} value={it.id}>{it.code}</option>)}
+              {visibleItems.map((it) => (
+                <option key={it.id} value={it.id}>
+                  {it.code}{mode === 'issue' && soChosen && bomDeptOf(it.id).length ? ` · for ${bomDeptOf(it.id).join(' / ')}` : ''}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -1611,16 +1745,17 @@ function IssuesReturns({ flash }) {
           <div className="fg"><label>Roll / can (oldest first)</label>
             <select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })} aria-label="Roll">
               <option value="">— select a roll —</option>
-              {units.map((u, i) => (
+              {(mode === 'issue' ? withStock : units).map((u, i) => (
                 <option key={u.id} value={u.id}>
-                  {i === 0 && num(u.qtyRemaining) > 0 ? '① ' : ''}{u.internalCode} · {qty(u.qtyRemaining)} {u.uom || ''}{u.widthMm ? ` · ${qty(u.widthMm)}mm` : ''}{u.location ? ` · ${u.location}` : ''}
+                  {i === 0 && num(u.qtyRemaining) > 0 ? '① ' : ''}{u.internalCode} · {qty(num(u.qtyRemaining) - (mode === 'issue' ? inBasket(u.id) : 0))} {u.uom || ''}{u.widthMm ? ` · ${qty(u.widthMm)}mm` : ''}{u.location ? ` · ${u.location}` : ''}
                 </option>
               ))}
             </select>
           </div>
           <div className="fg"><label>Quantity</label>
             <input type="number" step="any" min="0" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
-              aria-label="Quantity" disabled={split} placeholder={selectedUnit ? `max ${qty(selectedUnit.qtyRemaining)}` : ''} />
+              aria-label="Quantity" disabled={mode === 'return' && split}
+              placeholder={selectedUnit ? `max ${qty(num(selectedUnit.qtyRemaining) - (mode === 'issue' ? inBasket(selectedUnit.id) : 0))}` : ''} />
           </div>
           <div className="fg"><label>Internal code</label>
             <input value={selectedUnit ? selectedUnit.internalCode : ''} readOnly tabIndex={-1} aria-label="Internal code of the roll"
@@ -1628,188 +1763,198 @@ function IssuesReturns({ flash }) {
           </div>
         </div>
 
-        <label className="cb" style={{ fontSize: 12, marginTop: 4 }}>
-          <input type="checkbox" checked={split} onChange={(e) => setSplit(e.target.checked)} aria-label="Returned as narrower rolls" />
-          <span>The roll came back cut into narrower rolls</span>
-        </label>
-        {split && (
-          <div style={{ marginTop: 6 }}>
-            <div className="pg-sub" style={{ marginTop: 0 }}>
-              A 1200&nbsp;mm roll issued and returned as 700 + 500&nbsp;mm: enter each returned roll below. Each becomes its own
-              roll with its own sticker, and the original roll is left at zero. Say how many rolls of each width came
-              back and what one of them weighs — <strong>the widths and the weights cannot add up to more than the roll
-              they were cut from</strong>. The width list is the item codes of the same material, sub-group and speciality,
-              and the roll is booked under the code of its width.
+        {mode === 'issue' && (
+          <>
+            <div className="act" style={{ justifyContent: 'flex-start' }}>
+              <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit}>＋ Add to slip</button>
+              <span className="pg-sub" style={{ margin: 0 }}>Add every roll going to {form.department || 'the department'}{form.so ? ` for ${form.so}` : ''}, then press Issue — one slip, one PDF.</span>
             </div>
-            {/* Issues 3.1: the parent-child link, said out loud — every roll entered
-                below is recorded as having come off this one. */}
-            {selectedUnit && (
-              <div className="al al-b" style={{ margin: '6px 0' }}>
-                Cut from <b>{selectedUnit.internalCode}</b>
-                {chosenItem ? ` (${chosenItem.code})` : ''}
-                {parentWidth != null ? ` · ${qty(parentWidth)} mm` : ''}
-                {parentWeight > 0 ? ` · ${qty(parentWeight)} ${selectedUnit.uom || ''}` : ''}
-                {selectedUnit.location ? ` · ${selectedUnit.location}` : ''} — each roll below is linked back to it.
-                {parentWidth == null && (
-                  /* Issues 4.1: no width on the roll and none on its item, so the width
-                     rule has nothing to check against. Say so — silently not enforcing
-                     it is how a 700 + 600 gets booked against a 1200. */
-                  <div style={{ fontSize: 11, color: '#B7770D', marginTop: 3 }}>
-                    No width on file for this roll or its item, so the total width cannot be checked. Set the item&rsquo;s
-                    Width (mm) on the Padmin Item Master.
-                  </div>
-                )}
-                {!familyWidths.fromFamily && knownWidths.length > 0 && (
-                  <div style={{ fontSize: 11, color: '#B7770D', marginTop: 3 }}>
-                    No other item code shares this roll&rsquo;s material, sub-group and speciality — every width on file is offered.
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="ctitle" style={{ fontSize: 11, margin: '8px 0 2px' }}>③ The slip <span className="tag tgr">{basket.length}</span></div>
             <div className="tw"><table>
               <thead><tr>
-                <th style={{ width: 80 }}>Rolls *</th><th style={{ width: 150 }}>Width (mm) *</th>
-                <th style={{ width: 120 }}>Item code</th>
-                {/* Issues 4.1 — "there should be one more field for the child rolls'
-                    weight". One roll's weight, so N rolls of it is N × this, and the
-                    cumulative figure can be held against the parent roll's weight. */}
-                <th style={{ width: 130 }}>Weight each *</th>
-                <th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th>
+                <th style={{ width: 30 }}>#</th><th>Roll / sticker</th><th>Item code</th><th>Description</th>
+                <th style={{ textAlign: 'right' }}>Width</th><th>Rack</th><th style={{ textAlign: 'right' }}>Quantity</th><th style={{ width: 40 }}></th>
               </tr></thead>
               <tbody>
-                {children.map((c, i) => {
-                  const codes = projectedCodes(i);
-                  const n = Math.floor(num(c.rolls));
-                  const codeItem = c.itemId ? (masterItems.find((it) => String(it.id) === String(c.itemId))
-                    || items.find((it) => String(it.id) === String(c.itemId))) : null;
-                  return (
-                    <tr key={i}>
-                      <td><input type="number" step="1" min="1" className="nospin" value={c.rolls}
-                        aria-label={`Returned rolls ${i + 1}`} placeholder="1"
-                        onChange={(e) => setChild(i, { rolls: e.target.value })} /></td>
-                      <td>
-                        {/* Issues 3.1: item codes are allocated by width, so a returned
-                            roll may only be cut to a width already on file. A width that
-                            is missing is the Super Admin's to add, not the desk's.
-                            Stores 5.1: the list is the roll's own material family, and
-                            picking a width picks its item code. */}
-                        {knownWidths.length ? (
-                          <>
-                            <select value={c._other ? '__other__' : c.widthMm} aria-label={`Returned width ${i + 1}`} style={{ width: '100%' }}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                if (v === '__other__') setChild(i, { _other: true, widthMm: '', itemId: '' });
-                                else setChild(i, { _other: false, widthMm: v, itemId: (itemForWidth(v) || {}).id || '' });
-                              }}>
-                              <option value="">— width —</option>
-                              {familyWidths.widths.map((w) => (
-                                <option key={w.width} value={String(w.width)} title={w.items.map((it) => it.code).join(', ')}>
-                                  {w.width} mm{w.items.length ? ` · ${w.items[0].code}` : ''}{w.items.length > 1 ? ` (+${w.items.length - 1})` : ''}
-                                </option>
-                              ))}
-                              {c.widthMm && !c._other && !knownWidths.includes(String(c.widthMm)) && <option value={c.widthMm}>{c.widthMm} mm</option>}
-                              <option value="__other__">＋ Other width…</option>
-                            </select>
-                            {c._other && (
-                              <>
-                                <input type="number" step="any" min="0" value={c.widthMm} className="nospin"
-                                  aria-label={`Returned width ${i + 1} other`} placeholder="mm" style={{ marginTop: 3 }}
-                                  onChange={(e) => setChild(i, { widthMm: e.target.value, itemId: '' })} />
-                                <div style={{ fontSize: 9, color: '#B7770D', marginTop: 2 }}>
-                                  No item code for this width yet — booked under {chosenItem ? chosenItem.code : 'the parent roll’s code'}; ask the Super Admin to add one.
-                                </div>
-                              </>
-                            )}
-                          </>
-                        ) : (
-                          <input type="number" step="any" min="0" value={c.widthMm} aria-label={`Returned width ${i + 1}`}
-                            onChange={(e) => setChild(i, { widthMm: e.target.value })} />
-                        )}
-                      </td>
-                      <td>
-                        {/* Stores 5.1: "Based on that selection I want the item code also
-                            to be populated." Read-only: it follows the width. */}
-                        <input value={codeItem ? codeItem.code : (c.widthMm && chosenItem ? chosenItem.code : '')} readOnly tabIndex={-1}
-                          aria-label={`Returned item code ${i + 1}`} placeholder="from the width"
-                          title={codeItem ? codeItem.name : (c.widthMm && chosenItem ? 'No code for this width — stays under the parent roll’s item' : '')}
-                          style={{ background: 'var(--bg)', color: codeItem ? 'var(--blu)' : 'var(--i3)', fontFamily: 'monospace', fontWeight: 700, cursor: 'not-allowed' }} />
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }} value={c.weightKg}
-                            aria-label={`Returned weight ${i + 1}`} placeholder="per roll"
-                            onChange={(e) => setChild(i, { weightKg: e.target.value })} />
-                          <span style={{ fontSize: 10, color: 'var(--i3)' }}>{(selectedUnit && selectedUnit.uom) || 'kg'}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <input value={c.internalCode} placeholder={n === 1 && codes[0] ? codes[0] : 'auto'} aria-label={`Returned internal code ${i + 1}`}
-                          disabled={n > 1}
-                          title={n === 1 && codes[0] ? `Will be ${codes[0]} unless you type another code` : ''}
-                          onChange={(e) => setChild(i, { internalCode: e.target.value })} />
-                        {/* Stores 5.1: the sticker number(s) this row will get, so they
-                            can be written on the rolls now; fixed when Receive return
-                            is pressed, and repeated in the confirmation. */}
-                        {n > 1 ? (
-                          <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
-                            aria-label={`Stickers for returned row ${i + 1}`}>
-                            🏷 {codes.length ? `${codes[0]} … ${codes[codes.length - 1]}` : `${n} stickers, assigned on receive`}
-                          </div>
-                        ) : (!String(c.internalCode || '').trim() && codes[0] ? (
-                          <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
-                            aria-label={`Stickers for returned row ${i + 1}`}>🏷 {codes[0]}</div>
-                        ) : null)}
-                      </td>
-                      <td>
-                        {/* Issues 3.1: the rack is picked from the Super Admin's list, the
-                            same list the GRN puts material away into. */}
-                        {locations.length ? (
-                          <select value={c.location} aria-label={`Returned location ${i + 1}`} style={{ width: '100%' }}
-                            onChange={(e) => setChild(i, { location: e.target.value })}>
-                            <option value="">— rack —</option>
-                            {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
-                            {c.location && !locations.some((loc) => loc.name === c.location) && <option value={c.location}>{c.location}</option>}
-                          </select>
-                        ) : (
-                          <input value={c.location} aria-label={`Returned location ${i + 1}`}
-                            onChange={(e) => setChild(i, { location: e.target.value })} />
-                        )}
-                      </td>
-                      <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => setChildren((cs) => (cs.length === 1 ? cs : cs.filter((_, j) => j !== i)))}>✕</button></td>
-                    </tr>
-                  );
-                })}
+                {basket.length === 0 ? (
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: 12, color: 'var(--i3)' }}>Nothing on the slip yet</td></tr>
+                ) : basket.map((b, i) => (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{b.internalCode}</td>
+                    <td style={{ fontFamily: 'monospace' }}>{b.itemCode}</td>
+                    <td style={{ fontSize: 11 }}>{b.itemName}</td>
+                    <td style={{ textAlign: 'right' }}>{b.widthMm ? qty(b.widthMm) : '—'}</td>
+                    <td style={{ fontSize: 11 }}>{b.location || '—'}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(b.qty)} {b.uom}</td>
+                    <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} aria-label={`Remove ${b.internalCode} from the slip`}
+                      onClick={() => setBasket((bs) => bs.filter((_, j) => j !== i))}>✕</button></td>
+                  </tr>
+                ))}
+                {basket.length > 0 && (
+                  <tr><td colSpan={6} style={{ textAlign: 'right', fontWeight: 700 }}>Total</td><td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(basketTotal)}</td><td></td></tr>
+                )}
               </tbody>
             </table></div>
-            <button className="btn btn-s" onClick={() => setChildren((cs) => [...cs, blankChild()])}>＋ Another roll back</button>
-            {/* Issues 4.1 — the two running totals, against the two caps, before the
-                button is pressed. The desk should not have to submit to find out that
-                700 + 600 does not come off a 1200. */}
-            {splitTotals.rolls > 0 && (
-              <div className={'al ' + (overWidth || overWeight ? 'al-r' : 'al-g')} style={{ marginTop: 6 }}>
-                <b>{splitTotals.rolls}</b> roll{splitTotals.rolls === 1 ? '' : 's'} back
-                {' · '}total width <b>{qty(totalWidth)} mm</b>
-                {parentWidth != null ? ` of ${qty(parentWidth)} mm` : ' (roll width unknown)'}
-                {' · '}total weight <b>{qty(totalWeight)}</b>
-                {parentWeight > 0 ? ` of ${qty(parentWeight)}` : ''} {(selectedUnit && selectedUnit.uom) || ''}
-                {prior.rolls > 0 && (
-                  <div style={{ fontSize: 11, marginTop: 2 }}>
-                    Includes {prior.rolls} roll{prior.rolls === 1 ? '' : 's'} already back off this one
-                    ({qty(prior.width)} mm, {qty(prior.weight)} {(selectedUnit && selectedUnit.uom) || ''}).
-                  </div>
-                )}
-                {overWidth && <div>⚠ That is wider than the roll they were cut from — a {qty(parentWidth)} mm roll
-                  cuts into widths that add up to {qty(parentWidth)}, no more.</div>}
-                {overWeight && <div>⚠ That is heavier than the roll they were cut from ({qty(parentWeight)}).</div>}
-              </div>
-            )}
-          </div>
+            <div className="act">
+              <button className="btn btn-g" onClick={doIssue} disabled={busy || !basket.length}>{busy ? 'Issuing…' : '↗ Issue & print slip (PDF)'}</button>
+              {lastSlip && (
+                <button className="btn btn-s" onClick={() => saveIssueSlipPdf(lastSlip)} aria-label={`Download slip ${lastSlip.slipNo} again`}>⬇ Slip {lastSlip.slipNo} again</button>
+              )}
+            </div>
+          </>
         )}
 
-        <div className="act">
-          <button className="btn btn-g" onClick={doIssue} disabled={busy || split}>↗ Issue</button>
-          <button className="btn btn-s" onClick={doReturn} disabled={busy}>↙ Receive return</button>
-        </div>
+        {mode === 'return' && (
+          <>
+            <label className="cb" style={{ fontSize: 12, marginTop: 4 }}>
+              <input type="checkbox" checked={split} onChange={(e) => setSplit(e.target.checked)} aria-label="Returned as narrower rolls" />
+              <span>The roll came back cut into narrower rolls</span>
+            </label>
+            {split && (
+              <div style={{ marginTop: 6 }}>
+                <div className="pg-sub" style={{ marginTop: 0 }}>
+                  A 1200&nbsp;mm roll issued and returned as 700 + 500&nbsp;mm: enter each returned roll below. Each becomes its own
+                  roll with its own sticker, and the original roll is left at zero. <strong>The widths and the weights cannot add
+                  up to more than the roll they were cut from.</strong> The width list is the item codes of the same material
+                  type, sub-group and speciality in the Item Master — a roll is booked under the code of its width, and a width
+                  that is not listed has to be added there by the Super Admin first.
+                </div>
+                {!selectedUnit ? (
+                  <div className="al al-y" style={{ margin: '6px 0' }}>Pick the roll that came back (② above) first — the widths offered depend on its material.</div>
+                ) : (
+                  <div className="al al-b" style={{ margin: '6px 0' }}>
+                    Cut from <b>{selectedUnit.internalCode}</b>
+                    {chosenItem ? ` (${chosenItem.code} · ${[chosenItem.materialType, chosenItem.subGroup, chosenItem.specialtyName].filter(Boolean).join(' / ')})` : ''}
+                    {parentWidth != null ? ` · ${qty(parentWidth)} mm` : ''}
+                    {parentWeight > 0 ? ` · ${qty(parentWeight)} ${selectedUnit.uom || ''}` : ''}
+                    {selectedUnit.location ? ` · ${selectedUnit.location}` : ''} — each roll below is linked back to it.
+                    {parentWidth == null && (
+                      <div style={{ fontSize: 11, color: '#B7770D', marginTop: 3 }}>
+                        No width on file for this roll or its item, so the total width cannot be checked. Set the item&rsquo;s
+                        Width (mm) on the Padmin Item Master.
+                      </div>
+                    )}
+                    {familyCodes.length === 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 3 }} role="alert">
+                        No narrower width is available for this material type and subgroup. Please ask the Super Admin to add the appropriate item in the Item Master.
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="tw"><table>
+                  <thead><tr>
+                    <th style={{ width: 80 }}>Rolls *</th><th style={{ width: 260 }}>Width · item code *</th>
+                    <th style={{ width: 130 }}>Weight each *</th>
+                    <th>Internal code</th><th style={{ width: 150 }}>Location</th><th style={{ width: 40 }}></th>
+                  </tr></thead>
+                  <tbody>
+                    {children.map((c, i) => {
+                      const codes = projectedCodes(i);
+                      const n = Math.floor(num(c.rolls));
+                      const picked = codeById(c.itemId);
+                      return (
+                        <tr key={i}>
+                          <td><input type="number" step="1" min="1" className="nospin" value={c.rolls}
+                            aria-label={`Returned rolls ${i + 1}`} placeholder="1"
+                            onChange={(e) => setChild(i, { rolls: e.target.value })} /></td>
+                          <td>
+                            {/* Issues 6 §9-§12: one option per item code of the family — the
+                                width, the code and the description, nothing collapsed into
+                                "(+1)". No "other width": a missing width is added in the Item
+                                Master by the Super Admin, never typed here. */}
+                            <select value={c.itemId || ''} aria-label={`Returned width ${i + 1}`} style={{ width: '100%' }}
+                              disabled={!selectedUnit || familyCodes.length === 0}
+                              onChange={(e) => {
+                                const hit = codeById(e.target.value);
+                                setChild(i, { itemId: e.target.value, widthMm: hit ? String(hit.width) : '' });
+                              }}>
+                              <option value="">{!selectedUnit ? '— pick the roll first —' : familyCodes.length ? '— width · item code —' : '— no width on file for this material —'}</option>
+                              {familyCodes.map((x) => (
+                                <option key={x.item.id} value={x.item.id}>
+                                  {x.width} mm · {x.item.code}{x.item.name ? ` — ${x.item.name}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            {picked && (
+                              <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>
+                                {picked.item.code} · {[picked.item.materialType, picked.item.subGroup, picked.item.specialtyName].filter(Boolean).join(' / ')}
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <input type="number" step="any" min="0" className="nospin" style={{ flex: 1 }} value={c.weightKg}
+                                aria-label={`Returned weight ${i + 1}`} placeholder="per roll"
+                                onChange={(e) => setChild(i, { weightKg: e.target.value })} />
+                              <span style={{ fontSize: 10, color: 'var(--i3)' }}>{(selectedUnit && selectedUnit.uom) || 'kg'}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <input value={c.internalCode} placeholder={n === 1 && codes[0] ? codes[0] : 'auto'} aria-label={`Returned internal code ${i + 1}`}
+                              disabled={n > 1}
+                              title={n === 1 && codes[0] ? `Will be ${codes[0]} unless you type another code` : ''}
+                              onChange={(e) => setChild(i, { internalCode: e.target.value })} />
+                            {n > 1 ? (
+                              <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
+                                aria-label={`Stickers for returned row ${i + 1}`}>
+                                🏷 {codes.length ? `${codes[0]} … ${codes[codes.length - 1]}` : `${n} stickers, assigned on receive`}
+                              </div>
+                            ) : (!String(c.internalCode || '').trim() && codes[0] ? (
+                              <div style={{ fontSize: 10, color: 'var(--blu)', fontFamily: 'monospace', fontWeight: 700, marginTop: 2 }}
+                                aria-label={`Stickers for returned row ${i + 1}`}>🏷 {codes[0]}</div>
+                            ) : null)}
+                          </td>
+                          <td>
+                            {locations.length ? (
+                              <select value={c.location} aria-label={`Returned location ${i + 1}`} style={{ width: '100%' }}
+                                onChange={(e) => setChild(i, { location: e.target.value })}>
+                                <option value="">— rack —</option>
+                                {locations.map((loc) => <option key={loc.id} value={loc.name}>{loc.name}</option>)}
+                                {c.location && !locations.some((loc) => loc.name === c.location) && <option value={c.location}>{c.location}</option>}
+                              </select>
+                            ) : (
+                              <input value={c.location} aria-label={`Returned location ${i + 1}`}
+                                onChange={(e) => setChild(i, { location: e.target.value })} />
+                            )}
+                          </td>
+                          <td><button className="btn btn-r" style={{ height: 24, fontSize: 11, padding: '0 6px' }} onClick={() => setChildren((cs) => (cs.length === 1 ? cs : cs.filter((_, j) => j !== i)))}>✕</button></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table></div>
+                <button className="btn btn-s" onClick={() => setChildren((cs) => [...cs, blankChild()])} disabled={!selectedUnit || familyCodes.length === 0}>＋ Another roll back</button>
+                {/* Issues 4.1 / 6 §11 — the running totals against the two caps, and what
+                    is still available, before the button is pressed. */}
+                {selectedUnit && (splitTotals.rolls > 0 || prior.rolls > 0) && (
+                  <div className={'al ' + (overWidth || overWeight ? 'al-r' : 'al-g')} style={{ marginTop: 6 }} aria-label="Split totals">
+                    <b>{splitTotals.rolls}</b> roll{splitTotals.rolls === 1 ? '' : 's'} back
+                    {' · '}total width <b>{qty(totalWidth)} mm</b>
+                    {parentWidth != null ? ` of ${qty(parentWidth)} mm` : ' (roll width unknown)'}
+                    {' · '}total weight <b>{qty(totalWeight)}</b>
+                    {parentWeight > 0 ? ` of ${qty(parentWeight)}` : ''} {(selectedUnit && selectedUnit.uom) || ''}
+                    {remainingWeight != null && (
+                      <> {' · '}remaining <b>{qty(remainingWeight)} {(selectedUnit && selectedUnit.uom) || ''}</b></>
+                    )}
+                    {prior.rolls > 0 && (
+                      <div style={{ fontSize: 11, marginTop: 2 }}>
+                        Includes {prior.rolls} roll{prior.rolls === 1 ? '' : 's'} already back off this one
+                        ({qty(prior.width)} mm, {qty(prior.weight)} {(selectedUnit && selectedUnit.uom) || ''}).
+                      </div>
+                    )}
+                    {overWidth && <div>⚠ That is wider than the roll they were cut from — a {qty(parentWidth)} mm roll
+                      cuts into widths that add up to {qty(parentWidth)}, no more.</div>}
+                    {overWeight && <div>⚠ That is heavier than the roll they were cut from ({qty(parentWeight)}) — the child rolls cannot weigh more than the parent.</div>}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="act">
+              <button className="btn btn-s" onClick={doReturn} disabled={busy}>↙ Receive return</button>
+            </div>
+          </>
+        )}
       </div>
 
       {itemId && (
@@ -1837,13 +1982,19 @@ function IssuesReturns({ flash }) {
       <div className="card">
         <div className="ctitle">Recent issues &amp; returns <span className="tag tgr">{txns.length}</span></div>
         <div className="tw sy" style={{ maxHeight: 280 }}><table>
-          <thead><tr><th>When</th><th>Kind</th><th>Item</th><th>Roll</th><th style={{ textAlign: 'right' }}>Qty</th><th>Sale order</th><th>Department</th><th>By</th></tr></thead>
+          <thead><tr><th>When</th><th>Kind</th><th>Slip</th><th>Item</th><th>Roll</th><th style={{ textAlign: 'right' }}>Qty</th><th>Sale order</th><th>Department</th><th>By</th></tr></thead>
           <tbody>
-            {txns.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing issued yet</td></tr>
+            {txns.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing issued yet</td></tr>
               : txns.map((t) => (
                 <tr key={t.id}>
                   <td style={{ fontSize: 11 }}>{t.ts ? String(t.ts).slice(0, 10) : '—'}</td>
                   <td><span className={'tag ' + (t.kind === 'ISSUE' ? 'ty' : 'tg')} style={{ fontSize: 9 }}>{t.kind === 'ISSUE' ? 'Issue' : 'Return'}</span></td>
+                  <td style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                    {t.slipNo ? (
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => reprint(t.slipNo)}
+                        title="Download this issue slip again" aria-label={`Download slip ${t.slipNo}`}>⬇ {t.slipNo}</button>
+                    ) : '—'}
+                  </td>
                   <td style={{ fontSize: 11 }}>{t.itemCode}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{t.internalCode}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(t.qty)}</td>

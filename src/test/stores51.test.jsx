@@ -57,8 +57,12 @@ beforeEach(() => {
     if (u.includes('/api/master/items')) return res(ITEMS);
     if (u.includes('/api/master/departments')) return res([{ id: 1, name: 'Printing' }, { id: 2, name: 'Lamination' }, { id: 3, name: 'Pouching' }, { id: 4, name: 'Slitting' }]);
     if (u.includes('/api/planning/week')) return res({ jobs: [{ so: '26/901' }] });
-    if (u.includes('/api/planning/so?so=26%2F900')) return res({ so: '26/900', departments: [{ seq: 1, departmentName: 'Printing' }, { seq: 2, departmentName: 'Pouching' }] });
-    if (u.includes('/api/planning/so?so=')) return res({ so: 'x', departments: [] });
+    // Issues 6: the sale order's route AND BOM, through its JSS
+    if (u.includes('/api/stores/so-context?so=26%2F900')) return res({ so: '26/900', found: true, spec: 'A1',
+      route: { routeName: 'Print-Pouch', source: 'jss', departments: [{ seq: 1, departmentName: 'Printing' }, { seq: 2, departmentName: 'Pouching' }] },
+      bom: { found: true, items: [{ itemId: 37, itemCode: 'BLM037', itemName: '1200 MM', departmentName: 'Printing' }, { itemId: 99, itemCode: 'INK099', itemName: 'Cyan', departmentName: 'Printing' }] } });
+    if (u.includes('/api/stores/so-context?so=')) return res({ so: 'x', found: true, spec: 'Z9', route: { departments: [] }, bom: { found: false, items: [] },
+      message: 'No route and no BOM allocated to 26/950 (JSS Z9) — ask QC / the Super Admin to allocate them under Route and BOM before issuing material.' });
     return res([]);
   });
 });
@@ -94,8 +98,9 @@ describe('GRN — the sticker number before the receipt is booked', () => {
     fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Cosmo' } });
     const desc = await screen.findByLabelText('Item description line 1');
     await waitFor(() => expect(desc).not.toBeDisabled());
-    const offered = [...desc.options].map((o) => o.textContent).filter((t) => t.includes('·'));
-    expect(offered).toEqual(['1200 MM · BLM037', '700 MM · BLM034']);   // the AF BOPP codes Cosmo supplies
+    // Issues 6 §1: the description ALONE — the code is picked in the box beside it
+    const offered = [...desc.options].map((o) => o.textContent).filter((t) => /\d+ MM/.test(t));
+    expect(offered).toEqual(['1200 MM', '700 MM']);   // the AF BOPP codes Cosmo supplies
     fireEvent.change(desc, { target: { value: '34' } });
     await waitFor(() => expect(screen.getByLabelText('Item for line 1')).toHaveValue('BLM034'));
     expect(screen.getByLabelText('Item identity line 1')).toHaveValue('FILM · AF BOPP');
@@ -183,10 +188,14 @@ describe('Issues & Returns — the sale order first, then the material', () => {
     const dept = screen.getByLabelText('Department');
     await waitFor(() => expect([...dept.options].map((o) => o.value).filter(Boolean)).toEqual(['Printing', 'Pouching']));
     expect(screen.getByText(/from the route of 26\/900/)).toBeInTheDocument();
-    // an order with no route yet falls back to every department, and says so
+    // §8: and the material list is the BOM — the LDPE and the 700 / 600 mm codes are not offered
+    await waitFor(() => expect([...screen.getByLabelText('Item').options].map((o) => o.textContent).filter((t) => /BLM|INK/.test(t))).toEqual(['BLM037 · for Printing', 'INK099 · for Printing']));
+    // Issues 6 §7: an order with no route offers NOTHING — never every department — and says who allocates it
     fireEvent.change(screen.getByLabelText('Sale order'), { target: { value: '26/950' } });
-    await waitFor(() => expect([...screen.getByLabelText('Department').options].map((o) => o.value).filter(Boolean)).toEqual(['Printing', 'Lamination', 'Pouching', 'Slitting']));
-    expect(screen.getByText(/No route on file for 26\/950/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Department')).toBeDisabled());
+    expect([...screen.getByLabelText('Department').options].map((o) => o.value).filter(Boolean)).toEqual([]);
+    expect(screen.getByText(/No route is allocated to 26\/950/)).toBeInTheDocument();
+    expect(screen.getByText(/No BOM is allocated to 26\/950/)).toBeInTheDocument();
   });
 
   it('narrows the item codes by material, sub-group and speciality, and reads the roll’s internal code back', async () => {
@@ -212,13 +221,14 @@ describe('Issues & Returns — the sale order first, then the material', () => {
     fireEvent.change(screen.getByLabelText('Item'), { target: { value: '37' } });
     await waitFor(() => expect(screen.getByLabelText('Roll').options.length).toBeGreaterThan(1));
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
+    fireEvent.click(screen.getByText('↙ Receive a return'));
     fireEvent.click(screen.getByLabelText('Returned as narrower rolls'));
     const w = await screen.findByLabelText('Returned width 1');
-    // AF BOPP widths no wider than 1200 — never the 600 mm LDPE
-    expect([...w.options].map((o) => o.value).filter((v) => v && v !== '__other__')).toEqual(['600', '700', '1200']);
-    expect([...w.options].find((o) => o.value === '600').textContent).toContain('BLM033');
-    fireEvent.change(w, { target: { value: '600' } });
-    expect(screen.getByLabelText('Returned item code 1')).toHaveValue('BLM033');
+    // AF BOPP codes no wider than 1200 — never the 600 mm LDPE; one option per code
+    expect([...w.options].map((o) => o.value).filter(Boolean)).toEqual(['33', '34', '37']);
+    expect([...w.options].find((o) => o.value === '33').textContent).toBe('600 mm · BLM033 — 600 MM');
+    fireEvent.change(w, { target: { value: '33' } });
+    expect(screen.getByText(/BLM033 · FILM \/ AF BOPP/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Returned rolls 1'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '100' } });
     // two rolls → two stickers, named before the return is booked

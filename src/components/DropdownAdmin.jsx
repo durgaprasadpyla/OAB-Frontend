@@ -549,9 +549,41 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3000); };
+  const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), t === 'g' ? 6000 : 3000); };
   const list = Array.isArray(depts) ? depts : [];
   const active = list.filter((d) => d.active !== false);
+  // Issues 6 §4-6: the departments HR added on its own (copied in by the HR-2
+  // migration) are marked, and cleared from here — merged into the Super Admin's
+  // twin where one exists, retired otherwise. A retired department that still has
+  // employees is merged into an approved one so nobody is left under nothing.
+  const hrAdded = list.filter((d) => d.hrAdded);
+  const [mergeTo, setMergeTo] = useState({});
+
+  async function retireHrAdded() {
+    if (!window.confirm(`Clear the ${hrAdded.length} department(s) HR added on its own?\n\nOnes that match a Super Admin department by name are merged into it (employees and designations move across); the rest are retired and disappear from every dropdown. No employee record is deleted.`)) return;
+    setBusy(true);
+    try {
+      const r = await masterApi.retireHrAddedDepartments();
+      const bits = [];
+      if ((r.merged || []).length) bits.push(`merged ${r.merged.join(', ')}`);
+      if ((r.retired || []).length) bits.push(`retired ${r.retired.join(', ')}`);
+      if (r.employeesMoved) bits.push(`${r.employeesMoved} employee(s) re-pointed`);
+      flash('g', `Done — ${bits.length ? bits.join('; ') : 'nothing left to clear'}.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Could not clear the HR-added departments'); } finally { setBusy(false); }
+  }
+  async function merge(d) {
+    const to = mergeTo[d.id];
+    if (!to) { flash('r', `Pick the department to move "${d.name}" into first.`); return; }
+    const target = list.find((x) => String(x.id) === String(to));
+    if (!window.confirm(`Move everything under "${d.name}" (${d.employees || 0} employee(s), ${d.designations || 0} designation(s), and any machines / routes / items) into "${target ? target.name : to}", then delete "${d.name}"?`)) return;
+    setBusy(true);
+    try {
+      const r = await masterApi.mergeDepartment(d.id, Number(to));
+      flash('g', `"${r.from}" merged into "${r.into}" — ${r.employees} employee(s), ${r.designations} designation(s), ${r.productionRefs} production reference(s) moved.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Merge failed'); } finally { setBusy(false); }
+  }
 
   async function add() {
     const n = name.trim();
@@ -589,6 +621,16 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
         </div>
       )}
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="al al-b" style={{ marginTop: 6 }}>
+        Departments and designations are the Super Admin&rsquo;s alone: every other login — HR, Stores, Planning — only picks
+        from this list. HR&rsquo;s Employee details and the Stores desk read it live.
+      </div>
+      {hrAdded.length > 0 && (
+        <div className="al al-y" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }} aria-label="HR-added departments">
+          <span><b>{hrAdded.length}</b> department(s) were added by HR, not here: <b>{hrAdded.map((d) => d.name).join(', ')}</b>.</span>
+          <button className="btn btn-s" onClick={retireHrAdded} disabled={busy}>🧹 Clear HR-added departments</button>
+        </div>
+      )}
       <div className="fbar">
         <input placeholder="New department name" value={name} aria-label="New department name"
           onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
@@ -596,18 +638,31 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
       </div>
       <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Department</th><th style={{ width: 170 }}>Actions</th></tr></thead>
+          <thead><tr><th>Department</th><th style={{ width: 110 }}>Source</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 300 }}>Actions</th></tr></thead>
           <tbody>
             {list.length === 0 ? (
-              <tr><td colSpan={2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+              <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
                 {error ? 'Departments unavailable — see the message above.' : loaded ? 'No departments yet — add one above.' : 'Loading departments…'}
               </td></tr>
             ) : list.map((d) => (
               <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
-                <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} /></td>
+                <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} />
+                  {d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
+                <td style={{ fontSize: 11 }}>{d.hrAdded ? <span className="tag ty" style={{ fontSize: 9 }}>HR-added</span> : 'Super Admin'}</td>
+                <td style={{ textAlign: 'right', fontSize: 11 }}>{d.employees || 0}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
                   <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete department ${d.name}`} onClick={() => remove(d)}>🗑 Delete</button>
+                  {(d.active === false || d.hrAdded) && (
+                    <span style={{ display: 'inline-flex', gap: 4, marginLeft: 6, verticalAlign: 'middle' }}>
+                      <select value={mergeTo[d.id] || ''} onChange={(e) => setMergeTo((m) => ({ ...m, [d.id]: e.target.value }))}
+                        aria-label={`Merge ${d.name} into`} style={{ height: 26, fontSize: 11, maxWidth: 150 }}>
+                        <option value="">merge into…</option>
+                        {active.filter((x) => x.id !== d.id && !x.hrAdded).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </select>
+                      <button className="btn btn-s" style={{ height: 26, fontSize: 11 }} onClick={() => merge(d)} disabled={busy} aria-label={`Merge ${d.name}`}>Merge</button>
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}

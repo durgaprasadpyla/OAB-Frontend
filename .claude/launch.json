@@ -20,6 +20,29 @@
         "D:\\projects\\OAB\\OAB-back\\OAB-Backend\\scripts\\dev\\dev-h2.cmd"
       ],
       "port": 8080
+    },
+    {
+      "name": "oab-frontend-alt",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "node_modules/vite/bin/vite.js",
+        "--port",
+        "5175",
+        "--strictPort"
+      ],
+      "port": 5175,
+      "env": {
+        "VITE_BACKEND_URL": "http://localhost:8090"
+      }
+    },
+    {
+      "name": "oab-backend-h2-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "D:\\projects\\OAB\\OAB-back\\OAB-Backend\\scripts\\dev\\dev-h2-alt.cmd"
+      ],
+      "port": 8090
     }
   ]
 }

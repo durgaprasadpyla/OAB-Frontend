@@ -158,6 +158,7 @@ export const hrApi = {
   listDesignations: (p) => api('/api/hr/designations' + qs(p)),
   createDesignation: (body) => api('/api/hr/designations', { method: 'POST', body }),
   updateDesignation: (id, body) => api('/api/hr/designations/' + encodeURIComponent(id), { method: 'PUT', body }),
+  deleteDesignation: (id) => api('/api/hr/designations/' + encodeURIComponent(id), { method: 'DELETE' }),
 
   listLeaveTypes: (p) => api('/api/hr/leave-types' + qs(p)),
   createLeaveType: (body) => api('/api/hr/leave-types', { method: 'POST', body }),
@@ -211,6 +212,11 @@ export const masterApi = {
   updateDepartment: (id, body) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'PUT', body }),
   // Hard delete (Issues 1.0 #5) — the server refuses with the blockers when still referenced.
   deleteDepartment: (id) => api('/api/master/departments/' + encodeURIComponent(id), { method: 'DELETE' }),
+  // Issues 6 §5: clear the departments HR added on its own (merged into the Super
+  // Admin's twin where one exists, retired otherwise), and move everything under one
+  // department onto another.
+  retireHrAddedDepartments: () => api('/api/master/departments/retire-hr-added', { method: 'POST' }),
+  mergeDepartment: (id, targetId) => api('/api/master/departments/' + encodeURIComponent(id) + '/merge-into/' + encodeURIComponent(targetId), { method: 'POST' }),
 
   listSpecialties: (p) => api('/api/master/specialties' + qs(p)),
   createSpecialty: (body) => api('/api/master/specialties', { method: 'POST', body }),
@@ -395,4 +401,24 @@ export const storesApi = {
   allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),
   allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
   releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),
+  // Issues 6: a sale order's route and BOM, read through its JSS — what the
+  // Issues & Returns desk narrows the Department and Material pickers to.
+  soContext: (so) => api('/api/stores/so-context?so=' + encodeURIComponent(so)),
+  // Issues 6 §13: several rolls to one department for one sale order on ONE slip —
+  // the response is the slip the desk prints and hands over with the material.
+  issueBatch: (body) => api('/api/stores/issues/batch', { method: 'POST', body }),
+  slip: (no) => api('/api/stores/slips?no=' + encodeURIComponent(no)),
+  // Issues 6 §2: items deleted from the Item Master that still hold stock, and the
+  // Super Admin's move of that stock onto the code that replaced them.
+  withdrawn: () => api('/api/stores/withdrawn'),
+  moveUnits: (itemId, toItemId) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/move-units', { method: 'POST', body: { toItemId } }),
+};
+
+// Issues 6 §18-§37: Sales History (Super Admin). The current month is read live
+// off the invoice register each time; past months may be uploaded as a sheet.
+export const salesHistoryApi = {
+  lines: (from, to) => api('/api/sales-history/lines?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to)),
+  uploads: () => api('/api/sales-history/uploads'),
+  upload: (body) => api('/api/sales-history/uploads', { method: 'POST', body }),
+  deleteUpload: (period) => api('/api/sales-history/uploads/' + encodeURIComponent(period), { method: 'DELETE' }),
 };

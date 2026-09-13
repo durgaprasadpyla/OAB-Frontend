@@ -33,8 +33,24 @@ const nfmt = (v) => Math.round(Number(v) || 0).toLocaleString('en-IN');
 const srcLabel = (s) => (s === 'new-po' ? 'New sale order' : s === 'daily-update' ? 'Daily Update' : (s || '-'));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-export default function FgEntryPanel({ heading = true }) {
-  const { mods, save } = useData();
+/**
+ * `costing` decides what money the sheet shows (Issues 6 §15-§16):
+ *   'none'    — the Stores login: quantities only, no value column, no money tiles,
+ *               and the server never hands this role a price either.
+ *   'summary' — the Super Admin's FG Entry: the cumulative money in moving and
+ *               non-moving FG at the top, no line-wise value (that lives on the
+ *               Dashboard → FG Value tab, which keeps every line priced).
+ */
+export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
+  const { mods, save, reloadModule } = useData();
+  const showMoney = costing !== 'none';
+  // Issues 6 §14 — the root cause of "the two logins show different FG": every module
+  // is loaded ONCE at sign-in and this sheet read that copy for as long as the tab
+  // stayed open, so an entry booked from the other login (or by anyone else) was
+  // invisible here until a full reload. The sheet now re-reads the ledger and the
+  // flags when it opens, when the window comes back into focus, and on demand.
+  const [asOf, setAsOf] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const ledger = mods.fgLedger || {};
   const jss = Array.isArray(mods.jss) ? mods.jss : [];
   const prices = mods.prices || {};
@@ -74,7 +90,23 @@ export default function FgEntryPanel({ heading = true }) {
       setFlagsErr(e && e.message ? e.message : 'Could not read the moving / non-moving flags');
     }
   }, []);
-  useEffect(() => { loadFlags(); }, [loadFlags]);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (typeof reloadModule === 'function') await reloadModule('fgLedger');
+      await loadFlags();
+      setAsOf(new Date());
+    } catch (e) {
+      flash('y', 'Could not refresh the FG sheet: ' + (e && e.message ? e.message : e));
+    } finally { setRefreshing(false); }
+  }, [reloadModule, loadFlags]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
+  }, [refresh]);
 
   const isMoving = (sp) => { const f = flags[String(sp || '').trim()]; return !f || f.moving !== false; };
 
@@ -477,16 +509,23 @@ export default function FgEntryPanel({ heading = true }) {
             <option value="moving">Moving FG</option>
             <option value="non">Non-moving FG</option>
           </select>
+          <button className="btn btn-s" onClick={refresh} disabled={refreshing} aria-label="Refresh FG" title="Re-read the FG ledger from the server">
+            {refreshing ? '…' : '↻ Refresh'}
+          </button>
         </div>
-        {/* Stores 5.1: the moving / non-moving report, identical in both logins. */}
+        <div className="pg-sub" style={{ marginTop: 0 }} aria-label="FG as of">
+          {asOf ? `Figures as of ${asOf.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} — re-read from the server each time this sheet opens, so both logins see the same FG.` : 'Reading the FG ledger…'}
+        </div>
+        {/* Stores 5.1: the moving / non-moving report, identical in both logins.
+            Issues 6 §15-16: the MONEY tiles only where costing is allowed. */}
         <div className="stats" style={{ marginBottom: 8 }}>
           <div className="stat"><div className="sl">Moving FG</div><div className="sv" style={{ color: 'var(--g)' }}>{nfmt(money.movingQty)}</div></div>
           <div className="stat"><div className="sl">Non-moving FG</div><div className="sv" style={{ color: money.nonQty > 0 ? 'var(--red)' : undefined }}>{nfmt(money.nonQty)}</div></div>
-          <div className="stat"><div className="sl">Money in moving FG</div><div className="sv" style={{ color: 'var(--g)' }}>{inr(Math.round(money.moving))}</div></div>
-          <div className="stat"><div className="sl">Money in non-moving FG</div><div className="sv" style={{ color: money.non > 0 ? 'var(--red)' : undefined }}>{inr(Math.round(money.non))}</div></div>
+          {showMoney && <div className="stat"><div className="sl">Money in moving FG</div><div className="sv" style={{ color: 'var(--g)' }}>{inr(Math.round(money.moving))}</div></div>}
+          {showMoney && <div className="stat"><div className="sl">Money in non-moving FG</div><div className="sv" style={{ color: money.non > 0 ? 'var(--red)' : undefined }}>{inr(Math.round(money.non))}</div></div>}
         </div>
         {flagsErr && <div className="al al-y" style={{ marginTop: 0 }}>Moving / non-moving flags could not be read: {flagsErr}. Everything reads as moving until they load.</div>}
-        {unpriced > 0 && (
+        {showMoney && unpriced > 0 && (
           <div className="pg-sub" style={{ marginTop: 0 }}>
             {unpriced} spec(s) have no sale price on file, so they add nothing to either money figure.
           </div>
@@ -498,12 +537,13 @@ export default function FgEntryPanel({ heading = true }) {
               <th>Spec</th><th style={{ minWidth: 160 }}>Customer Or Group</th><th style={{ minWidth: 160 }}>SKU / Job Name</th>
               <th style={{ textAlign: 'right' }}>Produced</th><th style={{ textAlign: 'right' }}>Allocated</th>
               <th style={{ textAlign: 'right' }}>Available</th>
-              <th style={{ textAlign: 'right' }}>Value</th>
+              {/* Issues 6 §16: no line-wise costing on the FG sheet — the cumulative
+                  figures sit at the top; per-line values live on Dashboard → FG Value. */}
               <th style={{ width: 150 }}>FG status</th>
             </tr></thead>
             <tbody>
               {summary.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>{allRows.length ? 'No specs match' : 'No FG recorded yet'}</td></tr>
+                <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>{allRows.length ? 'No specs match' : 'No FG recorded yet'}</td></tr>
               ) : summary.map((r) => (
                 <tr key={r.spec} style={{ cursor: 'pointer' }} onClick={() => jumpTo(r.spec)}>
                   <td><span className="tag tb">{r.spec}</span></td>
@@ -512,9 +552,6 @@ export default function FgEntryPanel({ heading = true }) {
                   <td style={{ textAlign: 'right' }}>{nfmt(r.prod)}</td>
                   <td style={{ textAlign: 'right', color: 'var(--red)' }}>{nfmt(r.alloc)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: r.av > 0 ? 'var(--g)' : 'var(--i3)' }}>{nfmt(r.av)}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    {r.price > 0 ? inr(Math.round(num(r.value))) : <span style={{ color: 'var(--i3)' }} title="No sale price on file for this spec">—</span>}
-                  </td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <select value={r.moving ? 'moving' : 'non'} disabled={saving === r.spec}
                       aria-label={`Movement for ${r.spec}`}

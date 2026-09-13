@@ -70,7 +70,8 @@ async function loadOne(id) {
     throw e;
   }
   if (Array.isArray(rows) && rows.length && rows[0]) {
-    const row = rows[0];
+    // the row for THIS id — a server answers with exactly one, but never trust position
+    const row = rows.find((r) => r && Number(r.id) === Number(id)) || rows[0];
     let value = null;
     if (row.data != null) { try { value = JSON.parse(row.data); } catch { value = null; } }
     const version = Number.isFinite(Number(row.version)) ? Number(row.version) : 0;

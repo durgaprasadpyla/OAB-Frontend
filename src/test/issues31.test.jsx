@@ -157,26 +157,32 @@ describe('Issues & returns — pickers, not free text (Issues 3.1)', () => {
     await chooseItem();
     await waitFor(() => expect(screen.getByLabelText('Roll').options.length).toBeGreaterThan(1));
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
+    fireEvent.click(screen.getByText('↙ Receive a return'));
     fireEvent.click(screen.getByLabelText('Returned as narrower rolls'));
 
     await screen.findByLabelText('Returned width 1');
     // 460 and 700 come from the item NAMES (that is how codes are allocated by
-    // width); 1200 is the parent roll already on file.
+    // width) — one option per item CODE of the family (Issues 6 §9-§12).
     await waitFor(() => {
       const w = screen.getByLabelText('Returned width 1');
       expect(w.tagName).toBe('SELECT');
-      expect([...w.options].map((o) => o.value).filter((v) => v && v !== '__other__')).toEqual(['460', '700', '1200']);
+      expect([...w.options].map((o) => o.value).filter(Boolean)).toEqual(['1', '2']);
+      expect([...w.options].map((o) => o.textContent)).toContain('460 mm · BLM031 — 460 MM');
     });
   });
 
-  it('still allows a width with no code yet, and says to have one added', async () => {
+  it('offers no way to type a width — one that is missing is added in the Item Master (Issues 6 §10)', async () => {
     await openTab('🔄 Issues & Returns');
     await screen.findByLabelText('Item');
     await chooseItem();
+    await waitFor(() => expect(screen.getByLabelText('Roll').options.length).toBeGreaterThan(1));
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
+    fireEvent.click(screen.getByText('↙ Receive a return'));
     fireEvent.click(await screen.findByLabelText('Returned as narrower rolls'));
-    fireEvent.change(await screen.findByLabelText('Returned width 1'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '515' } });
-    expect(screen.getByText(/ask the Super Admin to add one/)).toBeInTheDocument();
+    const w = await screen.findByLabelText('Returned width 1');
+    expect([...w.options].some((o) => o.value === '__other__')).toBe(false);
+    expect(screen.queryByLabelText('Returned width 1 other')).toBeNull();
+    expect(screen.getByText(/a width that is not listed has to be added there by the Super Admin first/)).toBeInTheDocument();
   });
 
   it('puts a returned roll away in a rack from the master, and names its parent', async () => {
@@ -185,6 +191,7 @@ describe('Issues & returns — pickers, not free text (Issues 3.1)', () => {
     await chooseItem();
     await waitFor(() => expect(screen.getByLabelText('Roll').options.length).toBeGreaterThan(1));
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
+    fireEvent.click(screen.getByText('↙ Receive a return'));
     fireEvent.click(screen.getByLabelText('Returned as narrower rolls'));
 
     await screen.findByLabelText('Returned location 1');

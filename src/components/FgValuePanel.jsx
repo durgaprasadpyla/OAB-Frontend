@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
+import { storesApi } from '../api.js';
 import { inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
 import { specGroup } from '../lib/master.js';
@@ -27,6 +28,29 @@ export default function FgValuePanel() {
   const [fSpec, setFSpec] = useState('');
   const [sort, setSort] = useState('value-desc');
   const [msg, setMsg] = useState(null);
+  // Issues 6 §17: row-wise moving / non-moving, from the same server flag the FG
+  // sheet writes (store_fg_flag) — one classification, read by every FG screen.
+  const [flags, setFlags] = useState({});
+  const [fMove, setFMove] = useState('');
+  const [saving, setSaving] = useState('');
+  const loadFlags = useCallback(async () => {
+    try {
+      const list = await storesApi.fgFlags();
+      const m = {};
+      (Array.isArray(list) ? list : []).forEach((f) => { if (f && f.spec) m[String(f.spec).trim()] = f; });
+      setFlags(m);
+    } catch { /* everything reads as moving until the flags load */ }
+  }, []);
+  useEffect(() => { loadFlags(); }, [loadFlags]);
+  const isMoving = (sp) => { const f = flags[String(sp || '').trim()]; return !f || f.moving !== false; };
+  async function setMovement(sp, want) {
+    setSaving(sp);
+    try {
+      await storesApi.setFgMovement(sp, want);
+      setFlags((f) => ({ ...f, [String(sp).trim()]: { ...(f[String(sp).trim()] || { spec: sp }), moving: want } }));
+    } catch (e) { setMsg({ t: 'r', text: e && e.message ? e.message : String(e) }); }
+    finally { setSaving(''); }
+  }
 
   const jssFor = (sp) => jss.find((j) => String(j.spec || '').trim() === String(sp).trim()) || {};
 
@@ -44,9 +68,11 @@ export default function FgValuePanel() {
           customer: j.customer || specGroup(j, mods.customers) || j.group || '',
           sku: j.jobName || '',
           av, price, value: av * price, agingDays: ag.days, ageing: ag.display,
+          moving: isMoving(sp),
         };
       })
       .filter((r) => r.av > 0.0001)
+      .filter((r) => !fMove || (fMove === 'moving' ? r.moving : !r.moving))
       .filter((r) => !fCust.trim() || String(r.customer).toLowerCase().includes(fCust.trim().toLowerCase()))
       .filter((r) => !fSku.trim() || String(r.sku).toLowerCase().includes(fSku.trim().toLowerCase()))
       .filter((r) => !fSpec.trim() || String(r.spec).toLowerCase().includes(fSpec.trim().toLowerCase()));
@@ -56,11 +82,16 @@ export default function FgValuePanel() {
     else if (sort === 'aging-asc') out.sort((a, b) => a.agingDays - b.agingDays);
     else out.sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
     return out;
-  }, [ledger, jss, prices, mods.customers, fCust, fSku, fSpec, sort]);
+  }, [ledger, jss, prices, mods.customers, fCust, fSku, fSpec, sort, flags, fMove]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totals = useMemo(() => ({
     qty: rows.reduce((s, r) => s + r.av, 0),
     value: rows.reduce((s, r) => s + r.value, 0),
+    // Issues 6 §17: the four figures at the top — money AND pieces, moving and not
+    movingQty: rows.filter((r) => r.moving).reduce((s, r) => s + r.av, 0),
+    movingValue: rows.filter((r) => r.moving).reduce((s, r) => s + r.value, 0),
+    nonQty: rows.filter((r) => !r.moving).reduce((s, r) => s + r.av, 0),
+    nonValue: rows.filter((r) => !r.moving).reduce((s, r) => s + r.value, 0),
   }), [rows]);
 
   const custOptions = useMemo(() => [...new Set(rows.map((r) => r.customer).filter(Boolean))].sort(), [rows]);
@@ -114,6 +145,12 @@ export default function FgValuePanel() {
           style={{ height: 30, border: '1px solid var(--bd)', borderRadius: 6, padding: '0 10px', fontSize: 12, width: 160 }}
         />
         <datalist id="fgval-spec-list">{rows.map((r) => <option key={r.spec} value={r.spec} />)}</datalist>
+        <select value={fMove} aria-label="Filter FG value by movement" onChange={(e) => setFMove(e.target.value)}
+          style={{ height: 30, border: '1px solid var(--bd)', borderRadius: 6, padding: '0 8px', fontSize: 12 }}>
+          <option value="">Moving + non-moving</option>
+          <option value="moving">Moving FG only</option>
+          <option value="non">Non-moving FG only</option>
+        </select>
         <select
           value={sort} aria-label="Sort FG value" onChange={(e) => setSort(e.target.value)}
           style={{ height: 30, border: '1px solid var(--bd)', borderRadius: 6, padding: '0 8px', fontSize: 12, marginLeft: 'auto' }}
@@ -139,7 +176,7 @@ export default function FgValuePanel() {
         the correction is logged as a dated production entry and shows up in that spec’s Production History on the FG Entry page.
       </p>
 
-      <div style={{ display: 'flex', gap: 24, alignItems: 'center', marginBottom: 14, padding: '12px 16px', borderRadius: 8, background: 'var(--gl)', border: '1px solid #A8D5B8' }}>
+      <div style={{ display: 'flex', gap: 24, alignItems: 'center', marginBottom: 14, padding: '12px 16px', borderRadius: 8, background: 'var(--gl)', border: '1px solid #A8D5B8', flexWrap: 'wrap' }}>
         <div>
           <span style={{ fontSize: 10, color: 'var(--i3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Total FG in Stock</span><br />
           <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--g)' }}>{nfmt(totals.qty)}</span> <span style={{ fontSize: 12, color: 'var(--i2)' }}>pouches</span>
@@ -149,6 +186,14 @@ export default function FgValuePanel() {
           <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--g)' }}>₹{inr(totals.value, 2)}</span>
         </div>
       </div>
+      {/* Issues 6 §17: cumulative FG value AND pieces, moving and non-moving — the
+          split the business wants "handy" on this tab, above the line-wise values. */}
+      <div className="stats" style={{ marginBottom: 12 }} aria-label="Moving and non-moving FG">
+        <div className="stat"><div className="sl">Moving FG — value</div><div className="sv" style={{ color: 'var(--g)' }}>₹{inr(totals.movingValue, 0)}</div></div>
+        <div className="stat"><div className="sl">Non-moving FG — value</div><div className="sv" style={{ color: totals.nonValue > 0 ? 'var(--red)' : undefined }}>₹{inr(totals.nonValue, 0)}</div></div>
+        <div className="stat"><div className="sl">Moving FG — pieces</div><div className="sv" style={{ color: 'var(--g)' }}>{nfmt(totals.movingQty)}</div></div>
+        <div className="stat"><div className="sl">Non-moving FG — pieces</div><div className="sv" style={{ color: totals.nonQty > 0 ? 'var(--red)' : undefined }}>{nfmt(totals.nonQty)}</div></div>
+      </div>
 
       <div className="tw sy">
         <table>
@@ -156,10 +201,11 @@ export default function FgValuePanel() {
             <th>Spec</th><th style={{ minWidth: 160 }}>Customer Or Group</th><th style={{ minWidth: 160 }}>SKU / Job Name</th>
             <th style={{ textAlign: 'right' }}>Available Qty</th><th style={{ textAlign: 'right' }}>Sale Price</th>
             <th style={{ textAlign: 'right' }}>FG Value</th><th style={{ minWidth: 180 }}>Days Lying (Qty)</th>
+            <th style={{ width: 140 }}>Moving / Non-moving</th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>No FG currently in stock</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>No FG currently in stock</td></tr>
             ) : rows.map((r) => (
               <tr key={r.spec}>
                 <td><span className="tag tb">{r.spec}</span></td>
@@ -177,6 +223,15 @@ export default function FgValuePanel() {
                 <td style={{ textAlign: 'right' }}>{r.price > 0 ? '₹' + inr(r.price, 2) : '-'}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{r.value > 0 ? '₹' + inr(r.value, 2) : '-'}</td>
                 <td style={{ fontSize: 11 }}>{r.ageing}</td>
+                <td>
+                  <select value={r.moving ? 'moving' : 'non'} disabled={saving === r.spec || role !== 'superadmin'}
+                    aria-label={`Movement for ${r.spec}`}
+                    onChange={(e) => setMovement(r.spec, e.target.value === 'moving')}
+                    style={{ height: 26, fontSize: 11, color: r.moving ? 'var(--g)' : 'var(--red)', fontWeight: 700 }}>
+                    <option value="moving">Moving</option>
+                    <option value="non">Non-moving</option>
+                  </select>
+                </td>
               </tr>
             ))}
           </tbody>

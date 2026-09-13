@@ -168,14 +168,15 @@ describe('Stores — FG moving / non-moving (the shared FG sheet)', () => {
     expect(within(row).getByText('400')).toBeInTheDocument();   // available
   });
 
-  it('splits the money between moving and non-moving', async () => {
+  it('splits the pieces between moving and non-moving — and shows the stores desk NO money (Issues 6 §15)', async () => {
     await mount();
-    // A1: 400 × 25 = 10,000 moving; A2: 200 × 30 = 6,000 non-moving; A3 unpriced
-    expect(within(statCard('Money in moving FG')).getByText(/10,000/)).toBeInTheDocument();
-    expect(within(statCard('Money in non-moving FG')).getByText(/6,000/)).toBeInTheDocument();
+    // A1: 400 moving + A3: 50 unclassified (reads moving) = 450; A2: 200 non-moving
     expect(within(statCard('Moving FG')).getByText('450')).toBeInTheDocument();
     expect(within(statCard('Non-moving FG')).getByText('200')).toBeInTheDocument();
-    expect(screen.getByText(/1 spec\(s\) have no sale price/)).toBeInTheDocument();
+    expect(statCard('Money in moving FG')).toBeUndefined();
+    expect(statCard('Money in non-moving FG')).toBeUndefined();
+    expect(screen.queryByText(/have no sale price/)).toBeNull();
+    expect(screen.queryByText('Value')).toBeNull();
   });
 
   it('filters the list to one or the other', async () => {
@@ -198,10 +199,11 @@ describe('Stores — FG moving / non-moving (the shared FG sheet)', () => {
     expect(posted[0].body).toEqual({ moving: false });
   });
 
-  it('shows a spec with no sale price as having no value, not zero', async () => {
+  it('carries no line-wise value on the stores sheet at all', async () => {
     await mount();
     const row = screen.getByText('A3').closest('tr');
-    expect(within(row).getAllByText('—').length).toBeGreaterThan(0);
+    expect(within(row).queryByText(/₹/)).toBeNull();
+    expect([...row.querySelectorAll('td')].map((td) => td.textContent)).not.toContain('1,250');   // 50 × 25 never shown
   });
 
   it('defaults a new entry to Moving, and books Non-moving when changed', async () => {

@@ -113,7 +113,8 @@ describe('Stores — stock in SFG and FG form', () => {
     expect(within(row).getByText('2,000')).toBeInTheDocument();        // produced
     expect(within(row).getByText('400')).toBeInTheDocument();          // allocated to a sale order
     expect(within(row).getByText('1,600')).toBeInTheDocument();        // still in hand
-    expect(within(row).getByText(/19,200/)).toBeInTheDocument();       // 1,600 × the mirrored price
+    // Issues 6 §15: no costing on the stores desk — the value column is gone
+    expect(within(row).queryByText(/19,200/)).toBeNull();
     // and the desk can book production here, exactly as the Super Admin does
     expect(screen.getByLabelText('JSS / Spec #')).toBeInTheDocument();
     await user.type(screen.getByLabelText('JSS / Spec #'), 'A2');

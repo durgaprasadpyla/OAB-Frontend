@@ -54,8 +54,11 @@ describe('FG Value — valuation and FIFO ageing', () => {
   it('totals the available qty and value across the visible rows', async () => {
     renderApp(<FgValuePanel />, { modules, role: 'superadmin' });
     await waitFor(() => expect(within(valueCard()).getByText('SP-A')).toBeInTheDocument());
-    expect(within(valueCard()).getByText('1,500')).toBeInTheDocument();     // 1000 + 500
+    expect(within(valueCard()).getAllByText('1,500').length).toBeGreaterThan(0);     // 1000 + 500 (total, and again as moving pieces)
     expect(within(valueCard()).getByText('₹7,000.00')).toBeInTheDocument(); // 2,000 + 5,000
+    // Issues 6 §17: the moving / non-moving split sits at the top — everything is moving here
+    expect(within(valueCard()).getByText('Moving FG — value')).toBeInTheDocument();
+    expect(within(valueCard()).getByText('Non-moving FG — pieces')).toBeInTheDocument();
   });
 
   it('sorts by value, then by ageing', async () => {

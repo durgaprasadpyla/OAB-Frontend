@@ -53,12 +53,16 @@ beforeEach(() => {
     if (u.includes('/api/stores/grns')) return method === 'POST'
       ? res(201, { grnNo: 'GRN/2026/1', units: [{ unitId: 99, internalCode: 'BLMU-9' }] })
       : res(200, []);
-    if (u.includes('/api/stores/issues')) return res(200, { unitId: 11, issued: body.qty, remaining: 100 });
+    if (u.includes('/api/stores/issues/batch')) return res(201, { slipNo: 'ISS/2026/1', so: body.so, department: body.department, totalQty: 150, lines: [{ unitId: 11, internalCode: 'BLMU-1', qty: 150, remaining: 100 }] });
+    if (u.includes('/api/stores/so-context')) return res(200, { so: '26/500', found: true, spec: 'A1', route: { departments: [{ seq: 1, departmentName: 'Printing' }] }, bom: { found: true, items: [{ itemId: 1, itemCode: 'FILM-BOPP20', itemName: 'BOPP Film 20mic', departmentName: 'Printing' }] } });
     if (u.includes('/api/stores/returns')) return res(200, { unitId: 11, returned: [{ unitId: 21, internalCode: 'BLMU-P1' }, { unitId: 22, internalCode: 'BLMU-P2' }] });
     if (u.includes('/api/stores/txns')) return res(200, []);
     if (u.includes('/api/stores/po-eta')) return res(200, []);
     if (u.includes('/api/master/items')) return res(200, [
       { id: 1, code: 'FILM-BOPP20', name: 'BOPP Film 20mic', uom: 'Kg', materialType: 'BOPP', subGroup: 'Films', specialtyName: 'High Barrier' },
+      // Issues 6: the widths a BOPP / Films roll may be cut to are the family's own codes
+      { id: 7, code: 'FILM-300', name: '300 MM', uom: 'Kg', materialType: 'BOPP', subGroup: 'Films', specialtyName: 'High Barrier', widthMm: 300 },
+      { id: 8, code: 'FILM-200', name: '200 MM', uom: 'Kg', materialType: 'BOPP', subGroup: 'Films', specialtyName: 'High Barrier', widthMm: 200 },
       { id: 2, code: 'INK-CYAN', name: 'Cyan Ink', uom: 'Kg', materialType: 'Ink', subGroup: 'Chemicals', specialtyName: 'Surface' },
       { id: 3, code: 'INK-WHITE', name: 'White Ink', uom: 'Kg', materialType: 'Ink', subGroup: 'Chemicals', specialtyName: 'Reverse' },
     ]);
@@ -280,14 +284,27 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     expect(opts[1]).toContain('BLMU-1');
     expect(opts[1]).toContain('①');
 
-    fireEvent.change(rollSel, { target: { value: '11' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '150' } });
+    // Issues 6 §7-8: the sale order first — its route names the department and its
+    // BOM the material — then the rolls go onto ONE slip and out together.
     fireEvent.change(screen.getByLabelText('Sale order'), { target: { value: '26/500' } });
-    await user.click(screen.getByRole('button', { name: /Issue/ }));
-    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/issues')
-      && c.body.unitId === 11 && c.body.qty === 150 && c.body.so === '26/500')).toBe(true));
+    await waitFor(() => expect([...screen.getByLabelText('Department').options].map((o) => o.value).filter(Boolean)).toEqual(['Printing']));
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'Printing' } });
+    fireEvent.change(await screen.findByLabelText('Item'), { target: { value: '1' } });
+    const rollSel2 = await screen.findByLabelText('Roll');
+    await waitFor(() => expect([...rollSel2.options].length).toBeGreaterThan(1));
+    fireEvent.change(rollSel2, { target: { value: '11' } });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '150' } });
+    await user.click(screen.getByRole('button', { name: /Add to slip/ }));
+    await user.click(screen.getByRole('button', { name: /Issue & print slip/ }));
+    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/issues/batch')
+      && c.body.lines[0].unitId === 11 && c.body.lines[0].qty === 150 && c.body.so === '26/500' && c.body.department === 'Printing')).toBe(true));
 
-    // now the 1200 comes back as a 700 and a 500
+    // now the 1200 comes back as a 300 and a 200 — under the codes of those widths
+    await user.click(screen.getByText('↙ Receive a return'));
+    fireEvent.change(screen.getByLabelText('Sale order'), { target: { value: '' } });
+    fireEvent.change(await screen.findByLabelText('Item'), { target: { value: '1' } });
+    await waitFor(() => expect([...screen.getByLabelText('Roll').options].length).toBeGreaterThan(1));
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
     await user.click(screen.getByLabelText('Returned as narrower rolls'));
     // Issues 4.1: a row is "N rolls, each W mm wide and K kg" — one roll of each here.
     //
@@ -296,15 +313,14 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // left to give — the cap is cumulative across everything the parent has produced,
     // not per return. 300 + 200 mm and 150 + 100 Kg is the whole of that remainder.
     fireEvent.change(screen.getByLabelText('Returned rolls 1'), { target: { value: '1' } });
-    // Issues 3.1: the width is picked from the widths the business has item codes
-    // for; a width with no code yet is entered through the explicit escape.
-    fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Returned width 1 other'), { target: { value: '300' } });
+    // Issues 6 §9-10: the width IS an item code of the roll's own family — there is
+    // no free-text width any more.
+    await waitFor(() => expect([...screen.getByLabelText('Returned width 1').options].map((o) => o.value).filter(Boolean)).toEqual(['8', '7']));
+    fireEvent.change(screen.getByLabelText('Returned width 1'), { target: { value: '7' } });
     fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '150' } });
     await user.click(screen.getByRole('button', { name: /Another roll back/ }));
     fireEvent.change(screen.getByLabelText('Returned rolls 2'), { target: { value: '1' } });
-    fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Returned width 2 other'), { target: { value: '200' } });
+    fireEvent.change(screen.getByLabelText('Returned width 2'), { target: { value: '8' } });
     fireEvent.change(screen.getByLabelText('Returned weight 2'), { target: { value: '100' } });
     await user.click(screen.getByRole('button', { name: /Receive return/ }));
 
@@ -312,8 +328,8 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     const ret = calls.find((c) => c.u.includes('/api/stores/returns'));
     expect(ret.body.unitId).toBe(11);
     expect(ret.body.children).toEqual([
-      expect.objectContaining({ qty: 150, widthMm: 300 }),
-      expect.objectContaining({ qty: 100, widthMm: 200 }),
+      expect.objectContaining({ qty: 150, widthMm: 300, itemId: 7 }),
+      expect.objectContaining({ qty: 100, widthMm: 200, itemId: 8 }),
     ]);
   });
 });
