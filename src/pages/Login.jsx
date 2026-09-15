@@ -60,7 +60,7 @@ const SELLING_POINTS = [
 ];
 
 export default function Login() {
-  const { login, isAuthed, role } = useAuth();
+  const { login, repLogin, isAuthed, role } = useAuth();
   const nav = useNavigate();
 
   const [u, setU] = useState(() => { try { return localStorage.getItem(REMEMBER_KEY) || ''; } catch { return ''; } });
@@ -79,7 +79,17 @@ export default function Login() {
     setInfo(false);
     setBusy(true);
     try {
-      const d = await login(u.trim(), p);
+      let d;
+      try {
+        d = await login(u.trim(), p);
+      } catch {
+        // Sales reps are not staff accounts: they live in the Sales system's own
+        // user list (module 12) and sign in through /api/auth/sales-rep-login. The
+        // form used to try the staff endpoint only, so every rep — whatever their
+        // password — was told "Invalid username or password". A rep is tried second.
+        const rep = await repLogin(u.trim(), p);
+        d = { ...rep, role: 'sales' };
+      }
       // Username only — storing the password would defeat the point of the login.
       try {
         if (remember) localStorage.setItem(REMEMBER_KEY, u.trim());

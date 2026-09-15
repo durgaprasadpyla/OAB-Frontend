@@ -105,6 +105,42 @@ describe('Login — enterprise sign-in', () => {
     expect(msg.closest('.blm-msg')).not.toHaveClass('blm-msg-info');
   });
 
+  it('signs a Sales rep in through the sales-rep endpoint when the staff login rejects them', async () => {
+    const calls = [];
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      calls.push(u);
+      if (u.includes('/api/auth/sales-rep-login')) {
+        const body = JSON.parse(opts.body);
+        return body.username === 'pradeep' && body.password === 'pradeep123'
+          ? res(200, { token: 'rep-t', username: 'pradeep', repId: 'u9', display_name: 'Pradeep' })
+          : res(401, { error: 'Invalid username or password' });
+      }
+      if (u.includes('/api/auth/login')) return res(401, { error: 'Invalid username or password' });
+      return res(200, {});
+    };
+    mount();
+    await userEvent.type(screen.getByLabelText('Username'), 'pradeep');
+    await userEvent.type(screen.getByLabelText('Password'), 'pradeep123');
+    await userEvent.click(screen.getByRole('button', { name: /Sign In/i }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.some((c) => c.includes('/api/auth/login'))).toBe(true);
+    expect(calls.some((c) => c.includes('/api/auth/sales-rep-login'))).toBe(true);
+    expect(localStorage.getItem('blm_role')).toBe('sales');
+    expect(localStorage.getItem('blm_rep_id')).toBe('u9');
+    expect(screen.queryByText('Invalid username or password')).toBeNull();
+  });
+
+  it('still reports a rep with the wrong password as an error', async () => {
+    globalThis.fetch = async () => res(401, { error: 'nope' });
+    mount();
+    await userEvent.type(screen.getByLabelText('Username'), 'pradeep');
+    await userEvent.type(screen.getByLabelText('Password'), 'wrong');
+    await userEvent.click(screen.getByRole('button', { name: /Sign In/i }));
+    await screen.findByText('Invalid username or password');
+    expect(localStorage.getItem('blm_token')).toBeNull();
+  });
+
   it('explains that a reset is an admin action, as information not an error', async () => {
     mount();
     await userEvent.click(screen.getByRole('button', { name: /Forgot password/i }));
