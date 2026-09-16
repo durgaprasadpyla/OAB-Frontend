@@ -6,6 +6,7 @@ import { dash, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import CsaPanel from '../components/CsaPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
+import { OnHand } from './Stores.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -130,6 +131,18 @@ export default function PM() {
     );
   }
 
+  // Issues 16.09 ¶4: the stores desk's Raw Material on Hand board, read from the plant login.
+  if (tab === 'onhand') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">Production</div>
+        <PmTabs tab={tab} setTab={setTab} />
+        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        <OnHand readOnly flash={(t, text) => flash(text, t)} />
+      </div>
+    );
+  }
+
   if (tab === 'material') {
     return (
       <div id="app">
@@ -233,6 +246,7 @@ const PM_TABS = [
   { k: 'print', label: '🖨 Production Tracker' },
   { k: 'csa', label: '🔬 CSA — plant comments' },
   { k: 'material', label: '🧱 Raw Material' },
+  { k: 'onhand', label: '📦 Raw Material on Hand' },
 ];
 
 function PmTabs({ tab, setTab }) {

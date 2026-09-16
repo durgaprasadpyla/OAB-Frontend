@@ -74,7 +74,7 @@ export default function Stores() {
 
 /* ───────────────────────── Material on Hand (landing) ───────────────────── */
 
-function OnHand({ flash }) {
+export function OnHand({ flash, readOnly = false }) {
   const { role } = useAuth() || {};
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -288,7 +288,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       </div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
         Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
-        MSL can be typed per item, or set for every item at once from the average of the last three months&rsquo; consumption.
+        {readOnly ? ' This is the Stores login\u2019s board, read here as it stands; MSL and dispositions are set by Stores.' : ' MSL can be typed per item, or set for every item at once from the average of the last three months\u2019 consumption.'}
       </div>
       {withdrawn.length > 0 && (
         <div className="al al-y" style={{ marginBottom: 6 }} aria-label="Withdrawn items holding stock">
@@ -355,10 +355,12 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
         {/* Seven filters and three buttons do not fit one line: kept as a group, the
             buttons wrap together instead of one of them being stranded on its own. */}
         <div className="fbar-actions">
-          <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
-            title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
-            ⚙ Set MSL from 3-month average
-          </button>
+          {!readOnly && (
+            <button className="btn btn-s" onClick={adoptSuggestions} disabled={!suggAny}
+              title={suggAny ? 'Set each MSL to its 3-month average consumption' : 'No consumption history yet — issue material first'}>
+              ⚙ Set MSL from 3-month average
+            </button>
+          )}
           <button className="btn btn-s" onClick={exportExcel} disabled={exporting || busy} aria-label="Export to Excel"
             title="Every roll / can of the items shown, with its location and status">
             {exporting ? 'Exporting…' : '⬇ Export to Excel'}
@@ -396,8 +398,10 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                   <td style={{ textAlign: 'right', fontWeight: 700, color: r.belowMsl ? 'var(--red)' : 'var(--g)' }}>{qty(r.closingStock)}</td>
                   <td style={{ fontSize: 11 }}>{r.uom || '—'}</td>
                   <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                    <input type="number" min="0" step="any" defaultValue={r.msl ?? ''} aria-label={`MSL for ${r.code}`}
-                      onBlur={(e) => saveMsl(r, e.target.value)} style={{ width: 90, height: 24, textAlign: 'right' }} />
+                    {readOnly ? qty(r.msl) : (
+                      <input type="number" min="0" step="any" defaultValue={r.msl ?? ''} aria-label={`MSL for ${r.code}`}
+                        onBlur={(e) => saveMsl(r, e.target.value)} style={{ width: 90, height: 24, textAlign: 'right' }} />
+                    )}
                   </td>
                   <td style={{ textAlign: 'right', fontSize: 11 }} title="Average monthly consumption over the last three months">
                     {sugg[r.id] && sugg[r.id].hasHistory ? qty(sugg[r.id].suggestedMsl) : <span style={{ color: 'var(--i3)' }}>—</span>}
@@ -439,10 +443,12 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                                 <td style={{ fontSize: 11 }}>{u.expiryDate || '—'}</td>
                                 <td style={{ fontSize: 11 }}>{u.receivedAt ? String(u.receivedAt).slice(0, 10) : '—'}</td>
                                 <td>
-                                  <select value={u.status || 'MOVING'} aria-label={`Status of ${u.internalCode}`}
-                                    onChange={(e) => setUnitStatus(u, e.target.value)} style={{ height: 26, fontSize: 11 }}>
-                                    {UNIT_STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
-                                  </select>
+                                  {readOnly ? <span style={{ fontSize: 11 }}>{statusLabel(u.status || 'MOVING')}</span> : (
+                                    <select value={u.status || 'MOVING'} aria-label={`Status of ${u.internalCode}`}
+                                      onChange={(e) => setUnitStatus(u, e.target.value)} style={{ height: 26, fontSize: 11 }}>
+                                      {UNIT_STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
+                                    </select>
+                                  )}
                                 </td>
                               </tr>
                             ))}
@@ -1481,8 +1487,18 @@ function IssuesReturns({ flash }) {
   const deptOptions = soChosen ? [...new Set(routeDepts)] : departments.filter((d) => d.active !== false).map((d) => d.name);
   const routeMissing = soChosen && ctxReady && routeDepts.length === 0;
   // §8: with a sale order chosen the material list IS the BOM — nothing else.
-  const bomItems = ctxReady ? (((ctx.bom || {}).items) || []) : [];
-  const bomMissing = soChosen && ctxReady && bomItems.length === 0;
+  const bomItemsAll = ctxReady ? (((ctx.bom || {}).items) || []) : [];
+  const bomMissing = soChosen && ctxReady && bomItemsAll.length === 0;
+  // Issues 16.09 ¶1: "based on the department selection, the material type filters
+  // should also be populating" — with a department chosen, only that department's
+  // BOM lines are offered (Packing sees Packing's materials, not Printing's inks).
+  const bomItems = useMemo(() => {
+    const dept = String(form.department || '').trim().toLowerCase();
+    if (!dept) return bomItemsAll;
+    const mine = bomItemsAll.filter((b) => String(b.departmentName || '').trim().toLowerCase() === dept);
+    // a BOM whose lines carry no department at all still offers everything
+    return mine.length || bomItemsAll.some((b) => String(b.departmentName || '').trim()) ? mine : bomItemsAll;
+  }, [bomItemsAll, form.department]);
   const bomIds = useMemo(() => new Set(bomItems.map((b) => String(b.itemId))), [bomItems]);
   const bomDeptOf = (id) => [...new Set(bomItems.filter((b) => String(b.itemId) === String(id)).map((b) => b.departmentName).filter(Boolean))];
 
@@ -1899,7 +1915,10 @@ function IssuesReturns({ flash }) {
             )}
           </>
         )}
-        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}</span> : null}</div>
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}{form.department ? ` for ${form.department}` : ''}</span> : null}</div>
+        {mode === 'issue' && soChosen && ctxReady && !bomMissing && form.department && bomItems.length === 0 && (
+          <div className="al al-y" role="alert">The BOM of {form.so} has no material for {form.department} — pick another department, or ask QC to add that department&rsquo;s lines under Route and BOM.</div>
+        )}
         {mode === 'issue' && bomMissing && (
           <div className="al al-r" role="alert">
             No BOM is allocated to {form.so}{ctx && ctx.spec ? ` (JSS ${ctx.spec})` : ''} — ask QC / the Super Admin to allocate it under Route and BOM. Material cannot be issued against this order until then.

@@ -11,6 +11,11 @@ import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.j
 // Three shapes: a plain list, value/label pairs (payment types), and
 // name/unit rows (CSA substrates).
 
+/** ALL CAPS (with room for digits, & and spaces) — the names HR typed. */
+const isShouting = (v) => { const t = String(v || '').trim(); return t.length > 1 && t === t.toUpperCase() && t !== t.toLowerCase(); };
+/** "PRINTING" → "Printing", "INK CHEMIST" → "Ink Chemist"; two-letter codes like HO / QC stay. */
+export const capitalise = (v) => String(v || '').trim().split(/\s+/).map((w) => (w.length <= 2 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase())).join(' ');
+
 const blankFor = (type) => (type === 'pairs' ? ['', ''] : type === 'substrate' ? { name: '', unit: 'Micron' } : '');
 const UNITS = ['Micron', 'GSM'];
 
@@ -93,7 +98,8 @@ export default function DropdownAdmin() {
     masterApi.listItems().then((r) => {
       if (!live || !Array.isArray(r)) return;
       const names = new Set();
-      r.filter((it) => it.active !== false && /film/i.test(String(it.materialType || '')))
+      // Issues 16.09 ¶3: paper is a substrate too — Paper, Metallized paper, Embossed paper sit under material type PAPER
+      r.filter((it) => it.active !== false && /film|paper/i.test(String(it.materialType || '')))
         .forEach((it) => { const v = String(it.subGroup || '').trim(); if (v) names.add(v); });
       setFilmSubstrates([...names].sort((a, b) => a.localeCompare(b)));
     }).catch(() => { /* the typed name still works when the master is unreachable */ });
@@ -246,7 +252,7 @@ export default function DropdownAdmin() {
             <thead>
               <tr>
                 {def.type === 'pairs' ? <><th style={{ width: 110 }}>Value</th><th>Label</th></>
-                  : def.type === 'substrate' ? <><th>Substrate <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(FILM sub-groups of the Item Master)</span></th><th style={{ width: 130 }}>Unit</th></>
+                  : def.type === 'substrate' ? <><th>Substrate <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(FILM and PAPER sub-groups of the Item Master)</span></th><th style={{ width: 130 }}>Unit</th></>
                     : <th>Value</th>}
                 <th style={{ width: 44 }}></th>
               </tr>
@@ -268,7 +274,7 @@ export default function DropdownAdmin() {
                       <td>
                         {filmSubstrates.length ? (
                           <select value={r.name ?? ''} aria-label={`Substrate ${i + 1}`} onChange={(e) => setRow(i, { ...r, name: e.target.value })}>
-                            <option value="">— film from the Item Master —</option>
+                            <option value="">— film / paper from the Item Master —</option>
                             {filmSubstrates.map((n) => <option key={n} value={n}>{n}</option>)}
                             {r.name && !filmSubstrates.includes(r.name) && <option value={r.name}>{r.name} (not in the Item Master)</option>}
                           </select>
@@ -540,6 +546,37 @@ function DesignationsPanel({ desigs, departments, reload, error, reloadDepts }) 
     try { await masterApi.updateDepartment(d.id, { scope: 'PRODUCTION' }); if (reloadDepts) await reloadDepts(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
   }
+  async function renameHrDept(d, next) {
+    const n = String(next || '').trim();
+    if (!n || n === d.name) return;
+    try { await masterApi.updateDepartment(d.id, { name: n }); flash('g', `Renamed to “${n}”.`); if (reloadDepts) await reloadDepts(); }
+    catch (e) { flash('r', e.message || 'Rename failed'); }
+  }
+  async function removeHrDept(d) {
+    if (!window.confirm(`Delete department “${d.name}” permanently?\n\nThis works when no employee is filed under it; otherwise merge it into another department first (Departments list), or disable it.`)) return;
+    try { await masterApi.deleteDepartment(d.id); flash('g', `Deleted “${d.name}”.`); if (reloadDepts) await reloadDepts(); }
+    catch (e) { flash('r', e.message || 'Delete failed'); }
+  }
+  async function remove(d) {
+    if (!window.confirm(`Delete designation “${d.title}”?\n\nIf employees hold it, it is retired instead so their records keep reading correctly.`)) return;
+    try { const r = await hrApi.deleteDesignation(d.id); flash('g', (r && r.message) || `Deleted “${d.title}”.`); await reload(); }
+    catch (e) { flash('r', e.message || 'Delete failed'); }
+  }
+  // Issues 16.09 ¶2: "I wanted all the names … only with the capitalise option (whereas
+  // now it's all in caps)" — one press turns OPERATOR into Operator, HO stays HO.
+  async function capitaliseAll() {
+    const targets = list.filter((d) => isShouting(d.title) && capitalise(d.title) !== d.title);
+    if (!targets.length) { flash('g', 'Every designation is already capitalised.'); return; }
+    if (!window.confirm(`Capitalise ${targets.length} designation(s)?\n\n${targets.map((d) => `${d.title} → ${capitalise(d.title)}`).join('\n')}`)) return;
+    setBusy(true);
+    let done = 0; const failed = [];
+    for (const d of targets) {
+      try { await hrApi.updateDesignation(d.id, { title: capitalise(d.title) }); done++; } catch (e) { failed.push(`${d.title}: ${e.message}`); }
+    }
+    await reload();
+    flash(failed.length ? 'r' : 'g', `${done} capitalised.${failed.length ? ' Not changed — ' + failed.join('; ') : ''}`);
+    setBusy(false);
+  }
   async function rename(d, next) {
     const t = String(next || '').trim();
     if (!t || t === d.title) return;
@@ -569,16 +606,20 @@ function DesignationsPanel({ desigs, departments, reload, error, reloadDepts }) 
         <input placeholder="New designation (e.g. Line Supervisor)" value={title} aria-label="New designation"
           onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ minWidth: 260 }} />
         <button className="btn btn-g" onClick={add} disabled={busy || !title.trim()}>＋ Add</button>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={capitaliseAll} disabled={busy} title="OPERATOR → Operator, for every all-caps designation">Aa Capitalise all</button>
       </div>
+      <div className="pg-sub" style={{ marginTop: 4 }}>Click a name to edit it — it saves when you leave the box. A retired name re-entered comes back rather than being refused as a duplicate.</div>
       <div className="tw sy" style={{ maxHeight: 300, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Designation</th><th style={{ width: 90, textAlign: 'center' }}>Active</th></tr></thead>
+          <thead><tr><th>Designation</th><th style={{ width: 90, textAlign: 'center' }}>Active</th><th style={{ width: 90 }}></th></tr></thead>
           <tbody>
-            {list.length === 0 ? <tr><td colSpan={2} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No designations yet — add one above.</td></tr>
+            {list.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No designations yet — add one above.</td></tr>
               : list.map((d) => (
                 <tr key={d.id} style={d.active === false ? { opacity: 0.55 } : undefined}>
-                  <td><input defaultValue={d.title} aria-label={`Designation ${d.title}`} onBlur={(e) => rename(d, e.target.value)} style={{ width: '100%' }} /></td>
+                  <td><input key={d.id + ':' + d.title} defaultValue={d.title} aria-label={`Designation ${d.title}`} onBlur={(e) => rename(d, e.target.value)} style={{ width: '100%' }} /></td>
                   <td style={{ textAlign: 'center' }}><input type="checkbox" checked={d.active !== false} aria-label={`${d.title} active`} onChange={() => toggle(d)} /></td>
+                  <td><button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete designation ${d.title}`} onClick={() => remove(d)}>🗑</button></td>
                 </tr>
               ))}
           </tbody>
@@ -598,16 +639,18 @@ function DesignationsPanel({ desigs, departments, reload, error, reloadDepts }) 
       </div>
       <div className="tw sy" style={{ maxHeight: 260, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Department</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 260 }}>Actions</th></tr></thead>
+          <thead><tr><th>Department</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 330 }}>Actions</th></tr></thead>
           <tbody>
             {hrOnly.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>None yet — every department is a production department.</td></tr>
               : hrOnly.map((d) => (
                 <tr key={d.id} style={d.active === false ? { opacity: 0.55 } : undefined}>
-                  <td style={{ fontSize: 12, fontWeight: 600 }}>{d.name}{d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
+                  <td><input key={d.id + ':' + d.name} defaultValue={d.name} aria-label={`HR-only department ${d.name}`} onBlur={(e) => renameHrDept(d, e.target.value)} style={{ width: '100%' }} />
+                    {d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
                   <td style={{ textAlign: 'right', fontSize: 11 }}>{d.employees || 0}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-s" onClick={() => toggleHrDept(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
-                    <button className="btn btn-s" onClick={() => makeProduction(d)} aria-label={`Make ${d.name} a production department`}>→ Production</button>
+                    <button className="btn btn-s" onClick={() => makeProduction(d)} aria-label={`Make ${d.name} a production department`}>→ Production</button>{' '}
+                    <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete HR-only department ${d.name}`} onClick={() => removeHrDept(d)}>🗑</button>
                   </td>
                 </tr>
               ))}
@@ -662,13 +705,17 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
     const n = name.trim();
     if (!n) return;
     setBusy(true);
-    try { await masterApi.createDepartment({ name: n }); setName(''); flash('g', `Added “${n}”.`); await reload(); }
-    catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+    try {
+      const r = await masterApi.createDepartment({ name: n });
+      setName('');
+      flash('g', r && r.reactivated ? `“${r.name}” was disabled — it is back, under this spelling.` : `Added “${n}”.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
   }
   async function rename(d, next) {
     const n = String(next || '').trim();
     if (!n || n === d.name) return;
-    try { await masterApi.updateDepartment(d.id, { name: n }); await reload(); }
+    try { await masterApi.updateDepartment(d.id, { name: n }); flash('g', `Renamed to “${n}”.`); await reload(); }
     catch (e) { flash('r', e.message || 'Rename failed'); }
   }
   async function toggle(d) {
@@ -684,6 +731,20 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
         : `“${d.name}” is a production department again.`);
       await reload();
     } catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+  // Issues 16.09 ¶2: ACCOUNTS → Accounts for every all-caps department, one press.
+  async function capitaliseAll() {
+    const targets = list.filter((d) => isShouting(d.name) && capitalise(d.name) !== d.name);
+    if (!targets.length) { flash('g', 'Every department is already capitalised.'); return; }
+    if (!window.confirm(`Capitalise ${targets.length} department(s)?\n\n${targets.map((d) => `${d.name} → ${capitalise(d.name)}`).join('\n')}`)) return;
+    setBusy(true);
+    let done = 0; const failed = [];
+    for (const d of targets) {
+      try { await masterApi.updateDepartment(d.id, { name: capitalise(d.name) }); done++; } catch (e) { failed.push(`${d.name}: ${e.message}`); }
+    }
+    await reload();
+    flash(failed.length ? 'r' : 'g', `${done} capitalised.${failed.length ? ' Not changed — ' + failed.join('; ') : ''}`);
+    setBusy(false);
   }
   // Issues 1.0 #5: hard delete — the server refuses (with the list of blockers)
   // while machines, routes, items or production history still reference it.
@@ -722,7 +783,10 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
         <input placeholder="New department name" value={name} aria-label="New department name"
           onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
         <button className="btn btn-g" onClick={add} disabled={busy || !name.trim()}>＋ Add</button>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={capitaliseAll} disabled={busy} title="PRINTING → Printing, for every all-caps department">Aa Capitalise all</button>
       </div>
+      <div className="pg-sub" style={{ marginTop: 4 }}>Click a name to edit it — it saves when you leave the box (HR-added names included). A disabled department re-entered under any spelling comes back rather than being refused as a duplicate.</div>
       <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
         <table>
           <thead><tr><th>Department</th><th style={{ width: 110 }}>Source</th><th style={{ width: 110 }}>Scope</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 300 }}>Actions</th></tr></thead>
@@ -733,7 +797,7 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
               </td></tr>
             ) : list.map((d) => (
               <tr key={d.id} style={{ opacity: d.active === false ? 0.55 : 1 }}>
-                <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} />
+                <td><input key={d.id + ':' + d.name} defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} />
                   {d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
                 <td style={{ fontSize: 11 }}>{d.hrAdded ? <span className="tag ty" style={{ fontSize: 9 }}>HR-added</span> : 'Super Admin'}</td>
                 <td style={{ fontSize: 11 }}>

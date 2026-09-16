@@ -376,7 +376,7 @@ describe('Drop-down selections — designations and HR-only departments', () => 
     fireEvent.click(screen.getByText('＋ Add'));
     await waitFor(() => expect(posted.some((p) => p.u.includes('/api/hr/designations'))).toBe(true));
     expect(posted.find((p) => p.u.includes('/api/hr/designations')).body).toEqual({ title: 'INCHARGE' });
-    expect(screen.getByText('Accounts')).toBeInTheDocument();
+    expect(screen.getByLabelText('HR-only department Accounts')).toBeInTheDocument();   // now editable in place
     await userEvent.type(screen.getByLabelText('New HR-only department'), 'Billing');
     fireEvent.click(screen.getByText('＋ Add HR-only department'));
     await waitFor(() => expect(posted.some((p) => p.u.endsWith('/api/master/departments'))).toBe(true));
