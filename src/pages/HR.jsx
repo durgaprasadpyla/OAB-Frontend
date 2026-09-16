@@ -228,6 +228,7 @@ function Employees() {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pendingFiles, setPendingFiles] = useState({});   // docType → attachment picked before the employee exists
+  const [saveErr, setSaveErr] = useState('');             // the last refused save, shown beside the button
 
   const emps = useHr(() => hrApi.listEmployees(applied), [applied], []);
   const meta = useHr(() => hrApi.meta(), [], { statuses: [], employmentTypes: [], genders: [], workLocations: [], docTypes: [] });
@@ -254,10 +255,10 @@ function Employees() {
     return { ...d, salary };
   });
 
-  // Designations belong to a department: pick the department first, then its titles.
-  const desigOpts = (desigs.data || [])
-    .filter((d) => !editing || !editing.departmentId || String(d.departmentId) === String(editing.departmentId))
-    .map((d) => ({ v: d.id, l: d.title || d.name }));
+  // Issues 7 §24: designations are ONE flat list — an Operator is an operator in
+  // Printing, Extrusion or Slitting alike — so every title is offered whatever the
+  // department, and a title held from before stays selectable.
+  const desigOpts = (desigs.data || []).map((d) => ({ v: d.id, l: d.title || d.name }));
   // "All the people above his designation … for that particular department along
   // with employees with management candidate designations."
   const managerOpts = useMemo(() => {
@@ -301,7 +302,14 @@ function Employees() {
       emps.reload();
       if (!editing.id && saved && saved.id) { setSelected(String(saved.id)); setEditing({ ...EMPTY_EMP, ...saved, salary: { ...EMPTY_SALARY, ...(saved.salary || {}) } }); }
       else docs.reload();
-    } catch (e) { flash('r', err(e)); } finally { setBusy(false); }
+      setSaveErr('');
+    } catch (e) {
+      // Issues 7 §28: a refused save used to show its reason at the top of a long form,
+      // out of sight of the Save button — "despite me saving … it is still not
+      // reflecting". The reason now sits beside the button as well.
+      setSaveErr(err(e));
+      flash('r', 'Not saved — ' + err(e));
+    } finally { setBusy(false); }
   }
 
   async function pickFile(docType, file) {
@@ -365,7 +373,7 @@ function Employees() {
             {/* Issues 6 §4: only the Super Admin's ACTIVE departments are offered. An
                 employee still filed under a retired (HR-added) department keeps reading
                 it, and is told to pick an approved one on the next save. */}
-            <Select label="Department" v={editing.departmentId} on={(v) => setF({ departmentId: v, designationId: '' })}
+            <Select label="Department" v={editing.departmentId} on={(v) => setF({ departmentId: v })}
               opts={[
                 ...(depts.data || []).map((d) => ({ v: d.id, l: d.name })),
                 ...(editing.departmentId && !(depts.data || []).some((d) => String(d.id) === String(editing.departmentId))
@@ -373,10 +381,9 @@ function Employees() {
               ]}
               hint={editing.departmentId && !(depts.data || []).some((d) => String(d.id) === String(editing.departmentId))
                 ? 'This department was retired by the Super Admin — pick an approved one.'
-                : "From the Super Admin's department list (Dashboard → Drop-down selections)"} />
+                : "Production departments and the HR-only ones (Accounts, Billing …) — both from the Super Admin's Drop-down selections"} />
             <Select label="Designation" v={editing.designationId} on={(v) => setF({ designationId: v })} opts={desigOpts}
-              disabled={!editing.departmentId}
-              hint={editing.departmentId ? (desigOpts.length ? undefined : 'No designations for this department yet — Super Admin → Drop-down selections → Designations') : 'Pick the department first'} />
+              hint={desigOpts.length ? undefined : 'No designations yet — Super Admin → Drop-down selections → Designations (HR)'} />
             <Select label="Reporting Manager" v={editing.reportingManagerId} on={(v) => setF({ reportingManagerId: v })} opts={managerOpts} />
             <Select label="Employment Type" v={editing.employmentType} on={(v) => setF({ employmentType: v })}
               opts={[...new Set([...(meta.data.employmentTypes || []), ...(editing.employmentType ? [editing.employmentType] : [])])]} />
@@ -437,7 +444,8 @@ function Employees() {
 
           <div className="fbar">
             <span style={{ flex: 1 }} />
-            <button className="btn btn-s" onClick={() => { setEditing(null); setSelected(''); }}>Cancel</button>
+            {saveErr && <span style={{ color: 'var(--red)', fontSize: 12, fontWeight: 600, marginRight: 8 }} role="alert">✕ Not saved — {saveErr}</span>}
+            <button className="btn btn-s" onClick={() => { setEditing(null); setSelected(''); setSaveErr(''); }}>Cancel</button>
             <button className="btn btn-g" onClick={saveEmployee} disabled={busy}>{busy ? 'Saving…' : '💾 Save Employee'}</button>
           </div>
         </div>
@@ -1159,11 +1167,16 @@ function Admin() {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(null);   // { emp, lastWorkingDay, leftReason }
+  // Issues 7 §31: "Would need the left employees list also here" — the table can be
+  // narrowed to the current or the left, and the left have a list of their own below.
+  const [show, setShow] = useState('all');        // 'all' | 'current' | 'left'
   const emps = useHr(() => hrApi.listEmployees({}), [], []);
   const meta = useHr(() => hrApi.meta(), [], { leftReasons: [] });
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
   const reasons = meta.data.leftReasons && meta.data.leftReasons.length ? meta.data.leftReasons : ['Served notice period', 'Absconding', 'Asked to leave'];
   const isLeft = (e) => NOT_CURRENT.includes(e.status);
+  const shown = (emps.data || []).filter((e) => (show === 'all' ? true : show === 'left' ? isLeft(e) : !isLeft(e)));
+  const left = (emps.data || []).filter(isLeft).slice().sort((a, b) => String(b.exitDate || '').localeCompare(String(a.exitDate || '')));
 
   async function markCurrent(e) {
     setBusy(true);
@@ -1184,7 +1197,12 @@ function Admin() {
     <>
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Current or left <span className="tag tgr">{(emps.data || []).length}</span></div>
+          <div className="ctitle" style={{ margin: 0 }}>Current or left <span className="tag tgr">{shown.length}</span></div>
+          <select value={show} onChange={(e) => setShow(e.target.value)} aria-label="Show current or left employees">
+            <option value="all">All employees</option>
+            <option value="current">Current only</option>
+            <option value="left">Left only</option>
+          </select>
           <span style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={emps.reload}>↻ Refresh</button>
         </div>
@@ -1221,8 +1239,8 @@ function Admin() {
             </tr></thead>
             <tbody>
               {emps.loading ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16 }}>Loading…</td></tr>
-                : (emps.data || []).length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No employees</td></tr>
-                  : emps.data.map((e) => (
+                : shown.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>No employees</td></tr>
+                  : shown.map((e) => (
                     <tr key={e.id}>
                       <td style={{ fontWeight: 600 }}>{e.fullName} <span className="tag tb" style={{ fontSize: 9, marginLeft: 4 }}>{e.empCode}</span></td>
                       <td style={{ fontSize: 11 }}>{nn(e.department || e.departmentName)}</td>
@@ -1242,9 +1260,67 @@ function Admin() {
           </table>
         </div>
       </div>
+      <div className="card" aria-label="Left employees">
+        <div className="ctitle">Left employees <span className="tag tgr">{left.length}</span></div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>Everyone no longer with the company — latest leaver first, with the last working day, the experience they left with and the reason.</div>
+        <div className="tw sy" style={{ maxHeight: 320 }}>
+          <table>
+            <thead><tr>
+              <th style={{ minWidth: 160 }}>Employee</th><th>Department</th><th>Designation</th><th>Date of joining</th>
+              <th>Last working day</th><th>Experience</th><th>Reason</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              {left.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nobody has left</td></tr>
+                : left.map((e) => (
+                  <tr key={e.id}>
+                    <td style={{ fontWeight: 600 }}>{e.fullName} <span className="tag tb" style={{ fontSize: 9, marginLeft: 4 }}>{e.empCode}</span></td>
+                    <td style={{ fontSize: 11 }}>{nn(e.department || e.departmentName)}</td>
+                    <td style={{ fontSize: 11 }}>{nn(e.designation)}</td>
+                    <td style={{ fontSize: 11 }}>{e.joiningDate ? fmtDate(e.joiningDate) : '-'}</td>
+                    <td style={{ fontSize: 11 }}>{e.exitDate ? fmtDate(e.exitDate) : '-'}</td>
+                    <td style={{ fontSize: 11 }}>{experienceText(e.joiningDate, e.exitDate)}</td>
+                    <td style={{ fontSize: 11 }}>{e.leftReason || '-'}</td>
+                    <td><span className="tag tr" style={{ fontSize: 9 }}>{e.status}</span></td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <Audit />
     </>
   );
+}
+
+/**
+ * Issues 7 §29-30: "The details are being shown in the code format." The audit
+ * details arrive as the JSON the server logged; this turns them into plain words —
+ * "Title: Executive Assistant · Department: HO · Active: no" — and leaves anything
+ * it cannot read as it was.
+ */
+export function auditDetailsText(details) {
+  let d = details;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch { return d; } }
+  if (d == null) return '';
+  if (Array.isArray(d)) return d.map(auditDetailsText).join('; ');
+  if (typeof d !== 'object') return String(d);
+  const SKIP = new Set(['id', 'employeeId', 'departmentId', 'designationId', 'reportingManagerId', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt',
+    'daysSinceJoining', 'daysToNextAppraisal', 'docs', 'documents', 'salaryHistory', 'leaveRequests', 'leaveBalance', 'pendingSalary']);
+  const LABEL = {
+    title: 'Title', departmentName: 'Department', department: 'Department', designation: 'Designation', active: 'Active',
+    fullName: 'Name', empCode: 'Employee ID', firstName: 'First name', lastName: 'Last name', workLocation: 'Work location',
+    employmentType: 'Employment type', joiningDate: 'Joined', exitDate: 'Last working day', leftReason: 'Reason', status: 'Status',
+    ctc: 'CTC', takeHome: 'Take-home', monthlyCash: 'Monthly cash', apb: 'APB', esi: 'ESI', pf: 'PF', pt: 'PT', insurance: 'Insurance',
+    effectiveFrom: 'Effective from', kind: 'Kind', amount: 'Amount', from: 'From', to: 'To', mobile: 'Mobile', email: 'Email',
+    reportingManager: 'Reports to', leavesEntitled: 'Leaves', payMonth: 'Month', month: 'Month', note: 'Note', remarks: 'Remarks',
+    days: 'Days', leaveType: 'Leave type', reason: 'Reason', comment: 'Comment', docType: 'Document', name: 'Name',
+  };
+  const word = (k) => LABEL[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+  const val = (v) => (v === true ? 'yes' : v === false ? 'no' : v == null || v === '' ? '—' : typeof v === 'object' ? auditDetailsText(v) : String(v));
+  return Object.entries(d)
+    .filter(([k, v]) => !SKIP.has(k) && v !== null && v !== '' && !(typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0))
+    .map(([k, v]) => `${word(k)}: ${val(v)}`)
+    .join(' · ');
 }
 
 /* ─────────────────────────── Audit ─────────────────────────── */
@@ -1274,8 +1350,8 @@ function Audit() {
                     <td style={{ fontSize: 11 }}>{a.actor || '-'}</td>
                     <td style={{ fontSize: 11 }}>{a.entityType}{a.entityId ? ' #' + a.entityId : ''}</td>
                     <td><span className="tag tb" style={{ fontSize: 10 }}>{a.action}</span></td>
-                    <td style={{ fontSize: 10, whiteSpace: 'normal', wordBreak: 'break-word', maxWidth: 420 }}>
-                      {typeof a.details === 'string' ? a.details : JSON.stringify(a.details || {})}
+                    <td style={{ fontSize: 11, whiteSpace: 'normal', wordBreak: 'break-word', maxWidth: 480 }} title={typeof a.details === 'string' ? a.details : JSON.stringify(a.details || {})}>
+                      {auditDetailsText(a.details) || '—'}
                     </td>
                   </tr>
                 ))}

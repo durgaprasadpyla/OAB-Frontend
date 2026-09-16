@@ -239,7 +239,8 @@ describe('Rep Portal — allocation', () => {
 
   it('counts only the signed-in rep\'s customers in the header', async () => {
     await openRep('R1');
-    expect(screen.getByText(/2 customers allocated to you/)).toBeInTheDocument();
+    // Sales Login: a lead is a customer only once the Super Admin converts it
+    expect(screen.getByText(/2 leads and 0 customers allocated to you/)).toBeInTheDocument();
   });
 });
 
@@ -274,10 +275,12 @@ describe('Rep Portal — add customer', () => {
   it('saves a lead allocated to the signed-in rep', async () => {
     const { saved } = await openRep('R1');
     await repTab('Add Lead');
-    await userEvent.type(screen.getByLabelText('Customer'), 'New Client Ltd');
+    // Sales Login §1-2: no Group here at all, and the field is the Lead
+    expect(screen.queryByLabelText('Group')).toBeNull();
+    await userEvent.type(screen.getByLabelText('Lead name'), 'New Client Ltd');
     await userEvent.click(screen.getByLabelText('Dairy'));
     await userEvent.click(screen.getByLabelText('Oil'));
-    await userEvent.click(screen.getByText(/Save Customer/));
+    await userEvent.click(screen.getByText(/Save New Lead/));
 
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const blob = saved.filter((s) => s.key === 'sales').pop().data;
@@ -289,8 +292,8 @@ describe('Rep Portal — add customer', () => {
   it('refuses to save without a category, and does not write', async () => {
     const { saved } = await openRep('R1');
     await repTab('Add Lead');
-    await userEvent.type(screen.getByLabelText('Customer'), 'No Category Ltd');
-    await userEvent.click(screen.getByText(/Save Customer/));
+    await userEvent.type(screen.getByLabelText('Lead name'), 'No Category Ltd');
+    await userEvent.click(screen.getByText(/Save New Lead/));
     expect(screen.getByText(/at least one category/i)).toBeInTheDocument();
     expect(saved.some((s) => s.key === 'sales')).toBe(false);
   });
@@ -307,7 +310,8 @@ describe('Rep Portal — contacts', () => {
   it('adds a contact against a chosen customer', async () => {
     const { saved } = await openRep('R1');
     await repTab('My Contacts');
-    await userEvent.selectOptions(screen.getByLabelText('Contact customer'), 'L1');
+    // Sales Login §6: Lead / Customer radio first, then the list that goes with it
+    await userEvent.selectOptions(screen.getByLabelText('Contact Lead'), 'L1');
     await userEvent.type(screen.getByLabelText('Contact name'), 'New Person');
     await userEvent.click(screen.getByText(/Add contact/));
 

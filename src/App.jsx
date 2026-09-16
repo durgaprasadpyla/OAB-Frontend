@@ -6,6 +6,7 @@ import Shell from './components/Shell.jsx';
 import RoleRoute from './components/RoleRoute.jsx';
 import Login from './pages/Login.jsx';
 import NewPO from './pages/NewPO.jsx';
+import PoToSo from './pages/PoToSo.jsx';
 import OabBoard from './pages/OabBoard.jsx';
 import DailyUpdate from './pages/DailyUpdate.jsx';
 import FGLedger from './pages/FGLedger.jsx';
@@ -56,6 +57,7 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route element={<Protected><DataProvider><Shell /></DataProvider></Protected>}>
         <Route path="/po" element={<RoleRoute path="/po"><NewPO /></RoleRoute>} />
+        <Route path="/po-to-so" element={<RoleRoute path="/po-to-so"><PoToSo /></RoleRoute>} />
         <Route path="/oab" element={<RoleRoute path="/oab"><OabBoard /></RoleRoute>} />
         <Route path="/daily" element={<RoleRoute path="/daily"><DailyUpdate /></RoleRoute>} />
         <Route path="/fg" element={<RoleRoute path="/fg"><FGLedger /></RoleRoute>} />

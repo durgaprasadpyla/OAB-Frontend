@@ -10,6 +10,7 @@ import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
 import CertificatePanel from '../components/CertificatePanel.jsx';
 import CsaPanel from '../components/CsaPanel.jsx';
+import CsaToJssPanel from '../components/CsaToJssPanel.jsx';
 
 // QC / JSS spec entry, ported from the legacy showQCView + initQCForm +
 // saveQCSpec + qcCalcPW + renderQCTable + exportJSSExcel. Persists to the
@@ -45,6 +46,7 @@ function Field({ label, value, onChange, readOnly = false, required = false, typ
       <input
         type={type}
         value={value}
+        aria-label={label}
         onChange={onChange}
         readOnly={readOnly}
         placeholder={placeholder}
@@ -68,6 +70,24 @@ export default function QC() {
   const [fCust, setFCust] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [fSpec, setFSpec] = useState('');
+  // Sales Login §63-65: the accepted CSA this JSS is being created from — Add Spec
+  // writes the new spec code back onto that SKU.
+  const [fromSku, setFromSku] = useState('');
+  function pickCsa(skuId, fields) {
+    setFromSku(skuId);
+    setForm((f) => {
+      const next = { ...f, ...fields, groupNew: '', customerNew: '' };
+      // a customer not yet in the master is typed rather than picked
+      if (fields.customer && !custsInGroup(customers, fields.group || '').includes(fields.customer)
+        && !jss.some((j) => String(j.customer || '').trim() === fields.customer)) {
+        next.customer = '__new__'; next.customerNew = fields.customer;
+      }
+      if (fields.group && !groups.includes(fields.group)) { next.group = '__new__'; next.groupNew = fields.group; }
+      return next;
+    });
+    setMsg({ type: 'g', text: 'Filled from the CSA — check the fields and press Add Spec.' });
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ }
+  }
 
   // Issues 2.0: the Dispatch Form options come from the Super Admin dashboard's
   // Drop-down Selections → despatch types (falling back to the legacy list only
@@ -211,7 +231,18 @@ export default function QC() {
     setBusy(true);
     try {
       await save('jss', next);
-      setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully. Next spec ready.' });
+      // §65: the JSS number goes back onto the SKU, so the rep's PO can carry it
+      if (fromSku) {
+        try {
+          await save('sales', (prev) => ({ ...(prev || {}), skus: ((prev && prev.skus) || []).map((sk) => (sk.id === fromSku ? { ...sk, jss_spec: spec, jss_created_at: new Date().toISOString() } : sk)) }));
+        } catch (e) {
+          setMsg({ type: 'r', text: 'Spec ' + spec + ' saved, but it could not be written onto the sales SKU: ' + (e && e.message ? e.message : e) });
+          setBusy(false); setFromSku('');
+          return;
+        }
+        setFromSku('');
+      }
+      setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully.' + (fromSku ? ' The JSS number is on the sales SKU now.' : ' Next spec ready.') });
       // Reset entry fields but keep the group + customer for fast repeat entry.
       setForm((f) => ({ ...BLANK, group: f.group, groupNew: f.groupNew, customer: f.customer, customerNew: f.customerNew }));
     } catch (e) {
@@ -281,8 +312,10 @@ export default function QC() {
       <QcTabs tab={tab} setTab={setTab} />
       <div className="pg-sub">Add a new JSS master spec and review the full spec list.</div>
 
+      <CsaToJssPanel picked={fromSku} onPick={pickCsa} />
+
       <div className="card">
-        <div className="ctitle">Add New Spec</div>
+        <div className="ctitle">Add New Spec{fromSku ? <span className="tag tb" style={{ marginLeft: 8, fontSize: 10 }}>from CSA</span> : null}</div>
         {msg && <div className={'al al-' + msg.type}>{msg.text}</div>}
 
         <div className="g4">

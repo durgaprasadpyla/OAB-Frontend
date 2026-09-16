@@ -6,6 +6,7 @@ import { today as todayIso } from '../lib/format.js';
 import { ddList } from '../lib/dropdowns.js';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import SalesDailyTab from '../components/SalesDailyTab.jsx';
+import { costIncurred } from '../lib/repFlow.js';
 import SalesCsaTab from '../components/SalesCsaTab.jsx';
 import SalesPosTab from '../components/SalesPosTab.jsx';
 import SalesContactsTab from '../components/SalesContactsTab.jsx';
@@ -101,7 +102,11 @@ function Kpi({ label, value, color }) {
 
 /* ─────────────────────────── Overview ─────────────────────────── */
 function Overview({ sales }) {
+  const { mods } = useData();
   const k = useMemo(() => salesOverview(sales), [sales]);
+  // Sales Login §35: the meeting / visit costs the reps log, split by whether the
+  // party is still a lead (cost to convert) or already a customer (cost to retain).
+  const cost = useMemo(() => costIncurred(sales, mods.customers || []), [sales, mods.customers]);
   const workload = useMemo(() => repWorkload(sales.leads, sales.sales_users, sales.interactions), [sales]);
   const nudges = useMemo(() => nudgeList(sales.leads, sales.interactions), [sales]);
 
@@ -116,6 +121,11 @@ function Overview({ sales }) {
         <Kpi label="POs received" value={inr(k.posReceived)} color="var(--g)" />
         <Kpi label="Today's activity" value={inr(k.todaysActivities)} />
         <Kpi label="Unallocated lines" value={inr(k.unallocated)} color={k.unallocated ? 'var(--red)' : undefined} />
+      </div>
+      <div className="stats" aria-label="Cost incurred">
+        <Kpi label="Cost incurred to convert a customer" value={'₹' + inr(Math.round(cost.convert))} color="#8a6d00" />
+        <Kpi label="Cost incurred to retain a customer" value={'₹' + inr(Math.round(cost.retain))} color="#1d4e89" />
+        <Kpi label="Total visit / meeting costs" value={'₹' + inr(Math.round(cost.total))} />
       </div>
       <div className="pg-sub" style={{ marginTop: -6 }}>
         “Converted” counts leads we have received at least one PO from — evidence, not a stage label.

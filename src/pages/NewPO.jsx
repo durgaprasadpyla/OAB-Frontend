@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { markPosPushed } from '../lib/repFlow.js';
 import { useData } from '../data.jsx';
 import { ordersApi, stockApi, masterApi } from '../api.js';
 import { today, fmtDate, dash, rupees } from '../lib/format.js';
@@ -14,6 +15,10 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 export default function NewPO() {
   const { mods, reloadModule, save } = useData();
   const nav = useNavigate();
+  // Sales Login §72-§75: opened from the PO → SO tab with a sales rep's PO — the
+  // customer, PO number and date, despatch location and SKU lines come pre-filled.
+  const location = useLocation();
+  const repPo = (location && location.state && location.state.repPo) || null;
   const [step, setStep] = useState(1);            // 1 | 2 | 3 | 4(=success)
   const [poNum, setPoNum] = useState('');
   const [poDate, setPoDate] = useState(today());
@@ -39,6 +44,16 @@ export default function NewPO() {
   // none it falls back to the distinct JSS customer names. (buildJSSFilters /
   // populateCustDropdown)
   const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
+  useEffect(() => {
+    if (!repPo) return;
+    setPoNum(repPo.poNum || '');
+    if (repPo.poDate) setPoDate(repPo.poDate);
+    const master = (mods.customers || []).find((c) => String(c.customer || '').trim().toLowerCase() === String(repPo.customer || '').trim().toLowerCase());
+    setGroup(master ? (master.group || '') : '');
+    setCustomer(repPo.customer || '');
+    setLoc(repPo.loc || '');
+    setSkus([]); setStep(1);
+  }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
   const customers = useMemo(() => (
     (mods.customers && mods.customers.length) ? custsInGroup(mods.customers, group) : jssCustomers(mods.jss)
   ), [mods.customers, mods.jss, group]);
@@ -110,6 +125,17 @@ export default function NewPO() {
       .filter((r) => String(r.status || '').trim().toLowerCase() === 'active' && specVisibleTo(r, customer, mods.customers))
       .reverse()
       .map((s) => ({ ...s, checked: false, qty: '' }));
+    // a rep's PO: its SKUs come pre-ticked with the quantity and PO price it carries
+    if (repPo && Array.isArray(repPo.lines)) {
+      const bySpec = new Map(repPo.lines.filter((l) => l.spec).map((l) => [String(l.spec).trim(), l]));
+      list.forEach((s) => {
+        const l = bySpec.get(String(s.spec || '').trim());
+        if (l) { s.checked = true; s.qty = String(l.qty || ''); s.poPrice = l.price; }
+      });
+      const missing = [...bySpec.keys()].filter((sp) => !list.some((s) => String(s.spec || '').trim() === sp));
+      if (missing.length) alert('These JSS numbers on the PO are not active specs of ' + customer + ': ' + missing.join(', ') + '. Tick them by hand once QC has fixed the spec.');
+      list.sort((a, b) => (b.checked ? 1 : 0) - (a.checked ? 1 : 0));
+    }
     setSkus(list);
     setStep(2);
   }
@@ -149,6 +175,12 @@ export default function NewPO() {
       const created = (resp && resp.created) || [];
       setAdded({ count: created.length, first: created[0], last: created[created.length - 1] });
       setStep(4);
+      // the rep's PO is on the OAB now — it leaves the PO → SO list
+      if (repPo && Array.isArray(repPo.lineIds) && repPo.lineIds.length) {
+        try {
+          await save('sales', (prev) => ({ ...(prev || {}), pos: markPosPushed((prev && prev.pos) || [], repPo.lineIds, { so: created.join(', '), by: 'superstar' }) }));
+        } catch (e) { console.warn('The sale orders were created but the sales PO could not be marked as pushed: ' + (e && e.message ? e.message : e)); }
+      }
       // Best-effort low-stock check for the just-created SOs (§8): compute material
       // requirements against the BOM + stock and surface any shortfall. The server
       // also raises SO-specific alerts + notifies Plant Manager / Stores / Super Admin.
@@ -220,6 +252,12 @@ export default function NewPO() {
     <div id="app">
       <div className="pg-ttl">New PO Entry</div>
       <div className="pg-sub">Fill PO details and location → select SKUs → verify prices → submit</div>
+      {repPo && (
+        <div className="al al-b">
+          📨 From the sales rep&rsquo;s PO <b>{repPo.poNum}</b> for <b>{repPo.customer}</b> — {repPo.lines.length} SKU(s) pre-filled
+          ({repPo.lines.map((l) => `${l.spec || 'no JSS'} × ${l.qty}`).join(', ')}). Press Next to see them ticked with their quantities and PO prices.
+        </div>
+      )}
 
       {!(mods.jss || []).length && (
         <div className="al al-y">⚠ No JSS loaded yet. Add specs via <strong>Dashboard → JSS Editor</strong> (admin) or <strong>QC login → Add New Spec</strong>.</div>
@@ -308,6 +346,7 @@ export default function NewPO() {
                   <th style={{ minWidth: 100 }}>Sub Brand</th><th style={{ width: 80 }}>Disp Form</th>
                   <th style={{ width: 42 }}>W</th><th style={{ width: 42 }}>H</th><th style={{ width: 38 }}>Mic</th>
                   <th style={{ width: 70 }}>PO Qty*</th><th style={{ width: 50 }}>UOM</th><th style={{ width: 80 }}>Rate (₹)</th>
+                  {repPo && <th style={{ width: 90 }}>PO price (₹)</th>}
                 </tr>
               </thead>
               <tbody>
@@ -327,6 +366,11 @@ export default function NewPO() {
                         style={{ width: 60, opacity: s.checked ? 1 : 0.4 }} onChange={(e) => setRow(i, { qty: e.target.value })} /></td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(s.dispatchForm)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g)' }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
+                      {repPo && (
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: s.poPrice != null && rate > 0 && num(s.poPrice) < rate ? 'var(--red)' : 'var(--blu)' }} aria-label={`PO price for ${s.spec}`}>
+                          {s.poPrice != null ? '₹' + num(s.poPrice).toFixed(2) : '-'}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

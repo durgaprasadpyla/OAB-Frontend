@@ -21,7 +21,7 @@ export const DROPDOWN_DEFS = [
   // lists (stored in the sales blob), Departments are backed by the shared normalized
   // Department master (/api/master/departments) so the PAdmin Item Master — which cannot
   // read the sales blob — reads the same source. `master: true` flags that backing.
-  { key: 'departments', label: 'Departments', where: 'PAdmin — Item Master', type: 'list', master: 'dept' },
+  { key: 'departments', label: 'Departments', where: 'Item Master · BOM · Machines · Routes · Stores · HR', type: 'list', master: 'dept' },
   // Issues 1.0 #6: the Machines master is visible/manageable here too — the same
   // machines the Machines tab, the JSS and the PPC boards use. Adding one pulls
   // its department in from the Departments list above.
@@ -37,14 +37,18 @@ export const DROPDOWN_DEFS = [
   // HR 2.0: "designations I shall add for the drop-down options from the super admin
   // in the dashboard under drop-down selections … with respect to the department".
   // Backed by hr_designation (per department) — the HR login only picks from it.
-  { key: 'hrDesignations', label: 'Designations (HR)', where: 'HR — Employee details', type: 'list', master: 'designation' },
+  { key: 'hrDesignations', label: 'Designations & HR-only departments', where: 'HR — Employee details', type: 'list', master: 'designation' },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.
   { key: 'despatch', label: 'Dispatch Forms — Sales SKUs', where: 'Sales Rep — SKUs · Routes', type: 'list' },
   { key: 'paytypes', label: 'Customer Payment Types', where: 'Sales Rep — Add Customer', type: 'pairs' },
-  { key: 'statuses', label: 'Customer Statuses', where: 'Sales Rep · Sales Admin', type: 'list' },
+  // Issues 7 §26: "Customer Statuses" reads "Lead Statuses" — a status is a LEAD's stage.
+  { key: 'statuses', label: 'Lead Statuses', where: 'Sales Rep · Sales Admin', type: 'list' },
   { key: 'designations', label: 'Contact Designations', where: 'Sales Rep — Contacts', type: 'list' },
+  // Sales Login §9: the cities a contact / lead sits in, from ONE list — "to avoid
+  // duplicate entries for Bangalore, Bengaluru, Bangalor, etc."
+  { key: 'locations', label: 'Locations (cities)', where: 'Sales Rep — Contacts · Leads', type: 'list' },
   { key: 'visit_types', label: 'Log Visit — Activity Types', where: 'Sales Rep — Log Visit', type: 'list' },
   { key: 'ping_types', label: 'Next Ping Types', where: 'Sales Rep — Log Visit', type: 'list' },
   { key: 'responsible', label: 'CSA Responsible Persons', where: 'QC — CSA report', type: 'list' },
@@ -69,6 +73,7 @@ export const DD_DEFAULTS = {
   ping_types: ['Visit', 'Call', 'Mail', 'WhatsApp', 'Meeting', 'Other'],
   responsible: QC_RESPONSIBLE,
   substrates: SUBSTRATE_DEFAULTS,
+  locations: ['Hyderabad', 'Bengaluru', 'Chennai', 'Mumbai', 'Pune', 'Delhi', 'Kolkata', 'Vijayawada', 'Visakhapatnam', 'Coimbatore'],
 };
 
 /** Where a list lives in the blob. Substrates have their own top-level key. */

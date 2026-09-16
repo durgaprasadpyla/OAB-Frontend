@@ -156,11 +156,12 @@ export function buildPo({ sku, qty, price, poNumber, date }, sales, repId, { now
 export function buildVisit({ leadId, type, outcome, expense, followUp, followUpType }, repId, { now = new Date(), uid = salesUid } = {}) {
   if (!leadId) throw new Error('Select a lead.');
   if (!s(outcome)) throw new Error('Please add notes on what happened in this visit/update before saving.');
-  const isVisit = type === 'Visit';
+  // Sales Login §34: a MEETING carries the cost incurred (₹), as a visit always has.
+  const costed = type === 'Visit' || type === 'Meeting';
   return {
     id: uid('inter'), lead_id: leadId, date: salesToday(now), created_at: now.toISOString(),
     type: s(type), outcome: s(outcome),
-    expense: isVisit ? n(expense) : 0,
+    expense: costed ? n(expense) : 0,
     follow_up_date: followUp || datePlus(2, now),
     follow_up_type: s(followUpType), created_by: repId,
   };

@@ -46,6 +46,8 @@ export function navTabs(role) {
   if (!OPS_ROLES.includes(role)) return [];
   const tabs = [
     { to: '/po', label: 'New PO' },
+    // Sales Login §71: the sales reps' POs waiting to be entered on the OAB.
+    { to: '/po-to-so', label: '🧾 PO → SO' },
     { to: '/oab?sheet=SF', label: 'Stay Fresh OAB', match: '/oab', sheet: 'SF' },
     { to: '/oab?sheet=OT', label: 'Others OAB', match: '/oab', sheet: 'OT' },
     { to: '/daily', label: 'Daily Update' },
@@ -76,7 +78,7 @@ export function navTabs(role) {
 /** Whether a role may view a route (base path, query ignored). */
 export function canAccess(role, path) {
   const p = String(path || '').split('?')[0];
-  if (['/po', '/oab', '/daily', '/fg', '/invoice', '/specdisp'].includes(p)) return OPS_ROLES.includes(role);
+  if (['/po', '/po-to-so', '/oab', '/daily', '/fg', '/invoice', '/specdisp'].includes(p)) return OPS_ROLES.includes(role);
   if (p === '/dashboard') return role === 'superadmin';
   if (p === '/pdashboard') return role === 'padmin' || role === 'superadmin';
   if (p === '/plant') return role === 'plant';

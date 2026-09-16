@@ -144,15 +144,16 @@ describe('Issues 3.0 §3 — the sales-user module allocation is readable', () =
     expect(formPanel.className).toContain('mod-alloc');
     // Every module reads as its own label with its caption in a separate element,
     // so a 14px box rule can never squeeze the text on top of the tick.
-    ['Follow-ups', 'Log Visit', 'Enter PO', 'My Targets', 'My Customers', 'My Contacts', 'Add Customer', 'SKUs', 'Negotiations']
+    // Sales Login (2026-09-15): Negotiations became Quotations + Send Quote + Quote Accepted
+    ['Follow-ups', 'Log Visit', 'Enter PO', 'My Targets', 'My Leads', 'My Contacts', 'Add Lead', 'SKUs', 'Quotations', 'Send Quote', 'Quote Accepted']
       .forEach((label) => expect(within(formPanel).getByText(label).tagName).toBe('SPAN'));
-    expect(within(formPanel).getAllByRole('checkbox')).toHaveLength(9);
+    expect(within(formPanel).getAllByRole('checkbox')).toHaveLength(11);
 
     // The per-rep editor in the table uses the same panel.
     await user.click(await screen.findByLabelText('Edit modules for Manasa'));
     const rowPanel = await screen.findByRole('group', { name: 'Modules for Manasa' });
     expect(rowPanel.className).toContain('mod-alloc');
-    expect(within(rowPanel).getAllByRole('checkbox')).toHaveLength(9);
+    expect(within(rowPanel).getAllByRole('checkbox')).toHaveLength(11);
   });
 });
 

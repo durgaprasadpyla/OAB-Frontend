@@ -233,7 +233,7 @@ describe('Issues & Returns — the sale order first, then the material', () => {
     fireEvent.change(screen.getByLabelText('Returned weight 1'), { target: { value: '100' } });
     // two rolls → two stickers, named before the return is booked
     expect(screen.getByLabelText('Stickers for returned row 1')).toHaveTextContent('BLMU-9 … BLMU-10');
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/returns'))).toBe(true));
     const body = posted.find((p) => p.u.includes('/api/stores/returns')).body;
     expect(body.children).toHaveLength(2);

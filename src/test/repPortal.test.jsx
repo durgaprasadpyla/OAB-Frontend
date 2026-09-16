@@ -180,7 +180,8 @@ describe('Rep Portal — the tabs production ships', () => {
     openRep(salesModule({ skus: [sku()] }));
     await screen.findByText('🗓 Follow-ups');
     await userEvent.click(screen.getByText('🧾 Enter PO'));
-    expect(await screen.findByText(/No SKUs are ready for a PO yet/)).toBeInTheDocument();
+    // Sales Login §66: customers only — nothing converted yet, so nothing to enter a PO for
+    expect(await screen.findByText(/None of your leads has been converted into a customer yet/)).toBeInTheDocument();
   });
 
   it('logs a visit and moves the lead\'s next ping with it', async () => {
@@ -188,7 +189,7 @@ describe('Rep Portal — the tabs production ships', () => {
     await screen.findByText('🗓 Follow-ups');
     await userEvent.click(screen.getByText('📋 Log Visit'));
 
-    await userEvent.selectOptions(await screen.findByLabelText('Lead'), 'L1');
+    await userEvent.selectOptions(await screen.findByLabelText('Visit Lead'), 'L1');
     await userEvent.type(screen.getByLabelText('Outcome / Notes'), 'Met the buyer, samples approved');
     await userEvent.click(screen.getByRole('button', { name: /Save Update/ }));
 

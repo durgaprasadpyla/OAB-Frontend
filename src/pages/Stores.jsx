@@ -102,6 +102,11 @@ function OnHand({ flash }) {
   const [sugg, setSugg] = useState({});
   const [suggAny, setSuggAny] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Issues 7 §19: "I should be able to search using the internal code as well" — the
+  // sticker numbers of every roll, keyed by item, so BLMU-332 finds BLM306.
+  const [codesByItem, setCodesByItem] = useState({});
+  // Issues 7 §20: the "split" tag opens where the roll came from.
+  const [traceOf, setTraceOf] = useState(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -109,6 +114,12 @@ function OnHand({ flash }) {
     catch (e) { flash('r', e.message); }
     finally { setBusy(false); }
     try { setWithdrawn((await storesApi.withdrawn()) || []); } catch { setWithdrawn([]); }
+    try {
+      const all = (await storesApi.allUnits(false)) || [];
+      const m = {};
+      all.forEach((u) => { const k = String(u.itemId); (m[k] = m[k] || []).push(String(u.internalCode || '').toLowerCase()); });
+      setCodesByItem(m);
+    } catch { /* the code search is an extra, never a blocker */ }
   }, [flash]);
   useEffect(() => { load(); }, [load]);
 
@@ -184,9 +195,13 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       if (fDept && String(r.departmentName || '') !== fDept) return false;
       if (fStatus && !num(((r.byStatus || {})[fStatus] || {}).qty)) return false;
       if (!t) return true;
-      return [r.code, r.name, r.materialType, r.subGroup, r.specialtyName].some((v) => String(v || '').toLowerCase().includes(t));
+      if ([r.code, r.name, r.materialType, r.subGroup, r.specialtyName].some((v) => String(v || '').toLowerCase().includes(t))) return true;
+      // the internal (sticker) code of any roll of this item — "BLMU-332", "332", "u-33"
+      const codes = codesByItem[String(r.id)] || [];
+      const tt = t.replace(/[\s-]/g, '');
+      return codes.some((c) => c.includes(t) || c.replace(/[\s-]/g, '').includes(tt));
     });
-  }, [rows, q, fMat, fSub, fSpec, fMic, fDept, fStatus]);
+  }, [rows, q, fMat, fSub, fSpec, fMic, fDept, fStatus, codesByItem]);
 
   // With a disposition chosen the figures answer the question that was asked —
   // "the amount that is in the moving stocks, non-moving stocks, rejected stocks or
@@ -317,7 +332,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       )}
 
       <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
-        <input placeholder="Search item / code…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 200 }} />
+        <input placeholder="Search item / code / internal code (BLMU-…)…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 240 }} />
         <select value={fMat} onChange={(e) => setFMat(e.target.value)} aria-label="Filter by material">
           <option value="">All materials</option>{opts('materialType').map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
@@ -409,7 +424,11 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                             {units.map((u) => (
                               <tr key={u.id}>
                                 <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{u.internalCode}
-                                  {u.parentUnitId ? <span className="tag tb" style={{ fontSize: 9, marginLeft: 4 }} title="cut from another roll">split</span> : null}
+                                  {u.parentUnitId ? (
+                                    <button type="button" className="tag tb" style={{ fontSize: 9, marginLeft: 4, cursor: 'pointer', border: 0 }}
+                                      title="Cut from another roll — click for the parent roll, the issue line and the return slip"
+                                      aria-label={`Where ${u.internalCode} came from`} onClick={() => setTraceOf(u)}>split ↗</button>
+                                  ) : null}
                                 </td>
                                 <td style={{ fontSize: 11 }}>{u.supplier || '—'}</td>
                                 <td style={{ fontSize: 11 }}>{u.supplierCode || '—'}</td>
@@ -437,6 +456,94 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
             ))}
           </tbody>
         </table>
+      </div>
+      {traceOf && <UnitTraceModal unit={traceOf} onClose={() => setTraceOf(null)} flash={flash} />}
+    </div>
+  );
+}
+
+/**
+ * Issues 7 §20: what the "split" tag opens — the parent roll the sticker was cut
+ * from, the issue line that roll went out on, the return slip that booked this one,
+ * and the other rolls cut from the same parent. Both slips download from here.
+ */
+function UnitTraceModal({ unit, onClose, flash }) {
+  const [t, setT] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    let live = true;
+    storesApi.unitTrace(unit.id)
+      .then((r) => { if (live) setT(r); })
+      .catch((e) => { if (live) setErr(e && e.message ? e.message : String(e)); });
+    return () => { live = false; };
+  }, [unit.id]);
+  async function download(no) {
+    try { saveIssueSlipPdf(await storesApi.slip(no)); } catch (e) { flash('r', e.message); }
+  }
+  const when = (iso) => (iso ? String(iso).slice(0, 10) : '—');
+  const issue = t && t.issue;
+  const parent = t && t.parent;
+  const ret = t && (t.returns || []).find((r) => r.returnNo) || (t && (t.returns || [])[0]) || null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 9600, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'auto', padding: '32px 12px' }} onClick={onClose}>
+      <div style={{ background: 'var(--wh)', borderRadius: 12, maxWidth: 760, width: '100%', padding: '18px 20px', boxShadow: '0 20px 60px rgba(0,0,0,.3)' }} onClick={(e) => e.stopPropagation()} aria-label={`Trace of ${unit.internalCode}`}>
+        <div className="fbar">
+          <div className="ctitle" style={{ margin: 0 }}>🔗 {unit.internalCode} — where this roll came from</div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-s" onClick={onClose}>Close</button>
+        </div>
+        {err && <div className="al al-r">{err}</div>}
+        {!t && !err && <div className="pg-sub">Reading…</div>}
+        {t && (
+          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+            <div className="al al-b" style={{ marginBottom: 8 }}>
+              <b>Parent roll:</b> {parent ? <>{parent.internalCode} · {parent.itemCode} {parent.itemName ? `— ${parent.itemName}` : ''}{parent.widthMm ? ` · ${qty(parent.widthMm)} mm` : ''} · received {qty(parent.qtyReceived)} {parent.uom || ''}{parent.supplier ? ` · ${parent.supplier}` : ''}{parent.location ? ` · rack ${parent.location}` : ''}</> : '— (this roll was not cut from another)'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Issue line</div>
+                {issue ? (
+                  <>
+                    <div><span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{issue.lineNo || issue.slipNo}</span> · slip {issue.slipNo}</div>
+                    <div>{qty(issue.qtyIssued)} {issue.uom || ''} of {issue.internalCode} to <b>{issue.department || '—'}</b>{issue.so ? ` for ${issue.so}` : ''} on {when(issue.ts)}</div>
+                    <div>Back so far: {qty(issue.qtyReturned)} {issue.uom || ''} in {issue.rollsReturned} roll(s)</div>
+                    <button className="btn btn-s" style={{ marginTop: 4 }} onClick={() => download(issue.slipNo)} aria-label={`Download issue slip ${issue.slipNo}`}>⬇ Issue slip PDF</button>
+                  </>
+                ) : <div style={{ color: 'var(--i3)' }}>No issue line on record for the parent roll.</div>}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700 }}>Return slip</div>
+                {ret ? (
+                  <>
+                    <div><span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{ret.returnNo || '(no number — returned before slips existed)'}</span></div>
+                    <div>{qty(ret.qty)} {unit.uom || ''} received on {when(ret.ts)}{ret.department ? ` from ${ret.department}` : ''}{ret.so ? ` · ${ret.so}` : ''} by {ret.actor || '—'}</div>
+                    {ret.returnNo && <button className="btn btn-s" style={{ marginTop: 4 }} onClick={() => download(ret.returnNo)} aria-label={`Download return slip ${ret.returnNo}`}>⬇ Return slip PDF</button>}
+                  </>
+                ) : <div style={{ color: 'var(--i3)' }}>No return on record.</div>}
+              </div>
+            </div>
+            {(t.siblings || []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 700 }}>Cut from the same roll</div>
+                <div className="tw"><table>
+                  <thead><tr><th>Roll</th><th>Item</th><th style={{ textAlign: 'right' }}>Width</th><th style={{ textAlign: 'right' }}>Remaining</th><th>Rack</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {t.siblings.map((sb) => (
+                      <tr key={sb.id}>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{sb.internalCode}</td>
+                        <td style={{ fontSize: 11 }}>{sb.itemCode || sb.itemId}</td>
+                        <td style={{ textAlign: 'right' }}>{sb.widthMm ? qty(sb.widthMm) : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{qty(sb.qtyRemaining)} {sb.uom || ''}</td>
+                        <td style={{ fontSize: 11 }}>{sb.location || '—'}</td>
+                        <td style={{ fontSize: 11 }}>{statusLabel(sb.status)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table></div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1279,6 +1386,22 @@ function IssuesReturns({ flash }) {
   // Stores 5.1: "I would want the internal code to be shown so that I'll be able to
   // write it on the roll" — the numbers the returned rolls will get.
   const [nextCodes, setNextCodes] = useState([]);
+  // Issues 7 §7-§18: a return is booked against the ROLL-WISE issue line the roll went
+  // out on (ISS/2026/3.1), picked by slip and then by line; every returned roll gets
+  // its own return slip (RET/2026/3.1/1), and more rolls can come back against the
+  // same line later.
+  const [issueLines, setIssueLines] = useState([]);
+  const [issueSlipPick, setIssueSlipPick] = useState('');
+  const [issueLinePick, setIssueLinePick] = useState('');
+  const [lastReturn, setLastReturn] = useState(null);
+
+  const loadIssueLines = useCallback(async () => {
+    try { setIssueLines((await storesApi.issueLines({ open: 1, limit: 300 })) || []); } catch { setIssueLines([]); }
+  }, []);
+  useEffect(() => { if (mode === 'return') loadIssueLines(); }, [mode, loadIssueLines]);
+  const issueSlips = useMemo(() => [...new Set(issueLines.map((l) => l.slipNo).filter(Boolean))], [issueLines]);
+  const linesOfSlip = useMemo(() => issueLines.filter((l) => !issueSlipPick || l.slipNo === issueSlipPick), [issueLines, issueSlipPick]);
+  const pickedLine = useMemo(() => issueLines.find((l) => String(l.txnId) === String(issueLinePick)) || null, [issueLines, issueLinePick]);
 
   const loadNextCodes = useCallback(async () => {
     try { setNextCodes(((await storesApi.nextCodes(40)) || {}).codes || []); } catch { setNextCodes([]); }
@@ -1317,6 +1440,18 @@ function IssuesReturns({ flash }) {
     const oab = (mods.oab && mods.oab.OAB) || {};
     return ['SF', 'OT'].flatMap((k) => (oab[k] || []).filter((r) => !r.closed).map((r) => r.so)).filter(Boolean);
   }, [mods.oab]);
+  // Issues 7 §1: the JSS and customer beside each sale order, so the desk can see which
+  // JSS (and therefore which route) an order works to before picking it.
+  const soInfo = useMemo(() => {
+    const oab = (mods.oab && mods.oab.OAB) || {};
+    const m = {};
+    ['SF', 'OT'].forEach((k) => (oab[k] || []).forEach((r) => { if (r && r.so && !m[r.so]) m[r.so] = r; }));
+    return m;
+  }, [mods.oab]);
+  const soLabel = (so) => {
+    const r = soInfo[so];
+    return r ? `${so} · JSS ${r.spec || '—'}${r.customer ? ' · ' + r.customer : ''}` : so;
+  };
   const plannedSet = useMemo(() => new Set(plannedSos || []), [plannedSos]);
   const soOptions = useMemo(() => {
     const planned = plannedSos || [];
@@ -1362,6 +1497,14 @@ function IssuesReturns({ flash }) {
   /* ── the material: type → sub-group → speciality → item code ── */
 
   useEffect(() => { storesApi.onHand().then((r) => setItems((r || []).filter((x) => x.active !== false && (num(x.closingStock) > 0 || x.unitCount > 0)))).catch(() => {}); }, []);
+  // Issues 7 §3: a roll only comes back slit when it is FILM — ink and chemicals do not.
+  const chosenIsFilm = useMemo(() => {
+    const it = items.find((x) => String(x.id) === String(itemId)) || (pickedLine ? { materialType: pickedLine.materialType } : null);
+    const mat = String((it && it.materialType) || '').trim();
+    // an item with no material type on file cannot be said NOT to be film
+    return !it || !mat || /film/i.test(mat + ' ' + String(it.subGroup || ''));
+  }, [items, itemId, pickedLine]);
+  useEffect(() => { if (!chosenIsFilm && split) setSplit(false); }, [chosenIsFilm, split]);
 
   const norm = (v) => String(v || '').trim().toLowerCase();
   // Issuing against an order: only the BOM's materials that are in stock. Returning,
@@ -1412,6 +1555,20 @@ function IssuesReturns({ flash }) {
     try { setUnits(await storesApi.units(id, true) || []); } catch (e) { flash('r', e.message); }
   }, [flash]);
   useEffect(() => { loadUnits(itemId); }, [itemId, loadUnits]);
+
+  /** A picked issue line names the roll: the item and the unit follow it. */
+  function pickIssueLine(txnId) {
+    setIssueLinePick(txnId);
+    const l = issueLines.find((x) => String(x.txnId) === String(txnId));
+    if (!l) return;
+    if (String(l.itemId) !== String(itemId)) {
+      setItemId(String(l.itemId));
+      const it = items.find((x) => String(x.id) === String(l.itemId));
+      if (it) { setFMat(String(it.materialType || '').trim()); setFSub(String(it.subGroup || '').trim()); setFSpec(String(it.specialtyName || '').trim()); }
+    }
+    setForm((f) => ({ ...f, unitId: String(l.unitId), so: f.so || l.so || '', department: f.department || l.department || '' }));
+    setChildren([blankChild()]);
+  }
 
   const loadTxns = useCallback(async () => {
     try { setTxns((await storesApi.txns({ limit: 60 })) || []); } catch { /* history is best-effort */ }
@@ -1564,8 +1721,9 @@ function IssuesReturns({ flash }) {
   }
 
   async function doReturn() {
-    if (!form.unitId) { flash('r', 'Pick the roll the material went out on.'); return; }
-    const body = { unitId: Number(form.unitId), so: form.so || undefined, department: form.department || undefined, note: form.note || undefined };
+    if (!form.unitId && !pickedLine) { flash('r', 'Pick the issue line (slip and roll) the material went out on.'); return; }
+    const body = { unitId: form.unitId ? Number(form.unitId) : undefined, issueTxnId: pickedLine ? Number(pickedLine.txnId) : undefined,
+      so: form.so || undefined, department: form.department || undefined, note: form.note || undefined };
     if (split) {
       // A half-filled row first: it is the commonest slip, and "enter at least one
       // returned roll" is the wrong thing to say to someone who has entered three
@@ -1618,13 +1776,21 @@ function IssuesReturns({ flash }) {
     setBusy(true);
     try {
       const r = await storesApi.receiveReturn(body);
-      flash('g', split
+      setLastReturn(r);
+      const nos = r.returnNos || [];
+      // §12: every returned roll gets its own return slip — downloaded as it is booked
+      let pdfNote = '';
+      try {
+        for (const no of nos) saveIssueSlipPdf(await storesApi.slip(no));
+        if (nos.length) pdfNote = ` Return slip${nos.length === 1 ? '' : 's'} ${nos.join(', ')} downloaded — attach to issue ${r.issueLineNo || ''}.`;
+      } catch (e) { pdfNote = ' (The return slip PDF could not be generated here: ' + (e && e.message ? e.message : e) + ' — use ⬇ in the history below.)'; }
+      flash('g', (split
         ? `Returned as ${(r.returned || []).length} roll(s): ${(r.returned || []).map((x) => x.internalCode).join(', ')} — write these on the rolls. The original roll is now zero.`
-        : `Returned ${form.qty} to ${selectedUnit ? selectedUnit.internalCode : 'the roll'}.`);
+        : `Returned ${form.qty} to ${selectedUnit ? selectedUnit.internalCode : 'the roll'}${r.issueLineNo ? ' against ' + r.issueLineNo : ''}.`) + pdfNote);
       setForm((f) => ({ ...f, qty: '', note: '' }));
       setChildren([blankChild()]);
       setSplit(false);
-      await loadUnits(itemId); await loadTxns(); await loadNextCodes();
+      await loadUnits(itemId); await loadTxns(); await loadNextCodes(); await loadIssueLines();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
 
@@ -1656,7 +1822,7 @@ function IssuesReturns({ flash }) {
             {soOptions.length ? (
               <select value={form.so} onChange={(e) => { setForm({ ...form, so: e.target.value, department: '' }); setBasket([]); setItemId(''); }} aria-label="Sale order">
                 <option value="">— none —</option>
-                {soOptions.map((v) => <option key={v} value={v}>{v}{plannedSet.has(v) ? ' · planned today' : ''}</option>)}
+                {soOptions.map((v) => <option key={v} value={v}>{soLabel(v)}{plannedSet.has(v) ? ' · planned today' : ''}</option>)}
                 {form.so && !soOptions.includes(form.so) && <option value={form.so}>{form.so}</option>}
               </select>
             ) : (
@@ -1695,7 +1861,45 @@ function IssuesReturns({ flash }) {
         {/* Stores 5.1: "the next items should be: Material, Subgroup, Specialty,
             including the item code. All of these should be the dropdown selections."
             Issues 6 §8: with a sale order chosen, only the BOM's materials. */}
-        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The material{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}</span> : null}</div>
+        {mode === 'return' && (
+          <>
+            <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The issue line the roll went out on</div>
+            <div className="pg-sub" style={{ marginTop: 0 }}>
+              Every roll issued has its own number — <b>ISS/2026/3.1</b>, <b>ISS/2026/3.2</b> (a lone roll is <b>.0</b>). Pick the slip, then the roll;
+              what comes back is booked against that line, in as many instalments as it takes, and each returned roll gets its own
+              return slip (<b>RET/2026/3.1/1</b>, <b>/2</b> …). Only lines with material still out are listed.
+            </div>
+            <div className="g3">
+              <div className="fg"><label>Issue slip</label>
+                <select value={issueSlipPick} onChange={(e) => { setIssueSlipPick(e.target.value); setIssueLinePick(''); }} aria-label="Issue slip">
+                  <option value="">— all open slips ({issueSlips.length}) —</option>
+                  {issueSlips.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div className="fg" style={{ gridColumn: 'span 2' }}><label>Roll-wise issue number *</label>
+                <select value={issueLinePick} onChange={(e) => pickIssueLine(e.target.value)} aria-label="Issue line">
+                  <option value="">— select the roll that came back —</option>
+                  {linesOfSlip.map((l) => (
+                    <option key={l.txnId} value={l.txnId}>
+                      {l.lineNo || l.slipNo} · {l.internalCode} · {l.itemCode}{l.widthMm ? ` ${qty(l.widthMm)}mm` : ''} · {qty(l.qtyIssued)} {l.uom || ''} out
+                      {num(l.qtyReturned) ? ` · ${qty(l.qtyReturned)} back (${l.rollsReturned})` : ''}{l.department ? ` · ${l.department}` : ''}{l.so ? ` · ${l.so}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {issueLines.length === 0 && <div className="pg-sub" style={{ margin: '3px 0 0' }}>Nothing is out on a numbered slip yet — a roll issued before slips existed can still be returned by picking it under ③.</div>}
+              </div>
+            </div>
+            {pickedLine && (
+              <div className="al al-b" style={{ margin: '4px 0 6px' }} aria-label="Picked issue line">
+                <b>{pickedLine.lineNo}</b> — {pickedLine.internalCode} ({pickedLine.itemCode} — {pickedLine.itemName}) · {qty(pickedLine.qtyIssued)} {pickedLine.uom || ''} issued to {pickedLine.department || '—'}
+                {pickedLine.so ? ` for ${pickedLine.so}` : ''} on {String(pickedLine.ts || '').slice(0, 10)} ·
+                back so far <b>{qty(pickedLine.qtyReturned)}</b> in {pickedLine.rollsReturned} roll(s) · still out <b>{qty(num(pickedLine.qtyIssued) - num(pickedLine.qtyReturned))} {pickedLine.uom || ''}</b>
+                {' '}· next return slip <b>RET/{String(pickedLine.lineNo || '').replace(/^ISS\//, '')}/{num(pickedLine.rollsReturned) + 1}</b>
+              </div>
+            )}
+          </>
+        )}
+        <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}</span> : null}</div>
         {mode === 'issue' && bomMissing && (
           <div className="al al-r" role="alert">
             No BOM is allocated to {form.so}{ctx && ctx.spec ? ` (JSS ${ctx.spec})` : ''} — ask QC / the Super Admin to allocate it under Route and BOM. Material cannot be issued against this order until then.
@@ -1769,7 +1973,7 @@ function IssuesReturns({ flash }) {
               <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit}>＋ Add to slip</button>
               <span className="pg-sub" style={{ margin: 0 }}>Add every roll going to {form.department || 'the department'}{form.so ? ` for ${form.so}` : ''}, then press Issue — one slip, one PDF.</span>
             </div>
-            <div className="ctitle" style={{ fontSize: 11, margin: '8px 0 2px' }}>③ The slip <span className="tag tgr">{basket.length}</span></div>
+            <div className="ctitle" style={{ fontSize: 11, margin: '8px 0 2px' }}>③ The slip <span className="tag tgr">{basket.length}</span> <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— each roll gets its own line number (ISS/…/N.1, N.2)</span></div>
             <div className="tw"><table>
               <thead><tr>
                 <th style={{ width: 30 }}>#</th><th>Roll / sticker</th><th>Item code</th><th>Description</th>
@@ -1807,9 +2011,10 @@ function IssuesReturns({ flash }) {
 
         {mode === 'return' && (
           <>
-            <label className="cb" style={{ fontSize: 12, marginTop: 4 }}>
-              <input type="checkbox" checked={split} onChange={(e) => setSplit(e.target.checked)} aria-label="Returned as narrower rolls" />
-              <span>The roll came back cut into narrower rolls</span>
+            <label className="cb" style={{ fontSize: 12, marginTop: 4, opacity: chosenIsFilm ? 1 : 0.55 }}
+              title={chosenIsFilm ? undefined : 'Only a FILM roll comes back cut into narrower rolls'}>
+              <input type="checkbox" checked={split} disabled={!chosenIsFilm} onChange={(e) => setSplit(e.target.checked)} aria-label="Returned as narrower rolls" />
+              <span>The roll came back cut into narrower rolls{chosenIsFilm ? '' : ' (film only)'}</span>
             </label>
             {split && (
               <div style={{ marginTop: 6 }}>
@@ -1951,7 +2156,10 @@ function IssuesReturns({ flash }) {
               </div>
             )}
             <div className="act">
-              <button className="btn btn-s" onClick={doReturn} disabled={busy}>↙ Receive return</button>
+              <button className="btn btn-s" onClick={doReturn} disabled={busy}>↙ Receive return &amp; print return slip (PDF)</button>
+              {lastReturn && (lastReturn.returnNos || []).map((no) => (
+                <button key={no} className="btn btn-s" onClick={() => reprint(no)} aria-label={`Download return slip ${no} again`}>⬇ {no}</button>
+              ))}
             </div>
           </>
         )}
@@ -1982,18 +2190,21 @@ function IssuesReturns({ flash }) {
       <div className="card">
         <div className="ctitle">Recent issues &amp; returns <span className="tag tgr">{txns.length}</span></div>
         <div className="tw sy" style={{ maxHeight: 280 }}><table>
-          <thead><tr><th>When</th><th>Kind</th><th>Slip</th><th>Item</th><th>Roll</th><th style={{ textAlign: 'right' }}>Qty</th><th>Sale order</th><th>Department</th><th>By</th></tr></thead>
+          <thead><tr><th>When</th><th>Kind</th><th>Slip / line no.</th><th>Download</th><th>Item</th><th>Roll</th><th style={{ textAlign: 'right' }}>Qty</th><th>Sale order</th><th>Department</th><th>By</th></tr></thead>
           <tbody>
-            {txns.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing issued yet</td></tr>
-              : txns.map((t) => (
+            {txns.length === 0 ? <tr><td colSpan={10} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing issued yet</td></tr>
+              : txns.map((t) => {
+                const no = t.kind === 'ISSUE' ? t.slipNo : t.returnNo;
+                return (
                 <tr key={t.id}>
                   <td style={{ fontSize: 11 }}>{t.ts ? String(t.ts).slice(0, 10) : '—'}</td>
                   <td><span className={'tag ' + (t.kind === 'ISSUE' ? 'ty' : 'tg')} style={{ fontSize: 9 }}>{t.kind === 'ISSUE' ? 'Issue' : 'Return'}</span></td>
-                  <td style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                    {t.slipNo ? (
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => reprint(t.slipNo)}
-                        title="Download this issue slip again" aria-label={`Download slip ${t.slipNo}`}>⬇ {t.slipNo}</button>
-                    ) : '—'}
+                  <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 700 }}>{t.kind === 'ISSUE' ? (t.lineNo || t.slipNo || '—') : (t.returnNo || '—')}</td>
+                  <td>
+                    {no ? (
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => reprint(no)}
+                        title={t.kind === 'ISSUE' ? 'Download this issue slip as PDF' : 'Download this return slip as PDF'} aria-label={`Download slip ${no}`}>⬇ Download as PDF</button>
+                    ) : <span style={{ color: 'var(--i3)', fontSize: 10 }}>no slip</span>}
                   </td>
                   <td style={{ fontSize: 11 }}>{t.itemCode}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{t.internalCode}</td>
@@ -2002,7 +2213,8 @@ function IssuesReturns({ flash }) {
                   <td style={{ fontSize: 11 }}>{t.department || '—'}</td>
                   <td style={{ fontSize: 10, color: 'var(--i3)' }}>{t.actor || '—'}</td>
                 </tr>
-              ))}
+                );
+              })}
           </tbody>
         </table></div>
       </div>

@@ -160,7 +160,8 @@ export default function SalesHistoryPanel() {
           </select>
           <select value={fCust} onChange={(e) => setFCust(e.target.value)} aria-label="Customer">
             <option value="">All customers</option>
-            {options.customers.filter((c) => !fGroup || lines.some((l) => l.customer === c && l.group === fGroup) || ctx.customers.some((x) => x.customer === c && x.group === fGroup))
+            {/* §22: a chosen group lists ITS customers (from the master); no group → every customer */}
+            {options.customers.filter((c) => !fGroup || ctx.customers.some((x) => String(x.customer || '').trim() === c && String(x.group || '').trim() === fGroup))
               .map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <select value={fSpec} onChange={(e) => setFSpec(e.target.value)} aria-label="Specification">
@@ -235,7 +236,7 @@ export default function SalesHistoryPanel() {
             <b>{fCust || fGroup}</b> — Sales representative / KAM:{' '}
             {rep.found && (rep.kam || rep.rep)
               ? <>{rep.kam ? <b>{rep.kam}</b> : null}{rep.kam && rep.rep ? ' · rep ' : ''}{rep.rep ? <b>{rep.rep}</b> : null}</>
-              : <span>none recorded — set one under Dashboard → Customer KAM &amp; Targets.</span>}
+              : <span style={{ color: 'var(--i3)' }}>— (none assigned)</span>}
             {cmp.total.delta < 0 && <> {' '}Sales are <b>down {pct(cmp.total.pct)}</b> ({money(cmp.total.before)} → {money(cmp.total.now)}) — worth a call.</>}
             {cmp.total.delta > 0 && <> {' '}Sales are up {pct(cmp.total.pct)}.</>}
           </div>

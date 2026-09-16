@@ -35,7 +35,8 @@ export default function DropdownAdmin() {
   const loadDepts = useCallback(async () => {
     setDeptErr('');
     try {
-      const r = await masterApi.listDepartments({ includeInactive: 1 });
+      // Issues 7: the Super Admin's own list shows BOTH scopes — production and HR-only.
+      const r = await masterApi.listDepartments({ includeInactive: 1, scope: 'all' });
       setDepts(Array.isArray(r) ? r : []);   // tolerate an unexpected non-array shape
       setDeptLoaded(true);
     } catch (e) {
@@ -81,6 +82,23 @@ export default function DropdownAdmin() {
     } catch (e) { setUomErr(e && e.message ? e.message : 'Could not reach the unit master'); }
   }, []);
   useEffect(() => { if (role === 'superadmin') loadUoms(); }, [loadUoms, role]);
+
+  // Issues 7 §27: CSA substrates are picked from the Item Master — the sub-groups of
+  // the items whose material type is FILM (AF BOPP, LDPE - NATURAL, PET …) — instead
+  // of being typed, so QC's CSA report names the film the way the stores do.
+  const [filmSubstrates, setFilmSubstrates] = useState([]);
+  useEffect(() => {
+    if (role !== 'superadmin') return undefined;
+    let live = true;
+    masterApi.listItems().then((r) => {
+      if (!live || !Array.isArray(r)) return;
+      const names = new Set();
+      r.filter((it) => it.active !== false && /film/i.test(String(it.materialType || '')))
+        .forEach((it) => { const v = String(it.subGroup || '').trim(); if (v) names.add(v); });
+      setFilmSubstrates([...names].sort((a, b) => a.localeCompare(b)));
+    }).catch(() => { /* the typed name still works when the master is unreachable */ });
+    return () => { live = false; };
+  }, [role]);
 
   // HR 2.0 — designations per department, for the HR login's Employee details.
   const [desigs, setDesigs] = useState([]);
@@ -200,7 +218,7 @@ export default function DropdownAdmin() {
       ) : def.master === 'uom' ? (
         <UomPanel uoms={uoms} reload={loadUoms} error={uomErr} />
       ) : def.master === 'designation' ? (
-        <DesignationsPanel desigs={desigs} departments={depts} reload={loadDesigs} error={desigErr} />
+        <DesignationsPanel desigs={desigs} departments={depts} reload={loadDesigs} error={desigErr} reloadDepts={loadDepts} />
       ) : def.master ? (
         <DepartmentsPanel depts={depts} reload={loadDepts} error={deptErr} loaded={deptLoaded} />
       ) : (
@@ -228,7 +246,7 @@ export default function DropdownAdmin() {
             <thead>
               <tr>
                 {def.type === 'pairs' ? <><th style={{ width: 110 }}>Value</th><th>Label</th></>
-                  : def.type === 'substrate' ? <><th>Substrate</th><th style={{ width: 130 }}>Unit</th></>
+                  : def.type === 'substrate' ? <><th>Substrate <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(FILM sub-groups of the Item Master)</span></th><th style={{ width: 130 }}>Unit</th></>
                     : <th>Value</th>}
                 <th style={{ width: 44 }}></th>
               </tr>
@@ -247,7 +265,17 @@ export default function DropdownAdmin() {
                     </>
                   ) : def.type === 'substrate' ? (
                     <>
-                      <td><input value={r.name ?? ''} aria-label={`Substrate ${i + 1}`} onChange={(e) => setRow(i, { ...r, name: e.target.value })} /></td>
+                      <td>
+                        {filmSubstrates.length ? (
+                          <select value={r.name ?? ''} aria-label={`Substrate ${i + 1}`} onChange={(e) => setRow(i, { ...r, name: e.target.value })}>
+                            <option value="">— film from the Item Master —</option>
+                            {filmSubstrates.map((n) => <option key={n} value={n}>{n}</option>)}
+                            {r.name && !filmSubstrates.includes(r.name) && <option value={r.name}>{r.name} (not in the Item Master)</option>}
+                          </select>
+                        ) : (
+                          <input value={r.name ?? ''} aria-label={`Substrate ${i + 1}`} onChange={(e) => setRow(i, { ...r, name: e.target.value })} />
+                        )}
+                      </td>
                       <td>
                         <select value={r.unit || 'Micron'} aria-label={`Unit ${i + 1}`} onChange={(e) => setRow(i, { ...r, unit: e.target.value })}>
                           {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
@@ -470,22 +498,47 @@ If material is already put away there it is retired instead, so those units keep
  * a department and then assign the designations under it." Departments are the
  * production master above; the HR login picks from this list and never edits it.
  */
-function DesignationsPanel({ desigs, departments, reload, error }) {
+/**
+ * Issues 7 §24-§25 — designations are one flat list ("there is no need for
+ * department to designation mapping: there can be an operator in printing, in
+ * film extrusion, in slitting"), and the HR-only departments (accounts, billing,
+ * despatch …) are added HERE, beside them: they reach the HR employee record and
+ * nothing else — not the BOM, not the Item Master, not the machine mapping.
+ */
+function DesignationsPanel({ desigs, departments, reload, error, reloadDepts }) {
   const [title, setTitle] = useState('');
-  const [deptId, setDeptId] = useState('');
-  const [filterDept, setFilterDept] = useState('');
+  const [hrDept, setHrDept] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 4000); };
-  const deptList = (departments || []).filter((d) => d.active !== false);
-  const list = (Array.isArray(desigs) ? desigs : []).filter((d) => !filterDept || String(d.departmentId) === String(filterDept));
+  const list = Array.isArray(desigs) ? desigs : [];
+  const hrOnly = (departments || []).filter((d) => d.hrOnly || String(d.scope || '').toUpperCase() === 'HR');
 
   async function add() {
     const t = title.trim();
-    if (!t || !deptId) return;
+    if (!t) return;
     setBusy(true);
-    try { await hrApi.createDesignation({ title: t, departmentId: Number(deptId) }); setTitle(''); flash('g', `Added “${t}”.`); await reload(); }
+    try { await hrApi.createDesignation({ title: t }); setTitle(''); flash('g', `Added “${t}”.`); await reload(); }
     catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function addHrDept() {
+    const n = hrDept.trim();
+    if (!n) return;
+    setBusy(true);
+    try {
+      await masterApi.createDepartment({ name: n, scope: 'HR' });
+      setHrDept(''); flash('g', `Added HR-only department “${n}” — it appears on the HR employee record only.`);
+      if (reloadDepts) await reloadDepts();
+    } catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
+  }
+  async function toggleHrDept(d) {
+    try { await masterApi.updateDepartment(d.id, { active: d.active === false }); if (reloadDepts) await reloadDepts(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+  async function makeProduction(d) {
+    if (!window.confirm(`Make “${d.name}” a production department?\n\nIt will then appear in the BOM, the Item Master, machines, routes and the stores desk.`)) return;
+    try { await masterApi.updateDepartment(d.id, { scope: 'PRODUCTION' }); if (reloadDepts) await reloadDepts(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
   }
   async function rename(d, next) {
     const t = String(next || '').trim();
@@ -502,8 +555,8 @@ function DesignationsPanel({ desigs, departments, reload, error }) {
     <div className="card">
       <div className="ctitle">Designations (HR) <span className="tag tgr">{list.filter((d) => d.active !== false).length}</span></div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
-        The designations offered on the HR login&rsquo;s Employee details, under each department. The same
-        title may exist in two departments; a designation that is retired stays on the employees who hold it.
+        One flat list, offered on the HR login&rsquo;s Employee details whatever the department — an Operator is an operator in
+        Printing, Extrusion or Slitting alike. A designation that is retired stays on the employees who hold it.
       </div>
       {error && (
         <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
@@ -513,29 +566,49 @@ function DesignationsPanel({ desigs, departments, reload, error }) {
       )}
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="fbar">
-        <select value={deptId} onChange={(e) => setDeptId(e.target.value)} aria-label="Department for the new designation" style={{ minWidth: 160 }}>
-          <option value="">— department —</option>
-          {deptList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
         <input placeholder="New designation (e.g. Line Supervisor)" value={title} aria-label="New designation"
-          onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ minWidth: 220 }} />
-        <button className="btn btn-g" onClick={add} disabled={busy || !title.trim() || !deptId}>＋ Add</button>
-        <span style={{ flex: 1 }} />
-        <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} aria-label="Show designations of department">
-          <option value="">All departments</option>
-          {deptList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
+          onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ minWidth: 260 }} />
+        <button className="btn btn-g" onClick={add} disabled={busy || !title.trim()}>＋ Add</button>
       </div>
-      <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
+      <div className="tw sy" style={{ maxHeight: 300, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Department</th><th>Designation</th><th style={{ width: 90, textAlign: 'center' }}>Active</th></tr></thead>
+          <thead><tr><th>Designation</th><th style={{ width: 90, textAlign: 'center' }}>Active</th></tr></thead>
           <tbody>
-            {list.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No designations yet — pick a department and add one.</td></tr>
+            {list.length === 0 ? <tr><td colSpan={2} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No designations yet — add one above.</td></tr>
               : list.map((d) => (
                 <tr key={d.id} style={d.active === false ? { opacity: 0.55 } : undefined}>
-                  <td style={{ fontSize: 12 }}>{d.departmentName || '-'}</td>
                   <td><input defaultValue={d.title} aria-label={`Designation ${d.title}`} onBlur={(e) => rename(d, e.target.value)} style={{ width: '100%' }} /></td>
                   <td style={{ textAlign: 'center' }}><input type="checkbox" checked={d.active !== false} aria-label={`${d.title} active`} onChange={() => toggle(d)} /></td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="ctitle" style={{ marginTop: 16 }}>HR-only departments <span className="tag tgr">{hrOnly.filter((d) => d.active !== false).length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Departments that exist for the employee record only — Accounts, Billing, Despatch, HO … They are offered on the HR
+        login&rsquo;s Employee details beside the production departments, and appear <b>nowhere else</b>: not in the BOM, not in
+        the Item Master, not in the machine-to-department mapping, not on the stores desk.
+      </div>
+      <div className="fbar">
+        <input placeholder="New HR-only department (e.g. Accounts)" value={hrDept} aria-label="New HR-only department"
+          onChange={(e) => setHrDept(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addHrDept(); }} style={{ minWidth: 260 }} />
+        <button className="btn btn-g" onClick={addHrDept} disabled={busy || !hrDept.trim()}>＋ Add HR-only department</button>
+      </div>
+      <div className="tw sy" style={{ maxHeight: 260, marginTop: 8 }}>
+        <table>
+          <thead><tr><th>Department</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 260 }}>Actions</th></tr></thead>
+          <tbody>
+            {hrOnly.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>None yet — every department is a production department.</td></tr>
+              : hrOnly.map((d) => (
+                <tr key={d.id} style={d.active === false ? { opacity: 0.55 } : undefined}>
+                  <td style={{ fontSize: 12, fontWeight: 600 }}>{d.name}{d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
+                  <td style={{ textAlign: 'right', fontSize: 11 }}>{d.employees || 0}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-s" onClick={() => toggleHrDept(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
+                    <button className="btn btn-s" onClick={() => makeProduction(d)} aria-label={`Make ${d.name} a production department`}>→ Production</button>
+                  </td>
                 </tr>
               ))}
           </tbody>
@@ -602,6 +675,16 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
     try { await masterApi.updateDepartment(d.id, { active: d.active === false }); await reload(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
   }
+  /** Issues 7 §24-25: production ↔ HR-only. HR-only leaves every production picker at once. */
+  async function setScope(d, scope) {
+    try {
+      await masterApi.updateDepartment(d.id, { scope });
+      flash('g', scope === 'HR'
+        ? `“${d.name}” is HR-only now — it stays on the employee record and leaves the BOM, Item Master, machines, routes and Stores.`
+        : `“${d.name}” is a production department again.`);
+      await reload();
+    } catch (e) { flash('r', e.message || 'Update failed'); }
+  }
   // Issues 1.0 #5: hard delete — the server refuses (with the list of blockers)
   // while machines, routes, items or production history still reference it.
   async function remove(d) {
@@ -612,8 +695,12 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
 
   return (
     <div className="card">
-      <div className="ctitle">Departments <span className="tag tgr">{active.length}</span></div>
-      <div className="pg-sub" style={{ marginTop: 0 }}>Production departments — configured here by Super Admin and used by the PAdmin Item Master Department dropdown (and machine / route setup).</div>
+      <div className="ctitle">Departments <span className="tag tgr">{active.filter((d) => !d.hrOnly).length}</span></div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Production departments — configured here by the Super Admin and used by the Item Master, the BOM, machines, routes, the stores
+        desk and the HR employee record. Departments marked <b>HR-only</b> reach the HR employee record alone (add them under
+        Designations &amp; HR-only departments).
+      </div>
       {error && (
         <div className="al al-r" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
           <span>Couldn’t load the Department master — {error}. You can still add one below once it’s reachable.</span>
@@ -638,10 +725,10 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
       </div>
       <div className="tw sy" style={{ maxHeight: 380, marginTop: 8 }}>
         <table>
-          <thead><tr><th>Department</th><th style={{ width: 110 }}>Source</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 300 }}>Actions</th></tr></thead>
+          <thead><tr><th>Department</th><th style={{ width: 110 }}>Source</th><th style={{ width: 110 }}>Scope</th><th style={{ width: 90, textAlign: 'right' }}>Employees</th><th style={{ width: 300 }}>Actions</th></tr></thead>
           <tbody>
             {list.length === 0 ? (
-              <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
                 {error ? 'Departments unavailable — see the message above.' : loaded ? 'No departments yet — add one above.' : 'Loading departments…'}
               </td></tr>
             ) : list.map((d) => (
@@ -649,6 +736,13 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
                 <td><input defaultValue={d.name} aria-label={`Department ${d.name}`} onBlur={(e) => rename(d, e.target.value)} />
                   {d.active === false && <span className="tag" style={{ fontSize: 9, marginLeft: 4 }}>retired</span>}</td>
                 <td style={{ fontSize: 11 }}>{d.hrAdded ? <span className="tag ty" style={{ fontSize: 9 }}>HR-added</span> : 'Super Admin'}</td>
+                <td style={{ fontSize: 11 }}>
+                  <select value={d.hrOnly ? 'HR' : 'PRODUCTION'} aria-label={`Scope of ${d.name}`} style={{ height: 24, fontSize: 11 }}
+                    onChange={(e) => setScope(d, e.target.value)}>
+                    <option value="PRODUCTION">Production</option>
+                    <option value="HR">HR-only</option>
+                  </select>
+                </td>
                 <td style={{ textAlign: 'right', fontSize: 11 }}>{d.employees || 0}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-s" onClick={() => toggle(d)}>{d.active === false ? 'Enable' : 'Disable'}</button>{' '}
@@ -682,7 +776,8 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
  */
 function MachinesPanel({ machines, departments, reload, error }) {
   const deptUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || '')) ? 'pcs/min' : 'm/min');
-  const activeDepts = (departments || []).filter((d) => d.active !== false);
+  // Issues 7: a machine belongs to a PRODUCTION department — HR-only ones are not offered.
+  const activeDepts = (departments || []).filter((d) => d.active !== false && !d.hrOnly);
   const [form, setForm] = useState({ code: '', name: '', departmentId: '', defaultSpeed: '', speedUom: '', functionalHoursPerDay: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);

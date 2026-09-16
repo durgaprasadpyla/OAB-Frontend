@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
 import { fmtDate } from '../lib/format.js';
-import { custGroups, custsInGroup, custGroupOf } from '../lib/master.js';
+import { custGroupOf } from '../lib/master.js';
 import { ddList, ddPairs } from '../lib/dropdowns.js';
-import NegoPanel from '../components/NegoPanel.jsx';
+import { RepQuotationsTab, RepSendQuoteTab, RepAcceptedTab } from '../components/RepQuotesTab.jsx';
+import LeadCustomerPicker from '../components/LeadCustomerPicker.jsx';
+import { repBook, setLeadCategories } from '../lib/repFlow.js';
 import RepVisitTab from '../components/RepVisitTab.jsx';
 import RepPoTab from '../components/RepPoTab.jsx';
 import RepTargetsTab from '../components/RepTargetsTab.jsx';
@@ -50,23 +52,14 @@ const payLabel = (k) => {
   const f = (REP_PAYTYPES || []).find((p) => p[0] === k);
   return f ? f[0] : k;
 };
-/** Existing customers for the Add-Customer picker: Master customers in the group ∪ rep leads in it. (repAddCustsForGroup 14616) */
-function custsForGroup(customers, leads, grp) {
-  const set = new Set(custsInGroup(customers, grp));
-  (leads || []).forEach((l) => {
-    const lg = String((l && l.group) || '').trim(); const lc = String((l && l.client_name) || '').trim();
-    if (!lc) return;
-    if (grp) { if (lg === grp) set.add(lc); } else if (!lg) set.add(lc);
-  });
-  return [...set].sort((a, b) => a.localeCompare(b));
-}
-
 // Sales Rep Portal — the field rep's own workspace over module 12.
 // A rep sees only the CATEGORIES allocated to them, which is why every list here
 // runs through leadsForRep/repCategoriesOf rather than a plain customer filter.
 
 // Tab order is production's REP_TABS. Negotiations is an addition this app has and
 // production does not — it sits at the end so the shared tabs stay where reps expect.
+// Sales Login (2026-09-15): Negotiations became Quotations, with Send Quote and Quote
+// Accepted beside it — the rep's quotation flow in three steps.
 const TABS = [
   { k: 'followups', label: '🗓 Follow-ups' },
   { k: 'visit', label: '📋 Log Visit' },
@@ -76,7 +69,9 @@ const TABS = [
   { k: 'contacts', label: '📇 My Contacts' },
   { k: 'add', label: '➕ Add Lead' },
   { k: 'sku', label: '📦 SKUs' },
-  { k: 'nego', label: '💬 Negotiations' },
+  { k: 'quotes', label: '💬 Quotations' },
+  { k: 'send', label: '📤 Send Quote' },
+  { k: 'accepted', label: '✅ Quote Accepted' },
 ];
 
 const pill = (style) => ({ ...style, padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, display: 'inline-block' });
@@ -87,12 +82,10 @@ export default function RepPortal() {
   const [tab, setTab] = useState('followups');
   const sales = mods.sales || {};
 
-  const myLeads = useMemo(() => leadsForRep(sales.leads, repId), [sales.leads, repId]);
-  // Negotiation threads are scoped to SKUs of the rep's own customers.
-  const mySkuIds = useMemo(() => {
-    const ids = new Set(myLeads.map((l) => l.id));
-    return (sales.skus || []).filter((s) => ids.has(s.lead_id)).map((s) => s.id);
-  }, [myLeads, sales.skus]);
+  // The rep's book: the leads allocated to them or added by them, plus any customer
+  // the Super Admin made them KAM of (repBook splits it into leads and customers).
+  const book = useMemo(() => repBook(sales, mods.customers || [], repId), [sales, mods.customers, repId]);
+  const myLeads = useMemo(() => [...book.leads, ...book.customers], [book]);
 
   // §36 module-wise allocation: only the modules granted to this rep are shown.
   // No stored allocation = every module (repModulesOf).
@@ -107,25 +100,27 @@ export default function RepPortal() {
     <div id="app">
       <div className="pg-ttl">Sales Rep Portal</div>
       <div className="pg-sub">
-        Signed in as <strong>{repName || 'rep'}</strong> — {myLeads.length} customer{myLeads.length === 1 ? '' : 's'} allocated to you.
-        You see only the product categories assigned to you.
+        Signed in as <strong>{repName || 'rep'}</strong> — {book.leads.length} lead{book.leads.length === 1 ? '' : 's'} and {book.customers.length} customer{book.customers.length === 1 ? '' : 's'} allocated to you.
+        A lead becomes a customer when the Super Admin converts it.
       </div>
       <div className="step-bar" style={{ flexWrap: 'wrap' }}>
         {visibleTabs.map((t) => (
           <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
         ))}
       </div>
-      <QuotesToSendBanner sales={sales} repId={repId} onGoToSkus={() => setTab('sku')} />
+      <QuotesToSendBanner sales={sales} repId={repId} onGoToSkus={() => setTab('send')} />
       <KamAlertBanner sales={sales} repId={repId} oab={mods.oab && mods.oab.OAB} />
       {tab === 'followups' && <FollowUps leads={myLeads} sales={sales} save={save} repId={repId} onGoToPo={() => setTab('po')} />}
       {tab === 'visit' && <RepVisitTab leads={myLeads} sales={sales} save={save} repId={repId} />}
       {tab === 'po' && <RepPoTab leads={myLeads} sales={sales} save={save} repId={repId} />}
       {tab === 'targets' && <RepTargetsTab sales={sales} repId={repId} />}
       {tab === 'customers' && <MyCustomers leads={myLeads} sales={sales} save={save} repId={repId} />}
-      {tab === 'contacts' && <MyContacts leads={myLeads} sales={sales} save={save} repId={repId} />}
-      {tab === 'add' && <AddCustomer sales={sales} save={save} repId={repId} onDone={() => setTab('customers')} />}
+      {tab === 'contacts' && <MyContacts leads={myLeads} book={book} sales={sales} save={save} repId={repId} />}
+      {tab === 'add' && <AddCustomer sales={sales} save={save} repId={repId} book={book} onDone={() => setTab('customers')} />}
       {tab === 'sku' && <RepSkusTab leads={myLeads} sales={sales} save={save} repId={repId} />}
-      {tab === 'nego' && <NegoPanel side="rep" skuIds={mySkuIds} />}
+      {tab === 'quotes' && <RepQuotationsTab sales={sales} save={save} repId={repId} />}
+      {tab === 'send' && <RepSendQuoteTab sales={sales} save={save} repId={repId} />}
+      {tab === 'accepted' && <RepAcceptedTab sales={sales} save={save} repId={repId} />}
     </div>
   );
 }
@@ -144,7 +139,7 @@ function QuotesToSendBanner({ sales, repId, onGoToSkus }) {
         <div style={{ fontWeight: 800 }}>
           🔔 {list.length} quotation{list.length === 1 ? '' : 's'} received from the Quote desk — to send to customer
         </div>
-        <button className="btn btn-s" style={{ height: 28, fontSize: 11 }} onClick={onGoToSkus}>Go to SKUs →</button>
+        <button className="btn btn-s" style={{ height: 28, fontSize: 11 }} onClick={onGoToSkus}>Go to Send Quote →</button>
       </div>
       {list.map((sku) => (
         <div key={sku.id} style={{ padding: '4px 0' }}>
@@ -152,7 +147,7 @@ function QuotesToSendBanner({ sales, repId, onGoToSkus }) {
         </div>
       ))}
       <div style={{ fontSize: 10, color: '#6b86b8', marginTop: 4 }}>
-        Mark a SKU as “Quotation sent” in the SKUs tab once you’ve sent it — this count drops by one each time.
+        Review the price under Quotations, then send it from Send Quote — this count drops by one each time.
       </div>
     </div>
   );
@@ -443,7 +438,7 @@ function MyCustomers({ leads, sales, save, repId }) {
   return (
     <div className="card">
       <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>My Customers <span className="tag tgr">{rows.length}</span></div>
+        <div className="ctitle" style={{ margin: 0 }}>My Leads <span className="tag tgr">{rows.length}</span></div>
         <input placeholder="Search customer / group / city…" value={q} aria-label="Search customers" onChange={(e) => setQ(e.target.value)} />
         <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Filter by stage">
           <option value="">All stages</option>
@@ -454,12 +449,12 @@ function MyCustomers({ leads, sales, save, repId }) {
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
         <table>
           <thead><tr>
-            <th style={{ minWidth: 180 }}>Customer</th><th>Group</th><th>My categories</th>
+            <th style={{ minWidth: 180 }}>Lead / Customer</th><th>Group</th><th>My categories</th>
             <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th style={{ width: 150 }}>Stage</th><th style={{ width: 120 }}>Next ping</th><th style={{ width: 70 }}></th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No customers allocated to you yet.</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No leads allocated to you yet — add one under Add Lead.</td></tr>
             ) : rows.map((l) => {
               const due = nextFollowUp(l, sales.interactions);
               const st = followUpState(due);
@@ -467,7 +462,7 @@ function MyCustomers({ leads, sales, save, repId }) {
               return (
                 <FragmentRow key={l.id} open={open}>
                   <tr>
-                    <td style={{ fontWeight: 600 }}>{l.client_name}</td>
+                    <td style={{ fontWeight: 600 }}>{l.client_name}{l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}</td>
                     <td style={{ fontSize: 11 }}>{l.group || '—'}</td>
                     <td style={{ fontSize: 11 }}>{repCategoriesOf(l, repId).join(', ') || '—'}</td>
                     <td style={{ textAlign: 'center' }}>
@@ -571,17 +566,20 @@ function LeadDetail({ lead, sales, repId }) {
 // add/edit form limited to the customer's own categories with the per-category
 // dispatch-form checklist. (repContacts 15221)
 const emptyContactForm = {
-  leadId: '', name: '', designation: '', desigOther: '', rank: '',
+  kind: 'lead', leadId: '', name: '', designation: '', desigOther: '', rank: '',
   phone: '', email: '', customerType: '', location: '', gstin: '', categories: [], dispatchForms: {},
 };
 
-function MyContacts({ leads, sales, save, repId }) {
+function MyContacts({ leads, book, sales, save, repId }) {
   const { mods } = useData();
   const customers = mods.customers;
   const allLeads = sales.leads || [];
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyContactForm);
-  const [filters, setFilters] = useState({ group: '', cust: '', cat: '', loc: '', q: '' });
+  // Sales Login §8: the table has a filter over ALL the rep's leads / customers; the
+  // group filter is there only when the Super Admin has put one of them in a group.
+  const [filters, setFilters] = useState({ group: '', cust: '', lead: '', cat: '', loc: '', q: '' });
+  const cityList = ddList(sales, 'locations');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -598,6 +596,7 @@ function MyContacts({ leads, sales, save, repId }) {
     return mine.filter((c) => {
       if (group && groupOfContact(c, allLeads, customers) !== group) return false;
       if (cust && custOfContact(c, allLeads) !== cust) return false;
+      if (filters.lead && String(c.lead_id) !== String(filters.lead)) return false;
       if (cat && contactCats(c).indexOf(cat) < 0) return false;
       if (loc && (c.location || '') !== loc) return false;
       if (t) {
@@ -623,6 +622,7 @@ function MyContacts({ leads, sales, save, repId }) {
     const lead = allLeads.find((l) => l.id === c.lead_id)
       || allLeads.find((l) => String(l.client_name || '').trim().toLowerCase() === String(custOfContact(c, allLeads) || '').toLowerCase());
     setForm({
+      kind: lead && book.customers.some((x) => x.id === lead.id) ? 'customer' : 'lead',
       leadId: lead ? lead.id : '',
       name: c.name || '', designation: isOther ? 'Others' : (c.designation || ''), desigOther: isOther ? c.designation : '',
       rank: c.priority != null && c.priority !== '' ? String(c.priority) : '', phone: c.phone || '', email: c.email || '',
@@ -698,17 +698,13 @@ function MyContacts({ leads, sales, save, repId }) {
     <div className="card">
       <div className="ctitle">{editing ? '✏ Edit Contact' : '📇 Add Contact'}</div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
-        Pick the customer, then fill in the contact. One customer can have several contacts — each with its own designation and rank.
+        Lead or customer first, then the contact. One lead / customer can have several contacts — primary, secondary and tertiary by rank.
+        {editing ? ' Editing — save to keep the changes, or Cancel.' : ''}
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="g3">
-        <div className="fg">
-          <label>Customer *</label>
-          <select value={form.leadId} aria-label="Contact customer" onChange={(e) => setForm({ ...form, leadId: e.target.value, categories: [] })}>
-            <option value="">— Select —</option>
-            {leads.map((l) => <option key={l.id} value={l.id}>{l.client_name}</option>)}
-          </select>
-        </div>
+        <LeadCustomerPicker book={book} kind={form.kind} leadId={form.leadId}
+          onKind={(k) => setForm({ ...form, kind: k, leadId: '', categories: [] })} onLead={(id) => setForm({ ...form, leadId: id, categories: [] })} ariaPrefix="Contact" />
         <div className="fg"><label>Name *</label><input value={form.name} aria-label="Contact name" onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
         <div className="fg">
           <label>Designation</label>
@@ -733,7 +729,15 @@ function MyContacts({ leads, sales, save, repId }) {
             {REP_CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
-        <div className="fg"><label>Location (city)</label><input value={form.location} aria-label="Contact location" placeholder="City where the customer sits" onChange={(e) => setForm({ ...form, location: e.target.value })} /></div>
+        <div className="fg"><label>Location (city)</label>
+          {/* §9: one list from the Super Admin — no more Bangalore / Bengaluru / Bangalor */}
+          <select value={form.location} aria-label="Contact location" onChange={(e) => setForm({ ...form, location: e.target.value })}>
+            <option value="">— Select —</option>
+            {cityList.map((c) => <option key={c} value={c}>{c}</option>)}
+            {form.location && !cityList.includes(form.location) && <option value={form.location}>{form.location} (not in the list)</option>}
+          </select>
+          <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>Missing a city? The Super Admin adds it under Drop-down selections → Locations.</div>
+        </div>
         <div className="fg"><label>GST Number</label><input value={form.gstin} aria-label="Contact GST" placeholder="e.g. 36AAECB5291P1Z4" onChange={(e) => setForm({ ...form, gstin: e.target.value })} /></div>
       </div>
 
@@ -762,13 +766,19 @@ function MyContacts({ leads, sales, save, repId }) {
 
       <div className="ctitle" style={{ marginTop: 18 }}>My Contacts <span className="tag tgr">{rows.length}</span></div>
       <div className="fbar" style={{ flexWrap: 'wrap' }}>
-        <select value={filters.group} aria-label="Filter by group" onChange={(e) => setFilters({ ...filters, group: e.target.value })}>
-          <option value="">All groups</option>
-          {uniq(mine.map((c) => groupOfContact(c, allLeads, customers))).map((g) => <option key={g} value={g}>{g}</option>)}
+        {uniq(mine.map((c) => groupOfContact(c, allLeads, customers))).length > 0 && (
+          <select value={filters.group} aria-label="Filter by group" onChange={(e) => setFilters({ ...filters, group: e.target.value })}>
+            <option value="">All groups</option>
+            {uniq(mine.map((c) => groupOfContact(c, allLeads, customers))).map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+        )}
+        <select value={filters.lead} aria-label="Filter by lead" onChange={(e) => setFilters({ ...filters, lead: e.target.value })}>
+          <option value="">All leads</option>
+          {book.leads.map((l) => <option key={l.id} value={l.id}>{l.client_name}</option>)}
         </select>
         <select value={filters.cust} aria-label="Filter by customer" onChange={(e) => setFilters({ ...filters, cust: e.target.value })}>
           <option value="">All customers</option>
-          {uniq(mine.map((c) => custOfContact(c, allLeads))).map((c) => <option key={c} value={c}>{c}</option>)}
+          {uniq(book.customers.map((l) => l.client_name)).map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select value={filters.cat} aria-label="Filter by category" onChange={(e) => setFilters({ ...filters, cat: e.target.value })}>
           <option value="">All categories</option>
@@ -783,13 +793,15 @@ function MyContacts({ leads, sales, save, repId }) {
       <div className="tw sy" style={{ maxHeight: 360 }}>
         <table>
           <thead><tr>
-            <th>Customer</th><th>Payment</th><th>Category</th><th>Contact</th><th>Designation</th>
-            <th>Location</th><th style={{ width: 110 }}>Rank</th><th>Phone</th><th>Email</th><th style={{ width: 110 }}>Actions</th>
+            <th style={{ width: 30 }}></th><th>Lead / Customer</th><th>Payment</th><th>Category</th><th>Contact</th><th>Designation</th>
+            <th>Location</th><th style={{ width: 110 }}>Rank</th><th>Phone</th><th>Email</th><th style={{ width: 70 }}></th>
           </tr></thead>
           <tbody>
-            {rows.length === 0 ? <tr><td colSpan={10} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No contacts yet.</td></tr>
+            {rows.length === 0 ? <tr><td colSpan={11} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No contacts yet.</td></tr>
               : rows.map((c) => (
-                <tr key={c.id}>
+                <tr key={c.id} className={editing === c.id ? 'hi' : undefined}>
+                  {/* §7: the radio button brings the line into the form above to edit */}
+                  <td style={{ textAlign: 'center' }}><input type="radio" name="contact-edit" checked={editing === c.id} aria-label={`Edit ${c.name}`} onChange={() => editContact(c)} /></td>
                   <td style={{ fontWeight: 700 }}>{custOfContact(c, allLeads) || '—'}</td>
                   <td>{(() => { const pk = payOfContact(c, allLeads); return pk ? <span style={{ ...pill(PAY_STYLE[pk] || {}), fontSize: 10 }}>{payLabel(pk)}</span> : '—'; })()}</td>
                   <td>{contactCats(c).map((cat) => <span key={cat} className="tag tb" style={{ marginRight: 3, fontSize: 10 }}>{cat}</span>) || '—'}</td>
@@ -804,8 +816,7 @@ function MyContacts({ leads, sales, save, repId }) {
                   <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{c.phone || '—'}</td>
                   <td style={{ fontSize: 11 }}>{c.email || '—'}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="btn btn-s" style={{ color: '#3730a3' }} aria-label={`Edit ${c.name}`} onClick={() => editContact(c)}>Edit</button>
-                    <button className="btn btn-s" style={{ marginLeft: 4, color: 'var(--red)' }} aria-label={`Delete ${c.name}`} onClick={() => removeContact(c)}>Delete</button>
+                    <button className="btn btn-s" style={{ color: 'var(--red)' }} aria-label={`Delete ${c.name}`} onClick={() => removeContact(c)}>Delete</button>
                   </td>
                 </tr>
               ))}
@@ -816,62 +827,76 @@ function MyContacts({ leads, sales, save, repId }) {
   );
 }
 
-/* ─────────────────────────── Add Customer ─────────────────────────── */
-// Group → Customer cascade over the Customer Master (repAddLead 14641): pick or add a
-// group, then pick or add the customer, plus the per-category dispatch-form checklist.
-function AddCustomer({ sales, save, repId, onDone }) {
-  const { mods } = useData();
-  const customers = mods.customers;
+/* ─────────────────────────── Add Lead ─────────────────────────── */
+// Sales Login §1-§4: no groups here at all ("it is very hard to educate the sales
+// reps not to create the groups unnecessarily"). The Lead drop-down offers the
+// leads the Super Admin allocated to the rep and the ones the rep added — pick one
+// to add or edit its categories, or Add New Lead. Check the list before adding, so
+// the same lead is not entered twice.
+function AddCustomer({ sales, save, repId, book, onDone }) {
   const allLeads = sales.leads || [];
   const [form, setForm] = useState({
-    groupSel: '', groupNew: '', custSel: '__new__', custNew: '',
+    leadSel: '__new__', custNew: '',
     paymentType: '', headOffice: '', deliveryLocation: '', gstin: '',
     categories: [], dispatchForms: {}, stage: 'To Approach', followUp: '', remarks: '',
   });
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const cityList = ddList(sales, 'locations');
 
-  // Groups already known, from the Customer Master and from existing leads.
-  const groups = useMemo(() => {
-    const set = new Set(custGroups(customers));
-    allLeads.forEach((l) => { const g = String(l.group || '').trim(); if (g) set.add(g); });
-    return [...set].sort();
-  }, [customers, allLeads]);
-
-  const groupVal = form.groupSel === '__new__' ? form.groupNew : (form.groupSel === '' ? '' : form.groupSel);
-  const custOptions = useMemo(() => custsForGroup(customers, allLeads, groupVal), [customers, allLeads, groupVal]);
+  const mine = useMemo(() => [...book.leads, ...book.customers].slice().sort((a, b) => String(a.client_name).localeCompare(String(b.client_name))), [book]);
+  const existing = form.leadSel !== '__new__' ? mine.find((l) => l.id === form.leadSel) || null : null;
+  const dupe = useMemo(() => {
+    const name = form.custNew.trim().toLowerCase();
+    return name ? allLeads.find((l) => String(l.client_name || '').trim().toLowerCase() === name) || null : null;
+  }, [form.custNew, allLeads]);
 
   const toggleCat = (c) => setForm((f) => ({
     ...f,
     categories: f.categories.includes(c) ? f.categories.filter((x) => x !== c) : [...f.categories, c],
   }));
 
-  function onGroupChange(v) {
-    // Switching group refills the customer list, so drop back to "add new".
-    setForm((f) => ({ ...f, groupSel: v, custSel: '__new__', custNew: '' }));
+  function pickLead(v) {
+    const l = mine.find((x) => x.id === v) || null;
+    setForm((f) => ({
+      ...f, leadSel: v, custNew: '',
+      categories: l ? leadCategories(l) : [], paymentType: l ? l.payment_type || '' : '', headOffice: l ? l.head_office || '' : '',
+      deliveryLocation: l ? l.delivery_location || '' : '', gstin: l ? l.gstin || '' : '', stage: l ? l.stage || 'To Approach' : 'To Approach',
+      dispatchForms: l ? l.category_dispatch_forms || {} : {},
+    }));
+    setMsg(null);
   }
 
   async function submit() {
     setBusy(true);
     setMsg(null);
     try {
-      const group = form.groupSel === '__new__' ? form.groupNew.trim() : (form.groupSel === '' ? '' : form.groupSel);
-      const customer = (form.custSel === '__new__' || form.custSel === '') ? form.custNew.trim() : form.custSel;
-      const leadForm = {
-        group, customer, paymentType: form.paymentType, headOffice: form.headOffice,
-        deliveryLocation: form.deliveryLocation, gstin: form.gstin, categories: form.categories,
-        dispatchForms: form.dispatchForms, stage: form.stage, followUp: form.followUp,
-      };
-      const lead = buildLead(leadForm, repId);
-      const patch = { leads: [...allLeads, lead] };
-      if (form.followUp) {
-        patch.interactions = [...(sales.interactions || []),
-          buildInteraction(lead.id, repId, { type: 'Follow-up scheduled', outcome: form.remarks, followUp: form.followUp })];
+      if (existing) {
+        if (!form.categories.length) throw new Error('Select at least one category.');
+        await patchSales(save, {
+          leads: setLeadCategories(allLeads, existing.id, form.categories, repId).map((l) => (l.id === existing.id
+            ? { ...l, payment_type: form.paymentType, head_office: form.headOffice, delivery_location: form.deliveryLocation, gstin: form.gstin, category_dispatch_forms: { ...(l.category_dispatch_forms || {}), ...form.dispatchForms } }
+            : l)),
+        });
+        setMsg({ t: 'g', text: `✅ ${existing.client_name} updated — categories: ${form.categories.join(', ')}.` });
+      } else {
+        if (dupe) throw new Error(`"${dupe.client_name}" is already on the list${leadsForRep([dupe], repId).length ? ' — pick it above to edit it' : ' (allocated to another rep — ask the Super Admin)'}.`);
+        const leadForm = {
+          group: '', customer: form.custNew.trim(), paymentType: form.paymentType, headOffice: form.headOffice,
+          deliveryLocation: form.deliveryLocation, gstin: form.gstin, categories: form.categories,
+          dispatchForms: form.dispatchForms, stage: form.stage, followUp: form.followUp,
+        };
+        const lead = buildLead(leadForm, repId);
+        const patch = { leads: [...allLeads, lead] };
+        if (form.followUp) {
+          patch.interactions = [...(sales.interactions || []),
+            buildInteraction(lead.id, repId, { type: 'Follow-up scheduled', outcome: form.remarks, followUp: form.followUp })];
+        }
+        await patchSales(save, patch);
+        setMsg({ t: 'g', text: '✅ Lead saved — it is on My Leads now. Add contacts from My Contacts.' });
+        setForm({ leadSel: '__new__', custNew: '', paymentType: '', headOffice: '', deliveryLocation: '', gstin: '', categories: [], dispatchForms: {}, stage: 'To Approach', followUp: '', remarks: '' });
+        setTimeout(onDone, 700);
       }
-      await patchSales(save, patch);
-      setMsg({ t: 'g', text: '✅ Lead saved. Add contacts from My Contacts.' });
-      setForm({ groupSel: '', groupNew: '', custSel: '__new__', custNew: '', paymentType: '', headOffice: '', deliveryLocation: '', gstin: '', categories: [], dispatchForms: {}, stage: 'To Approach', followUp: '', remarks: '' });
-      setTimeout(onDone, 700);
     } catch (e) {
       setMsg({ t: 'r', text: e.message || String(e) });
     } finally { setBusy(false); }
@@ -881,27 +906,23 @@ function AddCustomer({ sales, save, repId, onDone }) {
     <div className="card">
       <div className="ctitle">➕ Add Lead</div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
-        Pick or add a group, then pick or add the customer. New customers are allocated to you for the
-        categories you tick. Add contacts afterwards from My Contacts.
+        First check whether the lead is already on your list — pick it to add or change its categories. Otherwise choose
+        <b> Add New Lead</b>. New leads are allocated to you for the categories you tick. Add contacts afterwards from My Contacts.
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="g3">
         <div className="fg">
-          <label>Group</label>
-          <select value={form.groupSel} aria-label="Group" onChange={(e) => onGroupChange(e.target.value)}>
-            <option value="">— No group —</option>
-            {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-            <option value="__new__">➕ Add new group…</option>
+          <label>Lead *</label>
+          <select value={form.leadSel} aria-label="Lead" onChange={(e) => pickLead(e.target.value)}>
+            <option value="__new__">➕ Add New Lead…</option>
+            {mine.map((l) => <option key={l.id} value={l.id}>{l.client_name}{book.customers.some((c) => c.id === l.id) ? ' (customer)' : ''}</option>)}
           </select>
-          {form.groupSel === '__new__' && <input placeholder="New group name" value={form.groupNew} aria-label="New group name" style={{ marginTop: 6 }} onChange={(e) => setForm({ ...form, groupNew: e.target.value })} />}
-        </div>
-        <div className="fg">
-          <label>Customer *</label>
-          <select value={form.custSel} aria-label="Select customer" onChange={(e) => setForm({ ...form, custSel: e.target.value })}>
-            {custOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-            <option value="__new__">➕ Add new customer…</option>
-          </select>
-          {(form.custSel === '__new__' || form.custSel === '') && <input placeholder="New customer name" value={form.custNew} aria-label="Customer" style={{ marginTop: 6 }} onChange={(e) => setForm({ ...form, custNew: e.target.value })} />}
+          {form.leadSel === '__new__' && (
+            <>
+              <input placeholder="New lead name" value={form.custNew} aria-label="Lead name" style={{ marginTop: 6 }} onChange={(e) => setForm({ ...form, custNew: e.target.value })} />
+              {dupe && <div style={{ fontSize: 10, color: 'var(--red)', marginTop: 3 }}>“{dupe.client_name}” already exists — do not add it twice.</div>}
+            </>
+          )}
         </div>
         <div className="fg">
           <label>Payment Type</label>
@@ -911,12 +932,15 @@ function AddCustomer({ sales, save, repId, onDone }) {
           </select>
         </div>
         <div className="fg"><label>Head Office</label><input value={form.headOffice} aria-label="Head Office" onChange={(e) => setForm({ ...form, headOffice: e.target.value })} /></div>
-        <div className="fg"><label>Delivery Location</label><input value={form.deliveryLocation} aria-label="Delivery Location" onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })} /></div>
+        <div className="fg"><label>Delivery Location</label>
+          <input list="lead-city-list" value={form.deliveryLocation} aria-label="Delivery Location" onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })} />
+          <datalist id="lead-city-list">{cityList.map((c) => <option key={c} value={c} />)}</datalist>
+        </div>
         <div className="fg"><label>GST Number</label><input value={form.gstin} aria-label="GST Number" onChange={(e) => setForm({ ...form, gstin: e.target.value })} /></div>
       </div>
 
       <div className="fg">
-        <label>Categories (one or more) *</label>
+        <label>Categories (one or more) *{existing ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — already assigned: {leadCategories(existing).join(', ') || 'none'}</span> : null}</label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {ddList(sales, 'categories').map((c) => (
             <label key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 400 }}>
@@ -927,20 +951,22 @@ function AddCustomer({ sales, save, repId, onDone }) {
         <CategoryDispatchChecklist sales={sales} categories={form.categories} value={form.dispatchForms} onChange={(v) => setForm({ ...form, dispatchForms: v })} />
       </div>
 
-      <div className="g3">
-        <div className="fg">
-          <label>Initial Status</label>
-          <select value={form.stage} aria-label="Initial Status" onChange={(e) => setForm({ ...form, stage: e.target.value })}>
-            {ddList(sales, 'statuses').map((st) => <option key={st} value={st}>{st}</option>)}
-          </select>
+      {!existing && (
+        <div className="g3">
+          <div className="fg">
+            <label>Initial Status</label>
+            <select value={form.stage} aria-label="Initial Status" onChange={(e) => setForm({ ...form, stage: e.target.value })}>
+              {ddList(sales, 'statuses').map((st) => <option key={st} value={st}>{st}</option>)}
+            </select>
+          </div>
+          <div className="fg"><label>Next Ping Date</label><input type="date" value={form.followUp} aria-label="Next Ping Date" onChange={(e) => setForm({ ...form, followUp: e.target.value })} /></div>
+          <div className="fg"><label>Remarks</label><input value={form.remarks} aria-label="Remarks" onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></div>
         </div>
-        <div className="fg"><label>Next Ping Date</label><input type="date" value={form.followUp} aria-label="Next Ping Date" onChange={(e) => setForm({ ...form, followUp: e.target.value })} /></div>
-        <div className="fg"><label>Remarks</label><input value={form.remarks} aria-label="Remarks" onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></div>
-      </div>
+      )}
 
       <div className="fbar">
         <span style={{ flex: 1 }} />
-        <button className="btn btn-g" onClick={submit} disabled={busy}>{busy ? 'Saving…' : '✓ Save Customer'}</button>
+        <button className="btn btn-g" onClick={submit} disabled={busy}>{busy ? 'Saving…' : existing ? '✓ Save Lead' : '✓ Save New Lead'}</button>
       </div>
     </div>
   );

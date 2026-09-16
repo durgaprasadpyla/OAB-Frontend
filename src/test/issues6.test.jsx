@@ -99,7 +99,7 @@ describe('Stores — issuing on a slip', () => {
     await mountStores('🔄 Issues & Returns');
     fireEvent.change(await screen.findByLabelText('Sale order'), { target: { value: '26/737' } });
     await waitFor(() => expect([...screen.getByLabelText('Department').options].map((o) => o.value).filter(Boolean)).toEqual(['Printing', 'Pouching']));
-    expect(screen.getByText(/JSS/)).toHaveTextContent('A737');
+    expect(screen.getAllByText(/JSS/).some((el) => /A737/.test(el.textContent))).toBe(true);
     // only the BOM's material — 700 and 500 mm codes are in stock but not offered
     await waitFor(() => expect([...screen.getByLabelText('Item').options].map((o) => o.value).filter(Boolean)).toEqual(['37']));
     fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'Printing' } });
@@ -160,7 +160,7 @@ describe('Stores — issuing on a slip', () => {
     fireEvent.change(screen.getByLabelText('Returned weight 2'), { target: { value: '90' } });
     await waitFor(() => expect(screen.getByLabelText('Split totals')).toHaveTextContent('remaining 0'));
     expect(screen.getByLabelText('Split totals')).toHaveTextContent('heavier than the roll they were cut from');
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     expect(await screen.findByText(/only weighed 200/)).toBeInTheDocument();
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });

@@ -71,8 +71,11 @@ export function csaSampleDate(sku) {
  */
 export function csaPendingForQc(sales) {
   const reports = arr(sales && sales.qc_reports);
+  // Sales Login §15: the rep presses "Send for CSA to QC" (csa_requested) — the
+  // older received + sent toggles still count, whether stored as 'Yes' or as true.
+  const flagged = (v) => isYes(v) || v === true;
   return arr(sales && sales.skus)
-    .filter((sk) => isYes(sk.sample_received) && isYes(sk.sample_sent))
+    .filter((sk) => sk.csa_requested || (flagged(sk.sample_received) && flagged(sk.sample_sent)))
     .filter((sk) => !reports.some((r) => r.sku_id === sk.id))
     .sort((a, b) => csaDaysSince(csaSampleDate(b)) - csaDaysSince(csaSampleDate(a)));
 }

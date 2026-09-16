@@ -164,9 +164,9 @@ describe('HR — Employee details', () => {
     expect(screen.getByLabelText('Employee ID')).toBeDisabled();
     expect(screen.getByLabelText('CTC')).toHaveValue(600000);
     expect(screen.getByLabelText('Account number')).toHaveValue('1234567890');
-    // designations narrow to Asha's department (Production): Supervisor + Operator, not QC Manager
+    // Issues 7 §24: designations are ONE flat list, whatever the department
     const desig = screen.getByLabelText('Designation');
-    expect([...desig.options].map((o) => o.textContent)).toEqual(['—', 'Supervisor', 'Operator']);
+    expect([...desig.options].map((o) => o.textContent)).toEqual(['—', 'Supervisor', 'QC Manager', 'Operator']);
   });
 
   it('creates an employee with an auto-generated ID and a salary whose take-home fills itself in', async () => {
@@ -201,7 +201,9 @@ describe('HR — Employee details', () => {
     await userEvent.type(screen.getByLabelText('Employee ID'), 'E-001');   // already taken
     await userEvent.type(screen.getByLabelText('First Name'), 'Clash');
     await userEvent.click(screen.getByText(/Save Employee/));
-    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/already exists/i).length).toBeGreaterThan(0));
+    // Issues 7 §28: the reason also sits beside the Save button, where the eye is
+    expect(screen.getByRole('alert')).toHaveTextContent(/already exists/i);
     expect(screen.getByLabelText('Employee ID')).toHaveValue('E-001');
   });
 
@@ -210,7 +212,7 @@ describe('HR — Employee details', () => {
     await tab('Employee details');
     await userEvent.click(screen.getByText(/Add new employee/));
     await userEvent.click(screen.getByText(/Save Employee/));
-    await waitFor(() => expect(screen.getByText(/First name is required/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/First name is required/i).length).toBeGreaterThan(0));
   });
 
   it('uploads a document through the browse field and ticks the column', async () => {
@@ -397,8 +399,10 @@ describe('HR — Admin details', () => {
   it('brings a left employee back to current, and keeps the audit trail at hand', async () => {
     const { saved } = await openHR();
     await tab('Admin details');
-    await waitFor(() => expect(screen.getByText('Bala K')).toBeInTheDocument());
-    expect(within(screen.getByText('Bala K').closest('tr')).getByText('Absconding')).toBeInTheDocument();
+    // Bala appears in the current-or-left table AND in the Left employees list (Issues 7 §31)
+    await waitFor(() => expect(screen.getAllByText('Bala K').length).toBe(2));
+    expect(within(screen.getAllByText('Bala K')[0].closest('tr')).getByText('Absconding')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Left employees')).getByText('Bala K')).toBeInTheDocument();
     await userEvent.click(screen.getByLabelText('Bala K current'));
     await waitFor(() => expect(saved.some((s) => s.hrPath === 'employees/2/exit')).toBe(true));
     expect(saved.find((s) => s.hrPath === 'employees/2/exit').body).toEqual({ left: false });

@@ -129,7 +129,7 @@ describe('Stores — the material-on-hand board', () => {
 
     // the child roll is marked as a split of its parent
     const child = screen.getByText('BLMU-2').closest('tr');
-    expect(within(child).getByText('split')).toBeInTheDocument();
+    expect(within(child).getByText(/split/)).toBeInTheDocument();
 
     // …and its disposition can be changed to any of the five
     const sel = screen.getByLabelText('Status of BLMU-2');

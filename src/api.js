@@ -408,6 +408,10 @@ export const storesApi = {
   // the response is the slip the desk prints and hands over with the material.
   issueBatch: (body) => api('/api/stores/issues/batch', { method: 'POST', body }),
   slip: (no) => api('/api/stores/slips?no=' + encodeURIComponent(no)),
+  // Issues 7: the roll-wise issue lines (ISS/2026/3.1 …) a return is booked against,
+  // and where a roll came from (parent roll, issue line, return slip).
+  issueLines: (p) => api('/api/stores/issue-lines' + qs(p)),
+  unitTrace: (unitId) => api('/api/stores/units/' + encodeURIComponent(unitId) + '/trace'),
   // Issues 6 §2: items deleted from the Item Master that still hold stock, and the
   // Super Admin's move of that stock onto the code that replaced them.
   withdrawn: () => api('/api/stores/withdrawn'),

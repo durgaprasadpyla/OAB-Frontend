@@ -5,6 +5,7 @@ import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
 import { ddList } from '../lib/dropdowns.js';
+import CsaRequestCard from './CsaRequestCard.jsx';
 import {
   CSA_BLANK, DISPATCH_TYPES, YES_NO,
   csaPendingForQc, csaPendingForPlant, csaDoneForPlant, csaSampleDate, csaDaysSince,
@@ -131,9 +132,9 @@ function QcCsa() {
         </div>
         <div className="tw sy" style={{ maxHeight: 300 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 160 }}>Customer</th><th>SKU</th><th>Dispatch</th><th>Sample date</th><th style={{ textAlign: 'center' }}>Waiting</th><th style={{ width: 150 }}></th></tr></thead>
+            <thead><tr><th style={{ minWidth: 160 }}>Customer</th><th>SKU</th><th>Dispatch</th><th>Despatch location</th><th style={{ textAlign: 'right' }}>Tentative qty</th><th style={{ textAlign: 'right' }}>Target ₹</th><th>Sample date</th><th style={{ textAlign: 'center' }}>Waiting</th><th style={{ width: 150 }}></th></tr></thead>
             <tbody>
-              {pending.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No samples pending from Sales</td></tr>
+              {pending.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No samples pending from Sales</td></tr>
                 : pending.map((sk) => {
                   const d = csaSampleDate(sk);
                   return (
@@ -141,6 +142,9 @@ function QcCsa() {
                       <td style={{ fontWeight: 700 }}>{leadName(sk.lead_id)}</td>
                       <td>{sk.sku_name || '—'}</td>
                       <td style={{ fontSize: 11 }}>{sk.dispatch_form || sk.dispatch_type || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{(sk.csa_request || {}).despatch_location || '—'}</td>
+                      <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? Number(sk.csa_request.tentative_qty || 0).toLocaleString('en-IN') : '—'}</td>
+                      <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? Number(sk.csa_request.target_price || 0).toLocaleString('en-IN') : '—'}</td>
                       <td style={{ fontSize: 11 }}>{d ? fmtDate(String(d).slice(0, 10)) : '—'}</td>
                       <td style={{ textAlign: 'center' }}><Age days={csaDaysSince(d)} /></td>
                       <td style={{ textAlign: 'center' }}>
@@ -232,6 +236,7 @@ function CsaReportView({ report: r, sales, onClose }) {
         {ci.company}{r.dispatch_type ? ' · ' + r.dispatch_type : ''}
         {' · '}<span className="tag tgr" style={{ fontSize: 9 }}>{r.source === 'direct' ? 'Direct / Walk-in' : 'Sales OS'}</span>
       </div>
+      <CsaRequestCard sku={(sales.skus || []).find((x) => x.id === r.sku_id)} compact />
       <div className="g2">
         {rows.map((f, i) => (
           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed var(--bd)', padding: '4px 0' }}>
@@ -267,6 +272,7 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit }) {
         <button className="btn btn-s" onClick={onCancel}>← Back</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      {sku && <CsaRequestCard sku={sku} />}
 
       {direct && (
         <div className="g4">

@@ -271,8 +271,15 @@ export function repFor(customer, ctx = {}) {
   const sales = ctx.sales || {};
   const lead = kamLeadFor(sales.leads, customer);
   if (!lead) return { kam: '', rep: '', found: false };
-  const rep = lead.assigned_to ? repName(sales.sales_users, lead.assigned_to) : '';
-  return { kam: String(lead.kam || '').trim(), rep: rep === '—' ? '' : rep, found: true };
+  // Issues 7 §23: a rep is named only when the id on the lead is a KNOWN sales user —
+  // an id nobody answers to ("rep_1786510490948_qdjdgo") reads as nobody, not as the
+  // id. The KAM field holds a rep id too (Customer KAM & Targets), so it resolves the
+  // same way; a KAM typed as a plain name from before still reads as that name.
+  const known = (id) => { const n = repName(sales.sales_users, id); return n === '—' || n === String(id) ? '' : n; };
+  const rep = lead.assigned_to ? known(lead.assigned_to) : '';
+  const rawKam = String(lead.kam || '').trim();
+  const kam = rawKam ? (known(rawKam) || (/^rep_/i.test(rawKam) ? '' : rawKam)) : '';
+  return { kam, rep, found: true };
 }
 
 /** The reps / KAMs of every customer in a group, de-duplicated. */
@@ -291,7 +298,10 @@ export function repsForGroup(group, ctx = {}) {
 /** Distinct filter options from the lines (plus the master lists, so a filter can be picked before any sale). */
 export function filterOptions(lines, ctx = {}) {
   const specs = new Set(), groups = new Set(), customers = new Set();
-  (lines || []).forEach((l) => { if (l.spec) specs.add(l.spec); if (l.group) groups.add(l.group); if (l.customer) customers.add(l.customer); });
+  (lines || []).forEach((l) => { if (l.spec) specs.add(l.spec); if (l.customer) customers.add(l.customer); });
+  // Issues 7 §22: the Group list is the CUSTOMER MASTER's groups — the ones currently in
+  // use — not every group name an old invoice ever carried ("AMAZON INDIA PVT.LTD.",
+  // "Amazon Retail India Private Limited - Maharashtra" …).
   custGroups(ctx.customers || []).forEach((g) => groups.add(g));
   (ctx.customers || []).forEach((c) => { const v = String((c && c.customer) || '').trim(); if (v) customers.add(v); });
   const sortNum = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });

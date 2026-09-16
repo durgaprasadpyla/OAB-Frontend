@@ -167,7 +167,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     setRow(1, { rolls: 2, width: 445, weight: 70 });
 
     await waitFor(() => expect(screen.getByText(/wider than the roll they were cut from/)).toBeInTheDocument());
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     await waitFor(() => expect(screen.getByText(/only 635 mm wide/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });
@@ -180,7 +180,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     fireEvent.click(screen.getByText('＋ Another roll back'));
     setRow(2, { rolls: 1, width: 200, weight: 100 });
 
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     await waitFor(() => expect(screen.getByText(/only weighed 146/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });
@@ -191,7 +191,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     // Stores 5.1 / Issues 6: the width IS its item code, and the rolls are booked under it
     expect(screen.getByLabelText('Returned width 1')).toHaveValue('20');
     expect(screen.getByText(/BLM020 · FILM \/ AF BOPP/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
 
     await waitFor(() => expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(1));
     const body = posted.find((p) => p.u.includes('/returns')).body;
@@ -221,7 +221,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
     await waitFor(() => expect(screen.getByText(/already back off this one/)).toBeInTheDocument());
 
     setRow(1, { rolls: 1, width: 200, weight: 20 });   // 445 + 200 = 645 > 635
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     await waitFor(() => expect(screen.getByText(/already back off this roll/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });
@@ -229,7 +229,7 @@ describe('Issues & Returns — the split roll cannot exceed its parent', () => {
   it('says so rather than half-booking a row that is missing its weight', async () => {
     await openSplit();
     setRow(1, { rolls: 1, width: 200 });
-    fireEvent.click(screen.getByText('↙ Receive return'));
+    fireEvent.click(screen.getByText(/↙ Receive return/));
     await waitFor(() => expect(screen.getByText(/half filled in/)).toBeInTheDocument());
     expect(posted.filter((p) => p.u.includes('/returns')).length).toBe(0);
   });

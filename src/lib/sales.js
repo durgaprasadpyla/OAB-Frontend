@@ -489,16 +489,23 @@ export const REP_MODULES = [
   { k: 'visit', label: 'Log Visit' },
   { k: 'po', label: 'Enter PO' },
   { k: 'targets', label: 'My Targets' },
-  { k: 'customers', label: 'My Customers' },
+  { k: 'customers', label: 'My Leads' },
   { k: 'contacts', label: 'My Contacts' },
-  { k: 'add', label: 'Add Customer' },
+  { k: 'add', label: 'Add Lead' },
   { k: 'sku', label: 'SKUs' },
-  { k: 'nego', label: 'Negotiations' },
+  // Sales Login §36-§60: Negotiations became Quotations, with Send Quote and Quote
+  // Accepted beside it. A rep allocated the old 'nego' module gets all three.
+  { k: 'quotes', label: 'Quotations' },
+  { k: 'send', label: 'Send Quote' },
+  { k: 'accepted', label: 'Quote Accepted' },
 ];
 
 /** The module keys a rep may use (no allocation stored = every module). */
 export function repModulesOf(rep) {
-  return Array.isArray(rep?.modules) && rep.modules.length ? rep.modules : REP_MODULES.map((m) => m.k);
+  if (!(Array.isArray(rep?.modules) && rep.modules.length)) return REP_MODULES.map((m) => m.k);
+  const out = new Set(rep.modules);
+  if (out.has('nego') || out.has('quotes')) { out.delete('nego'); out.add('quotes'); out.add('send'); out.add('accepted'); }
+  return [...out];
 }
 
 /**
