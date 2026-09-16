@@ -13,6 +13,8 @@ const res = (body) => ({ status: 200, ok: true, headers: { get: () => 'applicati
 const JSS = [
   { spec: 'A1', customer: 'Amazon', jobName: 'Pouch A' },
   { spec: 'A2', customer: 'Nandi', jobName: 'Pouch B' },
+  { spec: 'A3', customer: 'Nandi', jobName: 'Pouch C', group: 'Nandi Group' },
+  { spec: 'A4', customer: 'Nandi Foods', jobName: 'Pouch D', group: 'Nandi Group' },
 ];
 const CUSTOMERS = [
   { customer: 'Amazon', dispatchLoc: 'Chennai' },
@@ -79,8 +81,45 @@ describe('Projections — entering one', () => {
     set('JSS number', 'A1');
     await waitFor(() => expect(screen.getByLabelText('Customer').value).toBe('Amazon'));
     expect(screen.getByLabelText('SKU').value).toBe('Pouch A');
-    // and they are read-only — the spec owns them
-    expect(screen.getByLabelText('Customer')).toHaveAttribute('readonly');
+    // and the SKU is read-only — the spec owns it
+    expect(screen.getByLabelText('SKU')).toHaveAttribute('readonly');
+  });
+
+  // "I would not know what the JSS number is for all 400 JSS that are there. Rather
+  // if I select the group and customer, then the JSS will be limited from there."
+  it('narrows the JSS list by group, then by customer, before the number is picked', async () => {
+    mountWith({ entries: [] });
+    await page();
+    const options = () => [...document.getElementById('proj-specs').options].map((o) => o.value);
+    expect(options()).toEqual(['A1', 'A2', 'A3', 'A4']);
+    expect(screen.getByText('(4 to pick from)')).toBeInTheDocument();
+
+    set('Group', 'Nandi Group');
+    await waitFor(() => expect(options()).toEqual(['A3', 'A4']));
+    // the customer list follows the group
+    expect([...screen.getByLabelText('Customer').options].map((o) => o.value)).toEqual(['', 'Nandi', 'Nandi Foods']);
+
+    set('Customer', 'Nandi Foods');
+    await waitFor(() => expect(options()).toEqual(['A4']));
+    expect(screen.getByText('(1 to pick from)')).toBeInTheDocument();
+
+    set('JSS number', 'A4');
+    set('Quantity', '100');
+    set('Marketing person', 'Ravi');
+    fireEvent.click(screen.getByText('＋ Add projection'));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].next.entries[0]).toMatchObject({ spec: 'A4', customer: 'Nandi Foods', jobName: 'Pouch D' });
+  });
+
+  it('fills the group and customer back in when the JSS number is typed first', async () => {
+    mountWith({ entries: [] });
+    await page();
+    set('JSS number', 'A3');
+    await waitFor(() => expect(screen.getByLabelText('Customer').value).toBe('Nandi'));
+    expect(screen.getByLabelText('Group').value).toBe('Nandi Group');
+    // changing the customer afterwards drops the spec, since it no longer belongs
+    set('Customer', 'Nandi Foods');
+    await waitFor(() => expect(screen.getByLabelText('JSS number').value).toBe(''));
   });
 
   it('offers that customer’s dispatch locations, defaulting to all of them', async () => {

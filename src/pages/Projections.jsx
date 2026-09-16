@@ -8,7 +8,7 @@ import {
 } from '../lib/projections.js';
 import { bomMaterialForSO, plannedBomMap } from '../lib/bom.js';
 import { useApi } from '../lib/useApi.js';
-import { getCustLocations } from '../lib/master.js';
+import { getCustLocations, specGroup } from '../lib/master.js';
 import { num } from '../lib/calc.js';
 
 // Future Projections.
@@ -51,6 +51,11 @@ export default function Projections() {
   const [msg, setMsg] = useState(null);
   const [openMonth, setOpenMonth] = useState('');
   const [basis, setBasis] = useState('remaining');
+  // "I would not know what the JSS number is for all 400 JSS" — so the Group and the
+  // Customer come FIRST and narrow the JSS list down to the handful that belong to
+  // them. Neither is saved: the projection still takes its customer from the JSS.
+  const [pickGroup, setPickGroup] = useState('');
+  const [pickCust, setPickCust] = useState('');
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
@@ -74,6 +79,37 @@ export default function Projections() {
     () => jss.find((j) => String(j.spec).trim() === String(form.spec).trim()) || null,
     [jss, form.spec],
   );
+  // The buying group a spec belongs to — its own, else the one its customer sits in.
+  const groupOf = (j) => specGroup(j, customers) || String(j.group || '').trim();
+  const specGroups = useMemo(
+    () => [...new Set(jss.map(groupOf).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [jss, customers], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const specCustomers = useMemo(
+    () => [...new Set(jss
+      .filter((j) => !pickGroup || groupOf(j) === pickGroup)
+      .map((j) => String(j.customer || '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b)),
+    [jss, pickGroup], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // The JSS list the picker offers: only the specs of the chosen group / customer.
+  const specChoices = useMemo(() => jss
+    .filter((j) => !pickGroup || groupOf(j) === pickGroup)
+    .filter((j) => !pickCust || String(j.customer || '').trim() === pickCust)
+    .slice()
+    .sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true })),
+  [jss, pickGroup, pickCust]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Picking a JSS straight away (typing its number) fills the group and customer
+  // back in, so the three boxes always agree.
+  function chooseSpec(v) {
+    const j = jss.find((x) => String(x.spec).trim() === String(v).trim());
+    set({ spec: v, dispLoc: '' });
+    if (j) {
+      const g = groupOf(j);
+      if (g) setPickGroup(g);
+      setPickCust(String(j.customer || '').trim());
+    }
+  }
   // The customer a projection is for: the spec's when it came from the customer list,
   // the typed one when it came from a lead. Its locations follow.
   const forCustomer = form.source === 'customer' ? (chosenSpec ? chosenSpec.customer : '') : form.customer;
@@ -97,6 +133,9 @@ export default function Projections() {
 
   async function edit(row) {
     setForm({ ...blankProjection(), ...row, qty: String(row.qty ?? '') });
+    const j = row.spec ? jss.find((x) => String(x.spec).trim() === String(row.spec).trim()) : null;
+    setPickGroup(j ? groupOf(j) : '');
+    setPickCust(j ? String(j.customer || '').trim() : '');
     setMsg(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -160,7 +199,7 @@ export default function Projections() {
             <div className="fg">
               <label>This projection is from</label>
               <select value={form.source} aria-label="Projection source"
-                onChange={(e) => set({ source: e.target.value, spec: '', leadId: '', customer: '', jobName: '', dispLoc: '' })}>
+                onChange={(e) => { setPickGroup(''); setPickCust(''); set({ source: e.target.value, spec: '', leadId: '', customer: '', jobName: '', dispLoc: '' }); }}>
                 <option value="customer">The customer list (JSS)</option>
                 <option value="lead">A lead</option>
               </select>
@@ -168,25 +207,43 @@ export default function Projections() {
 
             {form.source === 'customer' ? (
               <>
+                {/* Group → Customer → JSS: each one narrows the next, so the JSS
+                    box offers a few specs rather than all four hundred. */}
                 <div className="fg">
-                  <label>JSS Number *</label>
+                  <label>Group</label>
+                  <select value={pickGroup} aria-label="Group"
+                    onChange={(e) => { setPickGroup(e.target.value); setPickCust(''); set({ spec: '', dispLoc: '' }); }}>
+                    <option value="">— every group —</option>
+                    {specGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div className="fg">
+                  <label>Customer</label>
+                  <select value={pickCust} aria-label="Customer"
+                    onChange={(e) => { setPickCust(e.target.value); set({ spec: '', dispLoc: '' }); }}>
+                    <option value="">— every customer{pickGroup ? ` in ${pickGroup}` : ''} —</option>
+                    {specCustomers.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {pickCust && !specCustomers.includes(pickCust) && <option value={pickCust}>{pickCust}</option>}
+                  </select>
+                </div>
+                <div className="fg">
+                  <label>JSS Number * <span style={{ fontWeight: 400, color: 'var(--i3)' }}>({specChoices.length} to pick from)</span></label>
                   <input list="proj-specs" value={form.spec} aria-label="JSS number"
-                    placeholder="type or pick a spec…"
-                    onChange={(e) => set({ spec: e.target.value, dispLoc: '' })} />
+                    placeholder={pickCust || pickGroup ? 'pick one of these specs…' : 'type or pick a spec…'}
+                    onChange={(e) => chooseSpec(e.target.value)} />
                   <datalist id="proj-specs">
-                    {jss.map((j) => <option key={j.spec} value={j.spec}>{`${j.customer || ''} — ${j.jobName || ''}`}</option>)}
+                    {specChoices.map((j) => <option key={j.spec} value={j.spec}>{`${j.customer || ''} — ${j.jobName || ''}`}</option>)}
                   </datalist>
                   {form.spec && !chosenSpec && (
                     <div style={{ fontSize: 10, color: 'var(--red)', marginTop: 2 }}>
                       Not in the JSS master — add it in the JSS Editor first.
                     </div>
                   )}
-                </div>
-                <div className="fg">
-                  <label>Customer <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(from the JSS)</span></label>
-                  <input value={chosenSpec ? chosenSpec.customer || '' : ''} readOnly tabIndex={-1}
-                    aria-label="Customer" placeholder="pick a JSS number first"
-                    style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} />
+                  {chosenSpec && (
+                    <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>
+                      Customer <strong>{chosenSpec.customer || '—'}</strong> (from the JSS)
+                    </div>
+                  )}
                 </div>
                 <div className="fg">
                   <label>SKU <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(from the JSS)</span></label>

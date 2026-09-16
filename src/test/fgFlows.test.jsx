@@ -40,6 +40,64 @@ describe('FG Entry — record production', () => {
   });
 });
 
+describe('FG Entry — an inactive JSS', () => {
+  const mixed = [
+    ...jss,
+    { spec: 'Z9', customer: 'Acme', jobName: 'Old pouch', status: 'Inactive' },
+  ];
+  const specOptions = () => [...document.getElementById('fg-spec-list').options].map((o) => o.value);
+
+  it('is off the picker until asked for, and then books as non-moving', async () => {
+    const user = userEvent.setup();
+    const { saved } = renderApp(<FGLedger />, { modules: { jss: mixed, fgLedger: {} } });
+    // the harness's fetch answers the flag endpoints; watch what the sheet sends it
+    const real = globalThis.fetch, calls = [];
+    globalThis.fetch = (u, o) => { calls.push([u, o]); return real(u, o); };
+    await screen.findByText(/FG Entry/);
+    expect(specOptions()).toEqual(['A1']);
+
+    // typing the inactive spec with the box unticked says why it does not open
+    await user.type(screen.getByLabelText('JSS / Spec #'), 'Z9');
+    expect(await screen.findByText(/Z9 is an Inactive JSS/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('FG status')).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Include inactive JSS'));
+    expect(specOptions()).toEqual(['A1', 'Z9']);
+    await user.clear(screen.getByLabelText('JSS / Spec #'));
+    await user.type(screen.getByLabelText('JSS / Spec #'), 'Z9');
+
+    // the entry is locked to non-moving
+    const status = await screen.findByLabelText('FG status');
+    expect(status).toHaveValue('non');
+    expect(status).toBeDisabled();
+    expect(screen.getByText(/Z9 is an Inactive JSS, so this FG is booked as non-moving/)).toBeInTheDocument();
+
+    await user.type(fieldByLabel(/FG Produced on this date/), '300');
+    await user.click(screen.getByRole('button', { name: /Add Production/ }));
+    await waitFor(() => expect(saved.some((s) => s.id === 9)).toBe(true));
+    expect(saved.find((s) => s.id === 9).data.Z9.prod[0].qty).toBe(300);
+    // and the spec is flagged non-moving on the server, so both logins' reports agree
+    await waitFor(() => expect(calls.some((c) => (
+      String(c[0]).includes('/api/stores/fg/Z9/movement') && c[1] && c[1].method === 'PUT'
+      && JSON.parse(c[1].body).moving === false
+    ))).toBe(true));
+    // the non-moving tile carries the quantity
+    const tile = screen.getByText('Non-moving FG', { selector: '.sl' }).parentElement;
+    expect(within(tile).getByText('300')).toBeInTheDocument();
+  });
+
+  it('keeps an active JSS bookable as moving, exactly as before', async () => {
+    const user = userEvent.setup();
+    renderApp(<FGLedger />, { modules: { jss: mixed, fgLedger: {} } });
+    await screen.findByText(/FG Entry/);
+    await user.click(screen.getByLabelText('Include inactive JSS'));
+    await user.type(screen.getByLabelText('JSS / Spec #'), 'A1');
+    const status = await screen.findByLabelText('FG status');
+    expect(status).toHaveValue('moving');
+    expect(status).not.toBeDisabled();
+  });
+});
+
 describe('New PO — FG drawdown prompt', () => {
   it('offers existing FG for a new SO and records an allocation + sets row.fg', async () => {
     const user = userEvent.setup();

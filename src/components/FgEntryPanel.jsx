@@ -65,6 +65,11 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   const [qty, setQty] = useState('');
   // Stores 5.1: moving / non-moving, chosen at the time of entry. Defaults to moving.
   const [moving, setMoving] = useState(true);
+  // An inactive JSS is kept out of the picker unless asked for: "I need a way in
+  // which I will be able to add the FG for the inactive JSS, the amount of which
+  // will go into the non-moving FG." Tick the box, and every non-Active JSS
+  // (Inactive / Redundant / Sample) is offered too — booked as non-moving.
+  const [inclInactive, setInclInactive] = useState(false);
   const [msg, setMsg] = useState(null);      // { t:'g'|'y'|'r', text }
   const [busy, setBusy] = useState(false);
   const [sumQ, setSumQ] = useState('');
@@ -110,15 +115,25 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
 
   const isMoving = (sp) => { const f = flags[String(sp || '').trim()]; return !f || f.moving !== false; };
 
-  // Active spec pool: unique specs (first occurrence per code), status Active only.
-  const specPool = useMemo(() => {
+  // A JSS with no status at all is Active — the JSS Editor reads it that way too.
+  const jssStatus = (j) => String((j && j.status) || 'Active').trim() || 'Active';
+  const jssActive = (j) => jssStatus(j).toLowerCase() === 'active';
+  // Spec pool: unique specs (first occurrence per code). Active specs always; the
+  // inactive ones only behind the toggle, listed after the active ones so an
+  // active record wins when the same spec appears twice.
+  const allPool = useMemo(() => {
     const seen = {}, out = [];
-    jss.forEach((j) => {
+    [...jss.filter(jssActive), ...jss.filter((j) => !jssActive(j))].forEach((j) => {
       const sp = String((j && j.spec) || '').trim();
-      if (sp && String(j.status || '').trim().toLowerCase() === 'active' && !seen[sp]) { seen[sp] = 1; out.push(j); }
+      if (sp && !seen[sp]) { seen[sp] = 1; out.push(j); }
     });
     return out;
-  }, [jss]);
+  }, [jss]); // eslint-disable-line react-hooks/exhaustive-deps
+  const specPool = useMemo(
+    () => (inclInactive ? allPool : allPool.filter(jssActive)),
+    [allPool, inclInactive], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const inactiveCount = allPool.length - allPool.filter(jssActive).length;
 
   // §43: the buying Group of a spec (via the customer master) drives a filter of
   // its own, next to the Customer filter.
@@ -140,8 +155,11 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     return pool.slice().sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
   }, [specPool, custFilter, groupFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const jssFor = (sp) => jss.find((j) => String(j.spec || '').trim() === String(sp || '').trim()) || {};
+  const jssFor = (sp) => allPool.find((j) => String(j.spec || '').trim() === String(sp || '').trim()) || {};
   const selJss = spec ? jssFor(spec) : {};
+  // Whether the spec's JSS is inactive: its FG can only ever be non-moving.
+  const inactiveSpec = (sp) => { const j = jssFor(sp); return !!j.spec && !jssActive(j); };
+  const selInactive = !!spec && inactiveSpec(spec);
 
   const produced = fgProduced(ledger, spec);
   const allocated = fgAllocated(ledger, spec);
@@ -163,6 +181,23 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     });
     return m;
   }, [specPool]);
+  // The same index over every JSS, so typing an inactive spec with the toggle off
+  // gets an explanation instead of silently matching nothing.
+  const anyLookup = useMemo(() => {
+    const m = {};
+    allPool.forEach((j) => {
+      const sp = String(j.spec).trim();
+      m[norm(sp)] = sp;
+      m[norm(`${j.jobName || '(no name)'} — ${sp}`)] = sp;
+    });
+    return m;
+  }, [allPool]);
+  const hiddenInactiveHint = (v) => {
+    const sp = anyLookup[norm(v)];
+    return sp && !specLookup[norm(v)]
+      ? `${sp} is an ${jssStatus(jssFor(sp))} JSS — tick "Include inactive JSS" to book its FG (it goes to non-moving FG).`
+      : '';
+  };
 
   /** Select a spec and mirror it into the other two fields. (fgSpecInput) */
   function selectSpec(sp) {
@@ -175,8 +210,9 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     setSkuText(`${j.jobName || '(no name)'} — ${sp}`);
     if (!date) setDate(today());
     // The entry's FG status starts from what the spec is already classified as —
-    // and that is Moving unless somebody has said otherwise.
-    setMoving(isMoving(sp));
+    // and that is Moving unless somebody has said otherwise. An inactive JSS has
+    // no say: its FG is non-moving.
+    setMoving(inactiveSpec(sp) ? false : isMoving(sp));
   }
 
   /** Clear the selection but keep whatever the user typed. */
@@ -185,12 +221,12 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   function onSpecText(v) {
     setSpecText(v);
     const sp = specLookup[norm(v)];
-    if (sp) selectSpec(sp); else { clearSpec(); setSkuText(''); }
+    if (sp) selectSpec(sp); else { clearSpec(); setSkuText(''); setSearchMsg(hiddenInactiveHint(v)); }
   }
   function onSkuText(v) {
     setSkuText(v);
     const sp = specLookup[norm(v)];
-    if (sp) selectSpec(sp); else clearSpec();
+    if (sp) selectSpec(sp); else { clearSpec(); setSearchMsg(hiddenInactiveHint(v)); }
   }
   // Typing a customer narrows the other two lists and drops any current spec.
   function onCustText(v) { setCustFilter(v); clearSpec(); setSpecText(''); setSkuText(''); }
@@ -233,8 +269,10 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
       setQty('');
       let flagNote = '';
       try {
-        const changed = await syncFlag(spec, moving);
-        if (changed) flagNote = ` Marked ${moving ? 'moving' : 'non-moving'}.`;
+        // An inactive JSS's FG always lands in non-moving, whatever the select held.
+        const want = inactiveSpec(spec) ? false : moving;
+        const changed = await syncFlag(spec, want);
+        if (changed) flagNote = want ? ' Marked moving.' : ` Marked non-moving${inactiveSpec(spec) ? ' (inactive JSS)' : ''}.`;
       } catch (e) {
         flagNote = ` (The FG was booked, but its moving / non-moving status could not be saved: ${e && e.message ? e.message : e})`;
       }
@@ -295,7 +333,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
         spec: sp, customer: j.customer || specGroup(j, mods.customers) || j.group || '', sku: j.jobName || '',
         prod: fgProduced(ledger, sp), alloc: fgAllocated(ledger, sp), av,
         price, value: av * price, agingDays: ag.days, ageing: ag.display,
-        moving: isMoving(sp),
+        moving: isMoving(sp), inactive: !!j.spec && !jssActive(j),
       };
     })
     // Hide fully-consumed specs: once FG is allocated + dispatched the available
@@ -326,7 +364,10 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     const j = jssFor(sp);
     setCustFilter(j.customer || '');
     setSpec(sp);
-    setMoving(isMoving(sp));
+    setSpecText(sp);
+    setSkuText(`${j.jobName || '(no name)'} — ${sp}`);
+    if (j.spec && !jssActive(j)) setInclInactive(true);
+    setMoving(inactiveSpec(sp) ? false : isMoving(sp));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -349,7 +390,19 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
           so a partial Customer/SKU still gets you somewhere. Field order matches
           production: Spec, Customer, SKU. */}
       <div className="card">
-        <div className="ctitle">Select Spec (type or pick any one — the others auto-fill)</div>
+        <div className="fbar" style={{ marginBottom: 8 }}>
+          <div className="ctitle" style={{ margin: 0 }}>Select Spec (type or pick any one — the others auto-fill)</div>
+          {/* FG for an inactive JSS: off the list by default, one tick away. */}
+          <label style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={inclInactive} aria-label="Include inactive JSS"
+              onChange={(e) => {
+                setInclInactive(e.target.checked);
+                if (!e.target.checked && selInactive) { clearSpec(); setSpecText(''); setSkuText(''); }
+                setSearchMsg('');
+              }} />
+            Include inactive JSS{inactiveCount ? ` (${inactiveCount})` : ''} — booked as non-moving FG
+          </label>
+        </div>
         <div className="g4">
           <div className="fg">
             <label>JSS / Spec #</label>
@@ -359,7 +412,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
               onChange={(e) => onSpecText(e.target.value)}
             />
             <datalist id="fg-spec-list">
-              {specOptions.map((j) => <option key={j.spec} value={j.spec}>{j.jobName || ''}</option>)}
+              {specOptions.map((j) => <option key={j.spec} value={j.spec}>{`${j.jobName || ''}${jssActive(j) ? '' : ` (${jssStatus(j)})`}`}</option>)}
             </datalist>
           </div>
           {/* §43: filter by buying Group, with type-to-search like the others. */}
@@ -393,7 +446,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
               onChange={(e) => onSkuText(e.target.value)}
             />
             <datalist id="fg-sku-list">
-              {specOptions.map((j) => <option key={j.spec} value={`${j.jobName || '(no name)'} — ${j.spec}`} />)}
+              {specOptions.map((j) => <option key={j.spec} value={`${j.jobName || '(no name)'} — ${j.spec}`}>{jssActive(j) ? '' : jssStatus(j)}</option>)}
             </datalist>
           </div>
         </div>
@@ -416,11 +469,11 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
               Produced (total): <strong>{nfmt(produced)}</strong><br />Allocated to SOs: <strong>{nfmt(allocated)}</strong>
             </div>
             <div style={{ fontSize: 11, color: 'var(--i2)', borderLeft: '1px solid var(--bd)', paddingLeft: 24 }}>
-              Spec: <strong>{spec}</strong><br />Customer: {selJss.customer || '-'}<br />SKU: {selJss.jobName || '-'}
+              Spec: <strong>{spec}</strong>{selInactive && <> <span className="tag tr" style={{ fontSize: 9 }}>{jssStatus(selJss)} JSS</span></>}<br />Customer: {selJss.customer || '-'}<br />SKU: {selJss.jobName || '-'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--i2)', borderLeft: '1px solid var(--bd)', paddingLeft: 24 }}>
               FG status:{' '}
-              <strong style={{ color: isMoving(spec) ? 'var(--g)' : 'var(--red)' }}>{isMoving(spec) ? 'Moving' : 'Non-moving'}</strong>
+              <strong style={{ color: !selInactive && isMoving(spec) ? 'var(--g)' : 'var(--red)' }}>{!selInactive && isMoving(spec) ? 'Moving' : 'Non-moving'}</strong>
             </div>
           </div>
         )}
@@ -437,9 +490,11 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
                 selection should be moving and I should be able to change it to
                 non-moving." */}
             <div className="fg"><label>FG status</label>
-              <select value={moving ? 'moving' : 'non'} aria-label="FG status"
+              <select value={selInactive || !moving ? 'non' : 'moving'} aria-label="FG status"
+                disabled={selInactive}
+                title={selInactive ? 'An inactive JSS\u2019s FG is always non-moving' : undefined}
                 onChange={(e) => setMoving(e.target.value === 'moving')}
-                style={{ color: moving ? undefined : 'var(--red)' }}>
+                style={{ color: selInactive || !moving ? 'var(--red)' : undefined }}>
                 <option value="moving">Moving FG</option>
                 <option value="non">Non-moving FG</option>
               </select>
@@ -449,6 +504,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
           <p style={{ fontSize: 11, color: 'var(--i3)', marginTop: 2 }}>
             This adds to the running FG total for the selected spec. It does not overwrite earlier days.
             The FG status is the spec&rsquo;s classification for the moving / non-moving report — it changes no quantity.
+            {selInactive && <> <strong style={{ color: 'var(--red)' }}>{spec} is an {jssStatus(selJss)} JSS, so this FG is booked as non-moving.</strong></>}
           </p>
         </div>
       )}
@@ -546,7 +602,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
                 <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>{allRows.length ? 'No specs match' : 'No FG recorded yet'}</td></tr>
               ) : summary.map((r) => (
                 <tr key={r.spec} style={{ cursor: 'pointer' }} onClick={() => jumpTo(r.spec)}>
-                  <td><span className="tag tb">{r.spec}</span></td>
+                  <td><span className="tag tb">{r.spec}</span>{r.inactive && <> <span className="tag tr" style={{ fontSize: 9 }} title="Inactive JSS — its FG is non-moving">inactive</span></>}</td>
                   <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.sku || '-'}</td>
                   <td style={{ textAlign: 'right' }}>{nfmt(r.prod)}</td>
