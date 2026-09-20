@@ -220,9 +220,30 @@ function Overview() {
 }
 
 /* ─────────────────────────── Employee details ─────────────────────────── */
+/**
+ * The status filter's first choice — the people who are with the company today.
+ * Everyone who has Left / Resigned / been Terminated / gone Inactive is reached by
+ * picking that status (or "All statuses"); they no longer sit in the default list.
+ */
+const CURRENT = '__current__';
+
 function Employees() {
-  const [filters, setFilters] = useState({ q: '', status: '', departmentId: '' });
-  const [applied, setApplied] = useState({ q: '', status: '', departmentId: '' });
+  // "In HR login, in the Employee Details tab, the filter is not working and even
+  // the employees who have left are also visible here." The filters used to sit
+  // behind a Search button — changing a dropdown did nothing until it was pressed —
+  // and the list opened on everybody, leavers included. Each filter now applies the
+  // moment it changes, and the list opens on current employees.
+  const [filters, setFilters] = useState({ q: '', status: CURRENT, departmentId: '' });
+  const [applied, setApplied] = useState({ q: '', status: CURRENT, departmentId: '' });
+  // The typed search waits a moment so the server is asked once per pause, not per key.
+  useEffect(() => {
+    const t = setTimeout(() => setApplied((a) => (a.q === filters.q ? a : { ...a, q: filters.q })), 300);
+    return () => clearTimeout(t);
+  }, [filters.q]);
+  const pick = (patch) => { const next = { ...filters, ...patch }; setFilters(next); setApplied(next); };
+  const query = (f) => (f.status === CURRENT
+    ? { q: f.q, departmentId: f.departmentId, current: 1 }
+    : { q: f.q, status: f.status, departmentId: f.departmentId });
   const [editing, setEditing] = useState(null);   // employee draft, or EMPTY_EMP for new
   const [selected, setSelected] = useState('');   // the radio button
   const [msg, setMsg] = useState(null);
@@ -230,11 +251,28 @@ function Employees() {
   const [pendingFiles, setPendingFiles] = useState({});   // docType → attachment picked before the employee exists
   const [saveErr, setSaveErr] = useState('');             // the last refused save, shown beside the button
 
-  const emps = useHr(() => hrApi.listEmployees(applied), [applied], []);
+  const emps = useHr(() => hrApi.listEmployees(query(applied)), [applied], []);
   const meta = useHr(() => hrApi.meta(), [], { statuses: [], employmentTypes: [], genders: [], workLocations: [], docTypes: [] });
   const depts = useHr(() => hrApi.listDepartments({ active: 1 }), [], []);
   const desigs = useHr(() => hrApi.listDesignations({ active: 1 }), [], []);
   const docs = useHr(() => (editing && editing.id ? hrApi.listDocuments(editing.id) : Promise.resolve([])), [editing && editing.id], []);
+
+  // "despite selecting [enabling] the designation … the options are not visible in the
+  // drop down menu." The departments and designations are the Super Admin's — created
+  // and enabled on a different screen (often a different login). This form used to read
+  // them once, at mount, so a designation the Super Admin added or re-enabled afterwards
+  // never reached this dropdown until the whole page was reloaded. Re-read both lists
+  // when this tab regains focus, so an enabled designation shows up here.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState !== 'visible') return;
+      depts.reload();
+      desigs.reload();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
+  }, [depts.reload, desigs.reload]);
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
 
@@ -258,7 +296,17 @@ function Employees() {
   // Issues 7 §24: designations are ONE flat list — an Operator is an operator in
   // Printing, Extrusion or Slitting alike — so every title is offered whatever the
   // department, and a title held from before stays selectable.
-  const desigOpts = (desigs.data || []).map((d) => ({ v: d.id, l: d.title || d.name }));
+  const desigOpts = useMemo(() => {
+    const opts = (desigs.data || []).map((d) => ({ v: d.id, l: d.title || d.name }));
+    // Keep the designation an employee already holds selectable even after it is
+    // retired — otherwise opening that employee for editing shows a blank designation
+    // and a save would silently drop it. (Mirrors the retired-department handling.)
+    if (editing && editing.designationId
+        && !opts.some((o) => String(o.v) === String(editing.designationId))) {
+      opts.push({ v: editing.designationId, l: (editing.designation || editing.designationName || 'designation') + ' (retired)' });
+    }
+    return opts;
+  }, [desigs.data, editing]);
   // "All the people above his designation … for that particular department along
   // with employees with management candidate designations."
   const managerOpts = useMemo(() => {
@@ -455,15 +503,18 @@ function Employees() {
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>Employees <span className="tag tgr">{(emps.data || []).length}</span></div>
           <input placeholder="Search name / code…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} aria-label="Search employees" />
-          <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} aria-label="Filter by status">
-            <option value="">All statuses</option>
+          <select value={filters.status} onChange={(e) => pick({ status: e.target.value })} aria-label="Filter by status">
+            <option value={CURRENT}>Current employees</option>
+            <option value="">All statuses (incl. left)</option>
             {(meta.data.statuses || []).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={filters.departmentId} onChange={(e) => setFilters({ ...filters, departmentId: e.target.value })} aria-label="Filter by department">
+          <select value={filters.departmentId} onChange={(e) => pick({ departmentId: e.target.value })} aria-label="Filter by department">
             <option value="">All departments</option>
             {(depts.data || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
-          <button className="btn btn-s" onClick={() => setApplied({ ...filters })}>Search</button>
+          {(filters.q || filters.status !== CURRENT || filters.departmentId) && (
+            <button className="btn btn-s" onClick={() => pick({ q: '', status: CURRENT, departmentId: '' })}>✕ Clear</button>
+          )}
           <span style={{ flex: 1 }} />
           <button className="btn btn-g" onClick={openNew}>＋ Add new employee</button>
         </div>

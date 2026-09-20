@@ -153,6 +153,30 @@ describe('HR — Employee details', () => {
     expect(within(row).getByLabelText('PAN for Asha Rao')).toHaveTextContent('—');
   });
 
+  // "the filter is not working and even the employees who have left are also visible"
+  it('opens on current employees, hides the leavers, and filters the moment a box changes', async () => {
+    await openHR();
+    await tab('Employee details');
+    await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
+    // Ravi has Left — not in the default list
+    expect(screen.queryByText('Bala K')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Filter by status')).toHaveValue('__current__');
+    // no Search button to press: the status box applies itself
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'Left' } });
+    await waitFor(() => expect(screen.getByText('Bala K')).toBeInTheDocument());
+    expect(screen.queryByText('Asha Rao')).not.toBeInTheDocument();
+    // "All statuses" brings everybody back, and Clear returns to current employees
+    fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
+    expect(screen.getByText('Bala K')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '✕ Clear' }));
+    await waitFor(() => expect(screen.queryByText('Bala K')).not.toBeInTheDocument());
+    // the typed search narrows without a button too
+    fireEvent.change(screen.getByLabelText('Search employees'), { target: { value: 'dev' } });
+    await waitFor(() => expect(screen.queryByText('Asha Rao')).not.toBeInTheDocument());
+  });
+
   it('brings the employee to the top for editing when the radio button is picked', async () => {
     await openHR();
     await tab('Employee details');
