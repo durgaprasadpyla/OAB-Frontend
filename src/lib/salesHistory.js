@@ -311,11 +311,15 @@ export function filterOptions(lines, ctx = {}) {
 /* ─────────────────────── the uploaded sheet (§31-§34) ─────────────────────── */
 
 const HEADS = {
-  customer: ['customer', 'customername', 'customerorgroup', 'group', 'groupname', 'party', 'partyname', 'client', 'buyer', 'account'],
+  // a sheet may carry BOTH a Customer and a Group column (the Stay Fresh report
+  // does — most rows name only the group), so the two are found separately and
+  // the group stands in wherever the customer cell is blank
+  customer: ['customer', 'customername', 'customerorgroup', 'party', 'partyname', 'client', 'buyer', 'account'],
+  group: ['group', 'groupname', 'buyinggroup', 'custgroup', 'customergroup'],
   spec: ['spec', 'specno', 'specnumber', 'specification', 'specificationno', 'specificationnumber', 'sku', 'jss', 'jssno', 'code', 'itemcode'],
-  qty: ['qty', 'quantity', 'pcs', 'pieces', 'nos', 'pouches', 'qtypcs', 'quantitypcs'],
-  amount: ['totalsale', 'sale', 'sales', 'amount', 'total', 'value', 'salevalue', 'basic', 'basicvalue', 'taxable', 'taxablevalue', 'netsale', 'totalamount'],
-  incl: ['inclgst', 'includinggst', 'withgst', 'gross', 'grossvalue', 'totalinclgst', 'invoicevalue', 'totalwithgst', 'saleinclgst'],
+  qty: ['qty', 'quantity', 'pcs', 'pieces', 'nos', 'pouches', 'qtypcs', 'quantitypcs', 'qtynos', 'qtyinpcs'],
+  amount: ['totalsale', 'sale', 'sales', 'amount', 'total', 'value', 'salevalue', 'basic', 'basicvalue', 'taxable', 'taxablevalue', 'netsale', 'totalamount', 'amountrs', 'basicamount'],
+  incl: ['inclgst', 'includinggst', 'withgst', 'gross', 'grossvalue', 'totalinclgst', 'invoicevalue', 'totalwithgst', 'saleinclgst', 'totaltaxamount'],
 };
 const squash = (v) => String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -325,6 +329,11 @@ const squash = (v) => String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9
  * sale, optional GST-inclusive total — wherever it sits, and rows are read
  * positionally under it. Returns the lines and what could not be read, so the
  * screen shows both before anything is sent.
+ *
+ * A row with a customer column left blank takes the GROUP column instead (the
+ * Stay Fresh report names Amazon, More Retail … only by group). A row with
+ * neither — the totals line at the foot of the sheet — is skipped quietly and
+ * counted, not reported as an error.
  */
 export function parseSalesSheet(aoa) {
   const rows = Array.isArray(aoa) ? aoa : [];
@@ -332,34 +341,64 @@ export function parseSalesSheet(aoa) {
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const cells = (rows[i] || []).map(squash);
     const find = (names) => cells.findIndex((c) => c && names.includes(c));
-    const c = { customer: find(HEADS.customer), spec: find(HEADS.spec), qty: find(HEADS.qty), amount: find(HEADS.amount), incl: find(HEADS.incl) };
+    const c = { customer: find(HEADS.customer), group: find(HEADS.group), spec: find(HEADS.spec), qty: find(HEADS.qty), amount: find(HEADS.amount), incl: find(HEADS.incl) };
     // the GST-inclusive column must not be mistaken for the base sale
     if (c.incl >= 0 && c.amount === c.incl) c.amount = cells.findIndex((x, k) => k !== c.incl && HEADS.amount.includes(x));
-    if ((c.customer >= 0 || c.spec >= 0) && c.amount >= 0) { headerAt = i; cols = c; break; }
+    if ((c.customer >= 0 || c.group >= 0 || c.spec >= 0) && c.amount >= 0) { headerAt = i; cols = c; break; }
   }
   if (headerAt < 0) {
-    return { lines: [], errors: ['No header row found — the sheet needs columns named Customer / Group, Spec, Quantity and Total sale.'], header: null };
+    return { lines: [], errors: ['No header row found — the sheet needs columns named Customer / Group, Spec, Quantity and Total sale.'], header: null, skipped: 0 };
   }
   const lines = [], errors = [];
+  let skipped = 0;
   const num = (v) => {
     if (v == null || v === '') return null;
     const x = Number(String(v).replace(/[₹,\s]/g, ''));
     return Number.isFinite(x) ? x : null;
   };
+  const cell = (r, k) => (cols[k] >= 0 ? String(r[cols[k]] == null ? '' : r[cols[k]]).trim() : '');
   for (let i = headerAt + 1; i < rows.length; i++) {
     const r = rows[i] || [];
-    const customer = cols.customer >= 0 ? String(r[cols.customer] == null ? '' : r[cols.customer]).trim() : '';
-    const spec = cols.spec >= 0 ? String(r[cols.spec] == null ? '' : r[cols.spec]).trim() : '';
+    const named = cell(r, 'customer');
+    const group = cell(r, 'group');
+    const customer = named || group;
+    const spec = cell(r, 'spec');
     const qty = cols.qty >= 0 ? num(r[cols.qty]) : null;
     const amount = num(r[cols.amount]);
     const incl = cols.incl >= 0 ? num(r[cols.incl]) : null;
     if (!customer && !spec && amount == null) continue;                    // blank line
-    if (/^(total|grand total|sub ?total)$/i.test(customer) || /^(total|grand total)$/i.test(spec)) continue;
+    if (/^(total|grand total|sub ?total)$/i.test(customer) || /^(total|grand total)$/i.test(spec) || (/total$/i.test(customer) && !spec)) { skipped++; continue; }
+    if (!customer && !spec) { skipped++; continue; }                        // the totals line at the foot
     if (amount == null) { errors.push(`Row ${i + 1}: no total sale for ${spec || customer}.`); continue; }
-    if (!customer && !spec) { errors.push(`Row ${i + 1}: neither a customer / group nor a spec.`); continue; }
     lines.push({ customer, spec, qty: qty == null ? 0 : qty, amount, amountInclGst: incl == null ? undefined : incl });
   }
-  return { lines, errors, header: cols, headerRow: headerAt + 1 };
+  return { lines, errors, header: cols, headerRow: headerAt + 1, skipped };
+}
+
+/**
+ * The whole workbook: every sheet that has a sales header contributes its rows;
+ * one that has none (a pivot summary, a blank "Sheet1") is left out and named, so
+ * the desk can see that the Stay Fresh AND the Others sheet both went in and the
+ * pivot did not. Nothing is double-counted: a pivot has no Spec / Amount header.
+ */
+export function parseSalesWorkbook(sheets) {
+  const list = Array.isArray(sheets) ? sheets : [];
+  const lines = [], errors = [], used = [], ignored = [];
+  list.forEach((sh) => {
+    const name = String((sh && sh.name) || '').trim() || 'Sheet';
+    const rows = (sh && sh.rows) || [];
+    const blank = !rows.some((r) => (r || []).some((c) => c !== '' && c != null));
+    if (blank) { ignored.push({ name, reason: 'empty' }); return; }
+    const p = parseSalesSheet(rows);
+    if (!p.header) { ignored.push({ name, reason: 'no sales header (a summary / pivot sheet?)' }); return; }
+    lines.push(...p.lines.map((l) => ({ ...l, sheet: name })));
+    errors.push(...p.errors.map((e) => `${name} — ${e}`));
+    used.push({ name, lines: p.lines.length, headerRow: p.headerRow, skipped: p.skipped, total: p.lines.reduce((t, l) => t + n(l.amount), 0) });
+  });
+  if (!used.length) {
+    errors.unshift(`No sheet with a sales header found${list.length ? ` (looked at ${list.map((s) => s.name).join(', ')})` : ''} — a sheet needs columns named Customer / Group, Spec, Quantity and Total sale.`);
+  }
+  return { lines, errors, used, ignored };
 }
 
 /* ───────────────────────────── exports (§35-§36) ───────────────────────────── */

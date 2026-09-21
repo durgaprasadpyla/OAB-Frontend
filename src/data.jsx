@@ -178,6 +178,8 @@ export function DataProvider({ children }) {
     setMods(m => ({ ...m, [key]: value }));
     setVersions(m => ({ ...m, [key]: fresh.version }));
     if (id === 1) baseRef.current = snapshotBase(value);
+    // handed back too, for a caller that needs the fresh copy before React re-renders
+    return value;
   }, []);
 
   /** Replace one module and persist it. `next` may be a value or (prev)=>next. */

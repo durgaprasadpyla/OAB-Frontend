@@ -1,11 +1,28 @@
 // Customer Master lookups (module 4). `customers` is the mods.customers array.
 
-export function getCustLocations(customers, customer) {
-  return (customers || []).filter((r) => r.customer === customer);
+/**
+ * The Customer Master rows (one per dispatch location) of a customer.
+ *
+ * With `group` given, only the rows under THAT group — '' meaning the customer's
+ * own, ungrouped rows. The same name can be two customers: "Kova Agro" fills for
+ * Swiggy under the Swiggy group AND orders on its own account with no group, each
+ * with its own warehouse. A PO raised with no group picked is the independent
+ * customer's, so it must offer only that customer's location — not every
+ * location any "Kova Agro" has. When the group narrows to nothing (an older PO,
+ * a name only kept under a group) every row of the name is offered, as before.
+ */
+export function getCustLocations(customers, customer, group) {
+  const all = (customers || []).filter((r) => r.customer === customer);
+  if (group === undefined) return all;
+  const g = String(group || '').trim();
+  const mine = all.filter((r) => String(r.group || '').trim() === g);
+  return mine.length ? mine : all;
 }
 
-export function getCustByLoc(customers, customer, dispatchLoc) {
-  return (customers || []).find((r) => r.customer === customer && r.dispatchLoc === dispatchLoc) || null;
+/** The row for one customer + location — under the given group first, when one is given. */
+export function getCustByLoc(customers, customer, dispatchLoc, group) {
+  const rows = getCustLocations(customers, customer, group);
+  return rows.find((r) => r.dispatchLoc === dispatchLoc) || null;
 }
 
 /** Distinct customer names present in the JSS spec master (New PO dropdown). */

@@ -57,7 +57,10 @@ export default function NewPO() {
   const customers = useMemo(() => (
     (mods.customers && mods.customers.length) ? custsInGroup(mods.customers, group) : jssCustomers(mods.jss)
   ), [mods.customers, mods.jss, group]);
-  const locations = useMemo(() => getCustLocations(mods.customers, customer), [mods.customers, customer]);
+  // The locations of THIS customer under THIS group — no group picked means the
+  // customer's own (ungrouped) rows, so a name that is also a filler for a group
+  // ("Kova Agro" for Swiggy) offers only its own warehouse here.
+  const locations = useMemo(() => getCustLocations(mods.customers, customer, group), [mods.customers, customer, group]);
 
   const lastSO = (mods.oab && mods.oab.lastSO) || { y: '26', n: 400 };
   const soY = lastSO.y || '26';
@@ -71,7 +74,7 @@ export default function NewPO() {
   }, [mods.oab, lastSO.n]);
   const autoSO = `${soY}/${startN}`;
 
-  const warehouse = loc ? (getCustByLoc(mods.customers, customer, loc) || {}).warehouseName || '' : '';
+  const warehouse = loc ? (getCustByLoc(mods.customers, customer, loc, group) || {}).warehouseName || '' : '';
 
   // Issues 3.0 §5: the order value is quoted the way the tax invoice states it —
   // base (taxable) value, the GST on it, and the gross. 18% is the rate the invoice
@@ -91,7 +94,7 @@ export default function NewPO() {
   function onCustomer(cu) {
     setCustomer(cu);
     setSkus([]);
-    const locs = getCustLocations(mods.customers, cu);
+    const locs = getCustLocations(mods.customers, cu, group);
     setLoc(locs.length === 1 ? locs[0].dispatchLoc : '');
   }
 
@@ -104,7 +107,7 @@ export default function NewPO() {
     setSkus([]);
   }
 
-  function goStep2() {
+  async function goStep2() {
     if (!poNum.trim()) return alert('Enter PO Number');
     if (!poDate) return alert('Enter PO Date');
     if (!customer) return alert('Select Customer');
@@ -118,10 +121,16 @@ export default function NewPO() {
       + `PO ${poNum.trim()} is already on ${dupes.length} sales order${dupes.length > 1 ? 's' : ''}: `
       + dupes.slice(0, 8).map((r) => r.so).join(', ') + (dupes.length > 8 ? ', …' : '')
       + `\nCustomer: ${dupes[0].customer || '—'}`)) return;
+    // The SO copies the spec's dispatch form, material, width … at PO time, so it must
+    // copy the spec as it is NOW — not as this browser loaded it at login. A spec
+    // re-tagged since (A1404: Label → Shrink Sleeve) would otherwise land on the OAB
+    // under its old form.
+    let jssNow = mods.jss || [];
+    try { const fresh = await reloadModule('jss'); if (Array.isArray(fresh)) jssNow = fresh; } catch { /* the loaded copy stands */ }
     // Only ACTIVE specs are orderable, and only those this customer may see under the
     // group rules — a redundant or another company's spec must not appear at all.
     // (buildSKUTable / specVisibleTo)
-    const list = (mods.jss || [])
+    const list = jssNow
       .filter((r) => String(r.status || '').trim().toLowerCase() === 'active' && specVisibleTo(r, customer, mods.customers))
       .reverse()
       .map((s) => ({ ...s, checked: false, qty: '' }));
@@ -150,7 +159,7 @@ export default function NewPO() {
     let n = startN;
     const rows = chosen.map((s) => ({
       so: `${soY}/${n++}`, spec: s.spec, jobName: s.jobName, jobType: s.jobType, subBrand: s.subBrand || '',
-      customer, dispLoc: loc, warehouseName: (getCustByLoc(mods.customers, customer, loc) || {}).warehouseName || '',
+      customer, dispLoc: loc, warehouseName: (getCustByLoc(mods.customers, customer, loc, group) || {}).warehouseName || '',
       poNum: poNum.trim(), poDate, poExp, poQty: num(s.qty), invDisp: 0, manDisp: 0, fg: 0, stage: '',
       width: s.width, material: s.material, mic: s.mic, height: s.height, filmWidth: s.filmWidth,
       gsm: s.gsm, dispatchForm: s.dispatchForm || '', pouchingMachines: s.pouchingMachines || '',

@@ -48,13 +48,16 @@ describe('QC — add spec flow', () => {
     await user.selectOptions(screen.getByLabelText('Customer'), '__new__');
     await user.type(screen.getByLabelText('New customer name'), 'NewCust');
     await user.type(fieldByLabel('Job Name *'), 'New Job');
-    await user.type(fieldByLabel('Material *'), 'BOPP/PE');   // Material is now required (restored legacy validation)
+    // Material is required, and is picked from the materials in use — or added by
+    // name, which lands in the house spelling ("bopp/pe" → "BOPP / PE")
+    await user.selectOptions(screen.getByLabelText('Material'), '__new__');
+    await user.type(screen.getByLabelText('New material'), 'bopp/pe');
     await user.click(screen.getByRole('button', { name: /Add Spec/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 2)).toBe(true));
     const arr = saved.find((s) => s.id === 2).data;
     expect(arr).toHaveLength(2);
-    expect(arr.at(-1)).toMatchObject({ spec: 'A2', customer: 'NewCust', jobName: 'New Job' });
+    expect(arr.at(-1)).toMatchObject({ spec: 'A2', customer: 'NewCust', jobName: 'New Job', material: 'BOPP / PE' });
   });
 });
 

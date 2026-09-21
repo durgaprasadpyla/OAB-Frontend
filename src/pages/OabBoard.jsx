@@ -118,6 +118,10 @@ export default function OabBoard() {
   // "Loc Code" is the warehouse the row dispatches to — from the row if it carries
   // one, else looked up in the Customer Master. It is searchable too. (renderOAB)
   const locCode = (r) => r.warehouseName || (getCustByLoc(mods.customers, r.customer, r.dispLoc) || {}).warehouseName || '';
+  // The dispatch form is the JSS's: the row's copy was taken at PO time and goes
+  // stale when the spec is re-tagged (A1404 was a Label, is a Shrink Sleeve). The
+  // metres already read the JSS first (calcMetres); the column now does the same.
+  const dispForm = (r) => String((jssBySpec[r.spec] || {}).dispatchForm || r.dispatchForm || '');
 
   const filtered = useMemo(() => {
     const list = openRows.filter((r) => {
@@ -170,7 +174,7 @@ export default function OabBoard() {
     const body = filtered.map((r) => {
       const b = balance(r);
       const m = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
-      return [r.so, r.spec, r.dispatchForm, r.customer, r.jobName, r.subBrand, r.dispLoc, locCode(r), r.poNum, fmtDate(r.poDate),
+      return [r.so, r.spec, dispForm(r), r.customer, r.jobName, r.subBrand, r.dispLoc, locCode(r), r.poNum, fmtDate(r.poDate),
         Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, prodStatus(r.so), r.stage || ''];
     });
     exportAOA([header, ...body], `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.xlsx`, sheet);
@@ -342,7 +346,7 @@ export default function OabBoard() {
                     <tr key={r.so} className={'zebra' + (nr ? ' nr' : '')}>
                       <td><span className="so-pill" style={{ fontSize: 10 }}>{r.so}</span></td>
                       <td><span className="tag tb" style={{ fontSize: 10 }}>{r.spec || '-'}</span></td>
-                      <td><DispFormBadge df={r.dispatchForm} /></td>
+                      <td><DispFormBadge df={dispForm(r)} /></td>
                       <td style={{ fontSize: 11 }}>{r.customer || '-'}</td>
                       <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
                       <td style={{ fontSize: 11, color: 'var(--amber)' }}>{r.subBrand || '-'}</td>

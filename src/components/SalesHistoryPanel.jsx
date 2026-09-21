@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { salesHistoryApi } from '../api.js';
 import { inr } from '../lib/format.js';
-import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
+import { exportAOA, readWorkbookAOA } from '../lib/xlsx.js';
 import { buildTablePdf } from '../lib/tablePdf.js';
 import {
   enrichAll, applyFilters, bySegment, sameDayComparison, monthSeries, quarterComparison, yearOnYear,
-  breakdown, repFor, repsForGroup, filterOptions, parseSalesSheet, exportRows, periodOf, periodLabel,
+  breakdown, repFor, repsForGroup, filterOptions, parseSalesWorkbook, exportRows, periodOf, periodLabel,
   periodBack, MONTHS, round2, skuMonthPivot,
 } from '../lib/salesHistory.js';
 
@@ -531,8 +531,10 @@ function UploadCard({ currentPeriod, uploads, onDone, flash }) {
   async function pick(f) {
     setFile(f || null); setParsed(null);
     if (!f) return;
-    try { setParsed(parseSalesSheet(await readSheetAOA(f))); }
-    catch (e) { setParsed({ lines: [], errors: ['Could not read the file: ' + (e && e.message ? e.message : e)] }); }
+    // every sheet of the workbook — Stay Fresh, Others … — not only the first one,
+    // which is a pivot summary in some months' files and found no header at all
+    try { setParsed(parseSalesWorkbook(await readWorkbookAOA(f))); }
+    catch (e) { setParsed({ lines: [], errors: ['Could not read the file: ' + (e && e.message ? e.message : e)], used: [], ignored: [] }); }
   }
   async function send() {
     if (!parsed || !parsed.lines.length) { flash('r', 'Pick a sheet with at least one usable row first.'); return; }
@@ -541,7 +543,7 @@ function UploadCard({ currentPeriod, uploads, onDone, flash }) {
     if (existing && !window.confirm(`${periodLabel(period)} already has a sheet (${existing.fileName || 'uploaded'}, ${existing.lineCount} rows). Replace it?`)) return;
     setBusy(true);
     try {
-      const r = await salesHistoryApi.upload({ period, fileName: file ? file.name : '', lines: parsed.lines });
+      const r = await salesHistoryApi.upload({ period, fileName: file ? file.name : '', lines: parsed.lines.map(({ sheet, ...l }) => l) }); // eslint-disable-line no-unused-vars
       flash('g', `${periodLabel(period)}: ${r.lines} row(s), ₹${inr(Math.round(Number(r.totalAmount) || 0))} added to the history${r.replaced ? ' (previous sheet replaced)' : ''}.`);
       setFile(null); setParsed(null);
       await onDone();
@@ -558,9 +560,10 @@ function UploadCard({ currentPeriod, uploads, onDone, flash }) {
     <div className="card">
       <div className="ctitle">Upload a past month&rsquo;s sales sheet</div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
-        Pick the month and year, then the Excel sheet. It needs a <b>Customer / Group</b> column, a <b>Spec</b> column, a <b>Quantity</b> column and a
-        <b> Total sale</b> column (a GST-inclusive column is read if present, otherwise 18% is added). The rows are shown here before anything is
-        saved. A month that already has a sheet is replaced; the current month is always live from invoicing and cannot be uploaded.
+        Pick the month and year, then the Excel file. <b>Every sheet</b> in it is read (Stay Fresh, Others …); a sheet needs a <b>Customer</b> and / or <b>Group</b> column,
+        a <b>Spec</b> column, a <b>Quantity</b> column and a <b>Total sale</b> column (a GST-inclusive column is read if present, otherwise 18% is added). A pivot or
+        summary sheet has no such header and is left out, so nothing is counted twice. Where the Customer cell is blank the Group is taken. The rows are shown here
+        before anything is saved. A month that already has a sheet is replaced; the current month is always live from invoicing and cannot be uploaded.
       </div>
       <div className="fbar" style={{ flexWrap: 'wrap' }}>
         <select value={month} onChange={(e) => setMonth(Number(e.target.value))} aria-label="Upload month">
@@ -574,14 +577,20 @@ function UploadCard({ currentPeriod, uploads, onDone, flash }) {
       </div>
       {parsed && (
         <div style={{ marginTop: 6 }}>
-          {parsed.errors.length > 0 && <div className="al al-y"><b>{parsed.errors.length} row(s) could not be read:</b> {parsed.errors.slice(0, 6).join(' ')}{parsed.errors.length > 6 ? ' …' : ''}</div>}
+          {parsed.errors.length > 0 && <div className="al al-y"><b>{parsed.lines.length ? `${parsed.errors.length} row(s) could not be read:` : 'Nothing could be read:'}</b> {parsed.errors.slice(0, 6).join(' ')}{parsed.errors.length > 6 ? ' …' : ''}</div>}
+          {(parsed.used || []).length > 0 && (
+            <div className="pg-sub" aria-label="Sheets read" style={{ marginTop: 0 }}>
+              Sheets read: {parsed.used.map((u) => <span key={u.name} className="tag tg" style={{ marginRight: 6 }}>{u.name} · {u.lines} row(s) · ₹{inr(Math.round(u.total))}</span>)}
+              {(parsed.ignored || []).length > 0 && <> · left out: {parsed.ignored.map((u) => <span key={u.name} className="tag tgr" style={{ marginRight: 6 }} title={u.reason}>{u.name} ({u.reason})</span>)}</>}
+            </div>
+          )}
           {parsed.lines.length > 0 && (
             <>
-              <div className="pg-sub" aria-label="Upload preview">{parsed.lines.length} row(s) read from row {parsed.headerRow} down — total sale ₹{inr(Math.round(total))} (₹{inr(Math.round(total * 1.18))} incl. GST where the sheet gives no figure).</div>
+              <div className="pg-sub" aria-label="Upload preview">{parsed.lines.length} row(s) from {parsed.used.length} sheet(s) — total sale ₹{inr(Math.round(total))} (₹{inr(Math.round(total * 1.18))} incl. GST where the sheet gives no figure).</div>
               <div className="tw sy" style={{ maxHeight: 200 }}><table>
-                <thead><tr><th>Customer / Group</th><th>Spec</th><th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Total sale</th><th style={{ textAlign: 'right' }}>Incl. GST</th></tr></thead>
-                <tbody>{parsed.lines.slice(0, 200).map((l, i) => (
-                  <tr key={i}><td>{l.customer || '—'}</td><td>{l.spec || '—'}</td><td style={{ textAlign: 'right' }}>{inr(l.qty)}</td>
+                <thead><tr><th>Sheet</th><th>Customer / Group</th><th>Spec</th><th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Total sale</th><th style={{ textAlign: 'right' }}>Incl. GST</th></tr></thead>
+                <tbody>{parsed.lines.slice(0, 300).map((l, i) => (
+                  <tr key={i}><td style={{ fontSize: 10, color: 'var(--i3)' }}>{l.sheet || ''}</td><td>{l.customer || '—'}</td><td>{l.spec || '—'}</td><td style={{ textAlign: 'right' }}>{inr(l.qty)}</td>
                     <td style={{ textAlign: 'right' }}>{money(l.amount)}</td><td style={{ textAlign: 'right' }}>{l.amountInclGst != null ? money(l.amountInclGst) : <span style={{ color: 'var(--i3)' }}>{money(l.amount * 1.18)} (18%)</span>}</td></tr>
                 ))}</tbody>
               </table></div>

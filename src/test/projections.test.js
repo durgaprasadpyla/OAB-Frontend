@@ -3,6 +3,7 @@ import {
   monthLabel, monthOf, monthsFrom, blankProjection, projectionList, validateProjection,
   saveProjection, removeProjection, actualsForMonth, actualMatches, reconcileMonth,
   byCustomer, materialForMonth, projectedVsActual, projectedMonths,
+  jssActive, enrichProjection, partyLabel, blankProjFilter, filterProjections, projFilterOptions, projectionValue, valueByMonth,
 } from '../lib/projections.js';
 
 const JSS = [
@@ -277,5 +278,94 @@ describe('projected against actual', () => {
   it('lists the months anything has been projected for, newest first', () => {
     const p = blob(proj({ id: 'a', month: '2026-10' }), proj({ id: 'b', month: '2026-12' }), proj({ id: 'c', month: '2026-10' }));
     expect(projectedMonths(p)).toEqual(['2026-12', '2026-10']);
+  });
+});
+
+describe('the group, the sub-brand and the active flag', () => {
+  const JSS2 = [
+    ...JSS,
+    { spec: 'A5', customer: 'Nandi', jobName: 'Pouch old', status: 'Inactive' },
+    { spec: 'A6', customer: '', group: 'AMAZON', jobName: 'Polybag 500', subBrand: 'Amazon Fresh' },
+  ];
+  const CUST = [{ customer: 'Nandi', group: 'Nandi Group' }];
+  const good = { source: 'customer', month: '2026-11', qty: '10', marketer: 'Ravi' };
+
+  it('treats a JSS with no status as Active, and any other status as not', () => {
+    expect(jssActive({ spec: 'A1' })).toBe(true);
+    expect(jssActive({ spec: 'A1', status: 'active' })).toBe(true);
+    expect(jssActive({ spec: 'A1', status: 'Inactive' })).toBe(false);
+    expect(jssActive({ spec: 'A1', status: 'Redundant' })).toBe(false);
+  });
+
+  it('refuses a NEW projection against a retired JSS, but lets a saved one be edited', () => {
+    expect(() => validateProjection({ ...good, spec: 'A5' }, { jss: JSS2 })).toThrow(/A5 is Inactive — only an Active JSS/);
+    expect(validateProjection({ ...good, id: 'p9', spec: 'A5' }, { jss: JSS2 }).spec).toBe('A5');
+  });
+
+  it('copies the group and sub-brand from the JSS, and finds the group through the Customer Master', () => {
+    const a6 = validateProjection({ ...good, spec: 'A6' }, { jss: JSS2, customers: CUST });
+    expect(a6).toMatchObject({ customer: '', group: 'AMAZON', subBrand: 'Amazon Fresh' });
+    const a2 = validateProjection({ ...good, spec: 'A2' }, { jss: JSS2, customers: CUST });
+    expect(a2).toMatchObject({ customer: 'Nandi', group: 'Nandi Group', subBrand: '' });
+    const lead = validateProjection({ ...good, source: 'lead', customer: 'Nandi', jobName: 'X' }, { jss: JSS2, customers: CUST });
+    expect(lead.group).toBe('Nandi Group');
+  });
+
+  it('reads the group and sub-brand live off the JSS, so an old row catches up', () => {
+    const r = enrichProjection({ spec: 'a6', customer: '', qty: 5 }, { jss: JSS2, customers: CUST });
+    expect(r).toMatchObject({ group: 'AMAZON', subBrand: 'Amazon Fresh', jobName: 'Polybag 500', jssStatus: 'Active' });
+    expect(enrichProjection({ spec: 'A5', customer: 'Nandi' }, { jss: JSS2, customers: CUST }).jssStatus).toBe('Inactive');
+  });
+
+  it('heads a block by the GROUP — never "(unnamed)" for a group-only spec', () => {
+    expect(partyLabel('AMAZON', '')).toBe('AMAZON');
+    expect(partyLabel('Nandi Group', 'Nandi')).toBe('Nandi Group · Nandi');
+    expect(partyLabel('RIL', 'RIL')).toBe('RIL');
+    expect(partyLabel('', '')).toBe('(unnamed)');
+    const g = byCustomer([
+      { group: 'AMAZON', customer: '', qty: 2000, actual: 0, remaining: 2000 },
+      { group: 'Nandi Group', customer: 'Nandi', qty: 100, actual: 0, remaining: 100 },
+      { group: 'Nandi Group', customer: 'Nandi', qty: 50, actual: 0, remaining: 50 },
+    ]);
+    expect(g.map((x) => [x.label, x.projected])).toEqual([['AMAZON', 2000], ['Nandi Group · Nandi', 150]]);
+  });
+});
+
+describe('filtering and valuing projections', () => {
+  const PRICES = { A1: { price: 3 }, A2: { price: 5 } };
+  const rows = [
+    { spec: 'A1', group: 'AMAZON', customer: 'Amazon', marketer: 'Ravi', qty: 1000, actual: 710, remaining: 290 },
+    { spec: 'A2', group: 'Nandi Group', customer: 'Nandi', marketer: 'Asha', qty: 100, actual: 0, remaining: 100 },
+    { spec: '', group: '', customer: 'New Co', marketer: 'Asha', qty: 300, actual: 0, remaining: 300 },
+  ];
+  it('filters by group, customer, JSS and marketing person, case-blind, blank meaning all', () => {
+    expect(filterProjections(rows, blankProjFilter())).toHaveLength(3);
+    expect(filterProjections(rows, { group: 'amazon' }).map((r) => r.spec)).toEqual(['A1']);
+    expect(filterProjections(rows, { customer: 'Nandi' }).map((r) => r.spec)).toEqual(['A2']);
+    expect(filterProjections(rows, { spec: 'a2' }).map((r) => r.spec)).toEqual(['A2']);
+    expect(filterProjections(rows, { marketer: 'Asha' })).toHaveLength(2);
+    expect(filterProjections(rows, { marketer: 'Asha', group: 'AMAZON' })).toHaveLength(0);
+  });
+  it('offers the distinct choices from the rows', () => {
+    expect(projFilterOptions(rows)).toEqual({
+      groups: ['AMAZON', 'Nandi Group'], customers: ['Amazon', 'Nandi', 'New Co'], specs: ['A1', 'A2'], marketers: ['Asha', 'Ravi'],
+    });
+  });
+  it('values a projection at qty × Price Master price, and calls an unpriced one unpriced', () => {
+    expect(projectionValue(rows[0], PRICES)).toEqual({ price: 3, priced: true, projectedValue: 3000, actualValue: 2130, remainingValue: 870 });
+    expect(projectionValue(rows[2], PRICES).priced).toBe(false);
+    expect(projectionValue(rows[0], {}).projectedValue).toBe(0);
+  });
+  it('values the months under a filter, reconciled against the OAB', () => {
+    const v = valueByMonth(
+      blob(proj({ id: 'a', spec: 'A1', customer: 'Amazon', marketer: 'Ravi', qty: 1000 }),
+           proj({ id: 'b', spec: 'A2', customer: 'Nandi', marketer: 'Asha', qty: 100, month: '2026-11' }),
+           proj({ id: 'c', source: 'lead', customer: 'New Co', jobName: 'T', marketer: 'Asha', qty: 300 })),
+      OAB, ['2026-10', '2026-11'], { prices: PRICES, jss: JSS });
+    expect(v[0]).toMatchObject({ month: '2026-10', count: 2, qty: 1300, value: 3000, actualValue: 2130, remainingValue: 870, unpriced: 1 });
+    expect(v[1]).toMatchObject({ month: '2026-11', count: 1, value: 500, actualValue: 500, remainingValue: 0, unpriced: 0 });
+    const only = valueByMonth(blob(proj({ id: 'a', spec: 'A1', customer: 'Amazon', marketer: 'Ravi', qty: 1000 })),
+      OAB, ['2026-10'], { prices: PRICES, jss: JSS, filter: { marketer: 'Asha' } });
+    expect(only[0]).toMatchObject({ count: 0, value: 0 });
   });
 });

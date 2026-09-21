@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   enrichAll, applyFilters, bySegment, sameDayComparison, monthSeries, yearOnYear, quarterComparison,
-  breakdown, repFor, repsForGroup, filterOptions, parseSalesSheet, exportRows, periodBack, periodLabel, segmentOf, skuMonthPivot,
+  breakdown, repFor, repsForGroup, filterOptions, parseSalesSheet, parseSalesWorkbook, exportRows, periodBack, periodLabel, segmentOf, skuMonthPivot,
 } from '../lib/salesHistory.js';
 
 // Sales History (Issues 6 §18-§37) — the arithmetic behind the tab, on a fixed
@@ -193,9 +193,45 @@ describe('§32 the uploaded sheet', () => {
   it('says what it could not read, and refuses a sheet with no usable header', () => {
     const p = parseSalesSheet([['Group', 'SKU', 'Qty', 'Amount'], ['AMAZON', 'A1', 5, ''], ['', '', 3, 100]]);
     expect(p.lines).toEqual([]);
-    expect(p.errors).toHaveLength(2);
+    expect(p.errors).toHaveLength(1);
     expect(p.errors[0]).toMatch(/no total sale for A1/);
+    expect(p.skipped).toBe(1);   // an amount with no name is the footer totals line, not an error
     expect(parseSalesSheet([['a', 'b'], [1, 2]]).errors[0]).toMatch(/No header row found/);
+  });
+  // The July 2026 file: a Customer AND a Group column, most rows naming only the
+  // group; a footer SUM line with no customer or spec; dates typed as text.
+  it('takes the Group where the Customer cell is blank and skips the footer totals quietly', () => {
+    const p = parseSalesSheet([
+      ['INVOICE', 'INVOICE  DATE', 'CUSTOMER', 'GROUP', 'SPEC', 'SKU', 'QTY ( Pcs )', 'RATE', 'AMOUNT', 'GST 18%', 'FREIGHT', 'INCL GST'],
+      ['BL/26-27/262', '02-07-2026', '', 'AMAZON', 'A1316', 'Polybag 500GMS', 86000, 1.87, 160820, 28947.6, '', 189767.6],
+      ['BL/26-27/300', '10.07.2026', 'Hastai Agro', 'DS GROUP', 'A1233', 'MAP pouch', 50000, 2.94, 147000, 26460, 9950, 185201],
+      ['', '', '', '', '', '', 136000, '', 307820, 55407.6, 9950, 374968.6],
+    ]);
+    expect(p.errors).toEqual([]);
+    expect(p.skipped).toBe(1);
+    expect(p.lines).toEqual([
+      { customer: 'AMAZON', spec: 'A1316', qty: 86000, amount: 160820, amountInclGst: 189767.6 },
+      { customer: 'Hastai Agro', spec: 'A1233', qty: 50000, amount: 147000, amountInclGst: 185201 },
+    ]);
+  });
+  it('reads every sheet of a workbook and leaves the pivot / empty ones out, named', () => {
+    const w = parseSalesWorkbook([
+      { name: 'PIVOT TABLE', rows: [['', 'BRC - Packaging'], ['CUSTOMER', 'SKU NAME', 'Sum of QTY ( Pcs )', 'Sum of AMOUNT'], ['AMAZON INDIA', 'Polybag', 43400, 116746], ['TOTAL', '', 43400, 116746]] },
+      { name: 'STAYFRESH', rows: [['INVOICE', 'DATE', 'CUSTOMER', 'GROUP', 'SPEC', 'SKU', 'QTY', 'RATE', 'AMOUNT'], ['BL/1', '', '', 'AMAZON', 'A1316', 'Polybag', 100, 2, 200]] },
+      { name: 'OTHERS', rows: [['INVOICE', 'DATE', 'CUSTOMER', 'SPEC', 'SKU', 'QTY', 'RATE', 'AMOUNT'], ['BFX/1', '', 'Chococrop', 'A1290', 'Rico', 46, 290, 13340]] },
+      { name: 'Sheet1', rows: [['']] },
+    ]);
+    expect(w.errors).toEqual([]);
+    expect(w.used.map((u) => [u.name, u.lines])).toEqual([['STAYFRESH', 1], ['OTHERS', 1]]);
+    expect(w.ignored.map((u) => u.name)).toEqual(['PIVOT TABLE', 'Sheet1']);
+    expect(w.lines).toEqual([
+      { customer: 'AMAZON', spec: 'A1316', qty: 100, amount: 200, amountInclGst: undefined, sheet: 'STAYFRESH' },
+      { customer: 'Chococrop', spec: 'A1290', qty: 46, amount: 13340, amountInclGst: undefined, sheet: 'OTHERS' },
+    ]);
+    // a workbook with ONLY a pivot sheet says so, naming what it looked at
+    const none = parseSalesWorkbook([{ name: 'PIVOT TABLE', rows: [['CUSTOMER', 'Sum of AMOUNT'], ['X', 1]] }]);
+    expect(none.lines).toEqual([]);
+    expect(none.errors[0]).toMatch(/No sheet with a sales header found \(looked at PIVOT TABLE\)/);
   });
 });
 

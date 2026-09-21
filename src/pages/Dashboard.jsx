@@ -9,6 +9,8 @@ import { computeKPIs, dashRange } from '../lib/dashboard.js';
 import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
+import { materialKey, materialLabel, knownMaterials } from '../lib/material.js';
+import { reconcileMonth, projectedMonths, monthLabel } from '../lib/projections.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
 import LeadsAdmin from '../components/LeadsAdmin.jsx';
@@ -576,6 +578,9 @@ function PriceMaster() {
 
 /* ─────────────────────────── JSS Editor ─────────────────────────── */
 // Dispatch-form + status option lists, matching the legacy JSS editor.
+// The built-in list the editor always offers; the Super Admin's "Dispatch Forms"
+// drop-down list (Shrink Sleeve …) is merged in at render, so the JSS editor and
+// QC's Add JSS Spec offer the same forms.
 const JSS_DISP_FORMS = ['Pouch', 'Roll', 'Bulk Bags', 'Label', 'Sleeve', 'Punch', 'Lids', 'Roll Form'];
 const JSS_STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
 const JSS_STATUS_FILTERS = [['all', 'All Status'], ['active', 'Active Only'], ['sample', 'Sample Only'], ['inactive', 'Inactive Only'], ['redundant', 'Redundant Only']];
@@ -596,6 +601,15 @@ function JssEditor() {
   const { mods, save } = useData();
   const customers = mods.customers || [];
   const [rows, setRows] = useState(() => clone(mods.jss || []));
+  // The Material picker: every material already in use (one spelling per identity,
+  // "CC PET + LDPE" and "cc pet +LDPE" being one) — so a spec picks a spelling
+  // rather than inventing one. Typing still works, for a genuinely new film.
+  const materials = useMemo(() => knownMaterials([...(mods.jss || []), ...rows]), [mods.jss, rows]);
+  const dispForms = useMemo(() => {
+    const out = [...JSS_DISP_FORMS];
+    effectiveDespatchList(mods.sales).forEach((f) => { if (!out.some((o) => o.toLowerCase() === String(f).toLowerCase())) out.push(f); });
+    return out;
+  }, [mods.sales]);
   const [q, setQ] = useState('');
   const [statusFil, setStatusFil] = useState('all');
   const [busy, setBusy] = useState(false);
@@ -631,10 +645,18 @@ function JssEditor() {
     setBusy(true);
     try {
       await save('jss', rows);
-      // Sync customer/subBrand/jobName onto OAB rows sharing a spec (syncOABFromJSS).
+      // Sync customer/subBrand/jobName — and the dispatch form and job type — onto OAB
+      // rows sharing a spec (syncOABFromJSS). An SO copies the JSS at PO time; a spec
+      // re-tagged afterwards (A1404: Label → Shrink Sleeve) must reach its open orders
+      // too, or the OAB keeps showing the old form.
       const map = {}; rows.forEach((j) => { if (j.spec) map[j.spec] = j; });
       const nextOab = clone(mods.oab); let dirty = false;
-      ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => { const j = map[r.spec]; if (!j) return; if (j.customer && r.customer !== j.customer) { r.customer = j.customer; dirty = true; } if (j.subBrand && r.subBrand !== j.subBrand) { r.subBrand = j.subBrand; dirty = true; } if (j.jobName && r.jobName !== j.jobName) { r.jobName = j.jobName; dirty = true; } }));
+      ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => {
+        const j = map[r.spec]; if (!j) return;
+        [['customer', 'customer'], ['subBrand', 'subBrand'], ['jobName', 'jobName'], ['dispatchForm', 'dispatchForm'], ['jobType', 'jobType']].forEach(([from, to]) => {
+          if (j[from] && r[to] !== j[from]) { r[to] = j[from]; dirty = true; }
+        });
+      }));
       if (dirty) await save('oab', nextOab);
       setMsg('✅ JSS saved' + (dirty ? ' · OAB names synced' : '')); setTimeout(() => setMsg(''), 4000);
     } catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
@@ -708,15 +730,21 @@ function JssEditor() {
       );
     }
     if (field === 'dispatchForm') {
-      const inList = !r.dispatchForm || JSS_DISP_FORMS.includes(r.dispatchForm);
+      const inList = !r.dispatchForm || dispForms.includes(r.dispatchForm);
       return (
         <select value={r.dispatchForm || ''} onChange={(e) => setCell(i, 'dispatchForm', e.target.value)} style={jssInp}>
           <option value="">—</option>
           {!inList && <option value={r.dispatchForm}>{r.dispatchForm}</option>}
-          {JSS_DISP_FORMS.map((o) => <option key={o} value={o}>{o}</option>)}
+          {dispForms.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );
     }
+    if (field === 'material') return (
+      <input value={r.material ?? ''} list="jss-materials" aria-label={`Material ${r.spec || i}`}
+        onChange={(e) => setCell(i, 'material', e.target.value)}
+        onBlur={(e) => { const t = materialLabel(e.target.value); if (t && t !== e.target.value) setCell(i, 'material', t); }}
+        style={{ ...jssInp, width: 130 }} />
+    );
     if (field === 'status') return (
       <select value={r.status || ''} onChange={(e) => setCell(i, 'status', e.target.value)} style={jssInp}>
         <option value="">—</option>
@@ -752,6 +780,8 @@ function JssEditor() {
       </div>
       <div style={{ fontSize: 11, color: 'var(--i3)', margin: '2px 0 8px' }}>Click any field to edit. Save All Changes to sync with the QC JSS report. Fields marked * are required.</div>
       {msg && <div className="al al-g">{msg}</div>}
+      {/* the materials in use, one spelling each — what the Material cells pick from */}
+      <datalist id="jss-materials">{materials.map((m) => <option key={m} value={m} />)}</datalist>
       <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
@@ -918,6 +948,21 @@ function Trends() {
   const { mods } = useData();
   const jssBySpec = useMemo(() => { const m = {}; (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; }); return m; }, [mods.jss]);
   const openRows = useMemo(() => ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).filter((r) => !r.closed), [mods.oab]);
+  // What the material table is worked out from: the open-SO balance (what is on the
+  // OAB and not yet made), or ONLY the projections entered on the Projections page —
+  // "the material that is needed for the projections that have been included" —
+  // month by month, or every projected month at once.
+  const [matBasis, setMatBasis] = useState('open');
+  const [matMonth, setMatMonth] = useState('all');
+  const projMonths = useMemo(() => projectedMonths(mods.projections).slice().sort(), [mods.projections]);
+  // The projection rows that feed the table: reconciled against the OAB so what has
+  // already arrived (and so sits on the open-SO side) is not counted twice.
+  const projRows = useMemo(() => {
+    if (matBasis !== 'proj') return [];
+    const months = matMonth === 'all' ? projMonths : [matMonth];
+    return months.flatMap((m) => reconcileMonth(mods.projections, mods.oab, m).rows.map((r) => ({ ...r, month: m })));
+  }, [matBasis, matMonth, projMonths, mods.projections, mods.oab]);
+  const projNoSpec = useMemo(() => projRows.filter((r) => !r.spec || !jssBySpec[r.spec]), [projRows, jssBySpec]);
 
   const byCustomer = useMemo(() => {
     const map = {};
@@ -935,21 +980,38 @@ function Trends() {
 
   const byMaterial = useMemo(() => {
     const map = {};
-    openRows.forEach((r) => {
-      const j = jssBySpec[r.spec] || {};
-      const mat = j.material || r.material || '—';
+    // One line per material IDENTITY and film width. The material is the JSS's, and
+    // "CC PET + LDPE" / "cc pet +LDPE" are the same film, not two — the key ignores
+    // case, spacing and punctuation and the line reads under the tidy spelling.
+    const add = (r, q, j, month) => {
+      const rawMat = j.material || r.material || '';
+      const mk = rawMat ? materialKey(rawMat) : '';
+      const mat = mk ? materialLabel(rawMat) : '—';
       const fw = num(j.filmWidth || r.filmWidth);
       const gsm = num(j.gsm || r.gsm);
-      const key = mat + '|' + fw;
-      const m = map[key] || (map[key] = { material: mat, filmWidth: fw, gsm, mic: j.mic || r.mic || '', metres: 0 });
-      m.metres += calcMetres(r, balance(r), j).net;
-    });
+      const key = (month || '') + '|' + (mk || '—') + '|' + fw;
+      const m = map[key] || (map[key] = { month: month || '', material: mat, filmWidth: fw, gsm, mic: j.mic || r.mic || '', metres: 0, jobs: 0 });
+      m.metres += calcMetres(r, q, j).net;
+      m.jobs++;
+      if (!m.gsm && gsm) m.gsm = gsm;
+    };
+    if (matBasis === 'proj') {
+      projRows.forEach((r) => {
+        const j = jssBySpec[r.spec];
+        if (!j) return;                         // a lead, or a spec the master no longer has — reported below
+        if (!(num(r.remaining) > 0)) return;    // the orders already in cover it
+        add({}, r.remaining, j, matMonth === 'all' ? r.month : '');
+      });
+    } else {
+      openRows.forEach((r) => add(r, balance(r), jssBySpec[r.spec] || {}, ''));
+    }
     return Object.values(map).map((m) => {
       const kpm = m.gsm > 0 && m.filmWidth > 0 ? (m.filmWidth / 1000) * (m.gsm / 1000) : 0;
       const reqKg = Math.round(m.metres * kpm * 10) / 10;
       return { ...m, reqKg, bufferKg: Math.round(reqKg * 1.1 * 10) / 10 };
-    }).sort((a, b) => a.material.localeCompare(b.material) || a.filmWidth - b.filmWidth);
-  }, [openRows, jssBySpec]);
+    }).sort((a, b) => a.month.localeCompare(b.month) || a.material.localeCompare(b.material) || a.filmWidth - b.filmWidth);
+  }, [openRows, jssBySpec, matBasis, matMonth, projRows]);
+  const showMonth = matBasis === 'proj' && matMonth === 'all';
 
   function exportByCustomer() {
     const rows = [['Customer', 'Open SOs', 'PO Qty', 'PO Value (₹)', 'Balance Qty', 'Balance Value (₹)']];
@@ -957,9 +1019,9 @@ function Trends() {
     exportAOA(rows, 'Orders_by_Customer', 'Orders by Customer');
   }
   function exportMaterial() {
-    const rows = [['Material', 'Film Width (mm)', 'Mic', 'GSM', 'Open Metres', 'Required Kg', '+10% Buffer Kg']];
-    byMaterial.forEach((m) => rows.push([m.material, m.filmWidth || '', m.mic || '', m.gsm || '', m.metres, m.reqKg, m.bufferKg]));
-    exportAOA(rows, 'Material_Projection', 'Material Projection');
+    const rows = [[...(showMonth ? ['Month'] : []), 'Material', 'Film Width (mm)', 'Mic', 'GSM', matBasis === 'proj' ? 'Projected Metres (still to come)' : 'Open Metres', 'Required Kg', '+10% Buffer Kg']];
+    byMaterial.forEach((m) => rows.push([...(showMonth ? [monthLabel(m.month)] : []), m.material, m.filmWidth || '', m.mic || '', m.gsm || '', m.metres, m.reqKg, m.bufferKg]));
+    exportAOA(rows, matBasis === 'proj' ? `Material_Projection_${matMonth === 'all' ? 'all_months' : matMonth}` : 'Material_Projection', 'Material Projection');
   }
 
   return (
@@ -981,17 +1043,38 @@ function Trends() {
         </div>
       </div>
       <div className="card">
-        <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>Material Projection / Next-Order Forecast (from open-SO balance)</div>
+        <div className="fbar" style={{ flexWrap: 'wrap' }}>
+          <div className="ctitle" style={{ margin: 0 }}>Material Projection / Next-Order Forecast</div>
           <span style={{ flex: 1 }} />
+          <select value={matBasis} onChange={(e) => setMatBasis(e.target.value)} aria-label="Material basis" style={{ height: 26, fontSize: 11 }}>
+            <option value="open">From open-SO balance</option>
+            <option value="proj">Only projections</option>
+          </select>
+          {matBasis === 'proj' && (
+            <select value={matMonth} onChange={(e) => setMatMonth(e.target.value)} aria-label="Projection month" style={{ height: 26, fontSize: 11 }}>
+              <option value="all">Every projected month</option>
+              {projMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
           <button className="btn btn-s" onClick={exportMaterial} disabled={byMaterial.length === 0}>⬇ Excel</button>
         </div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>
+          {matBasis === 'proj'
+            ? <>The film the <b>projections</b> on the Projections page still need, by the JSS material of each spec — what is still to come, net of the orders that have already arrived (those sit on the open-SO side). A projection from a lead has no JSS yet and cannot be costed.</>
+            : <>The film the <b>open sale orders</b> still need, by the JSS material of each spec. Material is read from the JSS; spellings that differ only in case or spacing are one line.</>}
+        </div>
+        {matBasis === 'proj' && projNoSpec.length > 0 && (
+          <div className="al al-y" style={{ fontSize: 11 }}>
+            <b>{projNoSpec.length} projection(s) left out</b> — no JSS number (a lead) or a spec the master no longer has:{' '}
+            {projNoSpec.slice(0, 8).map((r) => `${r.customer || r.group || '?'} — ${r.jobName || r.spec || '(no SKU)'}${matMonth === 'all' ? ` (${monthLabel(r.month)})` : ''}`).join('; ')}{projNoSpec.length > 8 ? ' …' : ''}
+          </div>
+        )}
         <div className="tw sy" style={{ maxHeight: 360 }}>
-          <table>
-            <thead><tr><th>Material</th><th style={rt}>Film Width</th><th style={rt}>Mic</th><th style={rt}>GSM</th><th style={rt}>Open Metres</th><th style={rt}>Required Kg</th><th style={rt}>+10% Buffer</th></tr></thead>
+          <table aria-label="Material projection">
+            <thead><tr>{showMonth && <th>Month</th>}<th>Material</th><th style={rt}>Film Width</th><th style={rt}>Mic</th><th style={rt}>GSM</th><th style={rt}>{matBasis === 'proj' ? 'Projected Metres' : 'Open Metres'}</th><th style={rt}>Required Kg</th><th style={rt}>+10% Buffer</th></tr></thead>
             <tbody>
-              {byMaterial.length === 0 ? <tr><td colSpan={7} style={emptyTd}>No data</td></tr>
-                : byMaterial.map((m, i) => <tr key={i}><td style={{ fontSize: 11, fontWeight: 600 }}>{m.material}</td><td style={rt}>{m.filmWidth ? m.filmWidth + 'mm' : '-'}</td><td style={rt}>{m.mic || '-'}</td><td style={rt}>{m.gsm || '-'}</td><td style={rt}>{dash(m.metres)} m</td><td style={{ ...rt, fontWeight: 700, color: 'var(--g)' }}>{m.reqKg} kg</td><td style={{ ...rt, fontWeight: 700, background: 'var(--gl)' }}>{m.bufferKg} kg</td></tr>)}
+              {byMaterial.length === 0 ? <tr><td colSpan={showMonth ? 8 : 7} style={emptyTd}>{matBasis === 'proj' ? 'Nothing projected with a JSS that still needs material' : 'No data'}</td></tr>
+                : byMaterial.map((m, i) => <tr key={i}>{showMonth && <td style={{ fontSize: 11 }}>{monthLabel(m.month)}</td>}<td style={{ fontSize: 11, fontWeight: 600 }}>{m.material}</td><td style={rt}>{m.filmWidth ? m.filmWidth + 'mm' : '-'}</td><td style={rt}>{m.mic || '-'}</td><td style={rt}>{m.gsm || '-'}</td><td style={rt}>{dash(m.metres)} m</td><td style={{ ...rt, fontWeight: 700, color: 'var(--g)' }}>{m.reqKg} kg</td><td style={{ ...rt, fontWeight: 700, background: 'var(--gl)' }}>{m.bufferKg} kg</td></tr>)}
             </tbody>
           </table>
         </div>

@@ -32,7 +32,11 @@ beforeEach(() => {
   }, save: vi.fn(), reloadModule: vi.fn() }) }));
   vi.doMock('../lib/xlsx.js', () => ({
     exportAOA: vi.fn((rows, name) => exported.push({ rows, name })),
-    readSheetAOA: vi.fn(async () => [['Customer', 'Spec', 'Qty', 'Total Sale'], ['AMAZON', 'A1', 500, 1500], ['Total', '', 500, 1500]]),
+    readWorkbookAOA: vi.fn(async () => [
+      { name: 'PIVOT', rows: [['CUSTOMER', 'SKU NAME', 'Sum of AMOUNT'], ['AMAZON', 'Poly bag', 1500]] },
+      { name: 'STAYFRESH', rows: [['Customer', 'Spec', 'Qty', 'Total Sale'], ['AMAZON', 'A1', 500, 1500], ['Total', '', 500, 1500]] },
+    ]),
+    readSheetAOA: vi.fn(async () => []),
     readSheet: vi.fn(async () => []), exportObjects: vi.fn(),
   }));
   vi.doMock('../lib/tablePdf.js', () => ({ buildTablePdf: vi.fn((spec) => { pdfs.push(spec); return { save: vi.fn() }; }), safeName: (s) => s }));
@@ -128,7 +132,9 @@ describe('Sales History — the landing page', () => {
     const input = screen.getByLabelText('Sales sheet');
     fireEvent.change(input, { target: { files: [new File(['x'], 'aug.xlsx')] } });
     const preview = await screen.findByLabelText('Upload preview');
-    expect(preview).toHaveTextContent('1 row(s) read from row 1 down');   // the Total row is skipped
+    expect(preview).toHaveTextContent('1 row(s) from 1 sheet(s)');   // the Total row is skipped, the pivot sheet left out
+    expect(screen.getByLabelText('Sheets read')).toHaveTextContent('STAYFRESH · 1 row(s)');
+    expect(screen.getByLabelText('Sheets read')).toHaveTextContent('PIVOT (no sales header');
     expect(preview).toHaveTextContent('₹1,500');
     fireEvent.click(screen.getByText(/⬆ Add/));
     await waitFor(() => expect(posted.some((p) => p.u.includes('/api/sales-history/uploads'))).toBe(true));

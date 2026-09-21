@@ -49,3 +49,19 @@ export async function readSheetAOA(file) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   return x.utils.sheet_to_json(ws, { header: 1, defval: '' });
 }
+
+/**
+ * Read EVERY sheet of a workbook as `[{ name, rows }]` (rows = array-of-arrays).
+ * A sales report is several sheets — Stayfresh and Others at the least, often with
+ * a pivot summary in front — and reading only the first one silently dropped the
+ * rest (or found nothing at all when a pivot sheet happened to be first).
+ */
+export async function readWorkbookAOA(file) {
+  const x = X();
+  const buf = await file.arrayBuffer();
+  const wb = x.read(buf, { type: 'array' });
+  return (wb.SheetNames || []).map((name) => ({
+    name,
+    rows: x.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '' }),
+  }));
+}

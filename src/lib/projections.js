@@ -65,8 +65,14 @@ export function monthsFrom(from, count = 12) {
  */
 export const blankProjection = (month) => ({
   id: '', source: 'customer', month: month || '', spec: '', customer: '', jobName: '',
-  leadId: '', dispLoc: '', qty: '', marketer: '', note: '',
+  group: '', subBrand: '', leadId: '', dispLoc: '', qty: '', marketer: '', note: '',
 });
+
+/** A JSS with no status at all is Active — the JSS Editor reads it that way too. */
+export function jssActive(j) {
+  const st = s(j && j.status) || 'Active';
+  return st.toLowerCase() === 'active';
+}
 
 /** Rows out of the blob, newest first, with only the shape this module promises. */
 export function projectionList(projections) {
@@ -78,7 +84,7 @@ export function projectionList(projections) {
  * Validate and normalise one entry from the form. Throws with the sentence the desk
  * should read — the caller shows it and nothing is written.
  */
-export function validateProjection(form, { jss = [] } = {}) {
+export function validateProjection(form, { jss = [], customers = [] } = {}) {
   const out = { ...blankProjection(), ...form };
   out.source = out.source === 'lead' ? 'lead' : 'customer';
 
@@ -89,15 +95,24 @@ export function validateProjection(form, { jss = [] } = {}) {
     if (!out.spec) throw new Error('Choose the JSS number this projection is for.');
     const j = jss.find((x) => key(x.spec) === key(out.spec));
     if (!j) throw new Error(`JSS ${out.spec} is not in the spec master — add it in the JSS Editor first.`);
+    // "only those JSS which are active": a new projection cannot be made against an
+    // Inactive / Redundant / Sample spec. One saved earlier, whose spec was retired
+    // since, may still be edited — retiring the spec does not unmake the promise.
+    if (!jssActive(j) && !out.id) throw new Error(`JSS ${out.spec} is ${s(j.status)} — only an Active JSS can be projected.`);
     // The spec owns the customer and the SKU: typing them separately is how two
-    // records of one job start disagreeing.
+    // records of one job start disagreeing. The group and sub-brand ride along so
+    // the month reads by group (Amazon is a group with no customer name at all).
     out.customer = s(j.customer);
     out.jobName = s(j.jobName);
+    out.subBrand = s(j.subBrand);
+    out.group = s(j.group) || groupOfCustomer(out.customer, customers);
     out.leadId = '';
   } else {
     out.spec = '';
     out.customer = s(out.customer);
     out.jobName = s(out.jobName);
+    out.subBrand = s(out.subBrand);
+    out.group = groupOfCustomer(out.customer, customers);
     if (!out.customer) throw new Error('Enter the customer this lead is with.');
     if (!out.jobName) throw new Error('Enter the SKU this projection is for.');
   }
@@ -227,13 +242,108 @@ export function reconcileMonth(projections, oab, month) {
   };
 }
 
-/** The reconciled rows grouped by customer — how the month reads to a planner. */
+/** The buying group a customer sits in, from the Customer Master ('' when none / unknown). */
+export function groupOfCustomer(customer, customers) {
+  const k = key(customer);
+  if (!k) return '';
+  const hit = (customers || []).find((c) => c && key(c.customer) === k && s(c.group));
+  return hit ? s(hit.group) : '';
+}
+
+/**
+ * A projection row with its group and sub-brand resolved LIVE from the JSS (the
+ * spec is the job's identity, so a JSS edit shows here without re-saving the
+ * projection), falling back to what was stored and then to the Customer Master.
+ */
+export function enrichProjection(r, { jss = [], customers = [] } = {}) {
+  const j = r.spec ? (jss.find((x) => key(x.spec) === key(r.spec)) || null) : null;
+  const customer = s((j && j.customer) || r.customer);
+  const group = s((j && j.group) || r.group) || groupOfCustomer(customer, customers);
+  const subBrand = s((j && j.subBrand) || r.subBrand);
+  const jobName = s((j && j.jobName) || r.jobName);
+  return { ...r, customer, group, subBrand, jobName, jssStatus: j ? (s(j.status) || 'Active') : '' };
+}
+
+/** The heading a group of projections reads under: the GROUP, then the customer when it adds something. */
+export function partyLabel(group, customer) {
+  const g = s(group), c = s(customer);
+  if (g && c && key(g) !== key(c)) return `${g} · ${c}`;
+  return g || c || '(unnamed)';
+}
+
+/** Blank filter — every projection. */
+export const blankProjFilter = () => ({ group: '', customer: '', spec: '', marketer: '' });
+
+/**
+ * The projections that pass the Group / Customer / JSS / Marketing-person filter
+ * (rows are expected enriched, so `group` is already resolved). A blank field
+ * filters nothing.
+ */
+export function filterProjections(rows, f = {}) {
+  return (rows || []).filter((r) => (
+    (!f.group || key(r.group) === key(f.group))
+    && (!f.customer || key(r.customer) === key(f.customer))
+    && (!f.spec || key(r.spec) === key(f.spec))
+    && (!f.marketer || key(r.marketer) === key(f.marketer))
+  ));
+}
+
+/** The distinct choices the filter offers, from the rows it applies to. */
+export function projFilterOptions(rows) {
+  const pick = (k) => [...new Set((rows || []).map((r) => s(r[k])).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return { groups: pick('group'), customers: pick('customer'), specs: pick('spec'), marketers: pick('marketer') };
+}
+
+/**
+ * What a projection is worth: quantity × the Price Master sale price of its spec.
+ * A spec with no price (or a lead, which has no spec) is worth nothing here and is
+ * COUNTED as unpriced rather than silently booked at zero.
+ */
+export function projectionValue(r, prices) {
+  const price = r.spec ? n((prices && prices[s(r.spec)] && prices[s(r.spec)].price)) : 0;
+  const priced = price > 0;
+  return {
+    price, priced,
+    projectedValue: priced ? n(r.qty) * price : 0,
+    actualValue: priced ? n(r.actual) * price : 0,
+    remainingValue: priced ? n(r.remaining) * price : 0,
+  };
+}
+
+/**
+ * The projected order value, month by month, for the projections that pass the
+ * filter — "one more table where the projected order value will be present, with
+ * filters on group, customer, JSS, marketing person". Each month is reconciled
+ * against the OAB first so the received and still-to-come values are real.
+ */
+export function valueByMonth(projections, oab, months, { prices = {}, filter = {}, jss = [], customers = [] } = {}) {
+  return (months || []).map((m) => {
+    const rec = reconcileMonth(projections, oab, m);
+    const rows = filterProjections(rec.rows.map((r) => enrichProjection(r, { jss, customers })), filter);
+    const t = { month: m, label: monthLabel(m), count: rows.length, qty: 0, value: 0, actualQty: 0, actualValue: 0, remainingQty: 0, remainingValue: 0, unpriced: 0 };
+    rows.forEach((r) => {
+      const v = projectionValue(r, prices);
+      t.qty += n(r.qty); t.actualQty += n(r.actual); t.remainingQty += n(r.remaining);
+      t.value += v.projectedValue; t.actualValue += v.actualValue; t.remainingValue += v.remainingValue;
+      if (!v.priced) t.unpriced++;
+    });
+    return t;
+  });
+}
+
+/**
+ * The reconciled rows grouped by party — the GROUP first (Amazon is a group whose
+ * specs carry no customer name, and read "(unnamed)" when grouped by customer
+ * alone), then the customer inside it. Biggest promise first.
+ */
 export function byCustomer(rows) {
   const m = new Map();
   rows.forEach((r) => {
-    const c = s(r.customer) || '(unnamed)';
-    if (!m.has(c)) m.set(c, { customer: c, rows: [], projected: 0, actual: 0, remaining: 0 });
-    const g = m.get(c);
+    const group = s(r.group), customer = s(r.customer);
+    const k = key(group) + '|' + key(customer);
+    if (!m.has(k)) m.set(k, { key: k, group, customer, label: partyLabel(group, customer), rows: [], projected: 0, actual: 0, remaining: 0 });
+    const g = m.get(k);
     g.rows.push(r);
     g.projected += n(r.qty);
     g.actual += n(r.actual);

@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { pouchWeightQC } from '../lib/calc.js';
 import { custsInGroup, groupOptions, specGroup } from '../lib/master.js';
+import { knownMaterials, materialLabel, materialKey } from '../lib/material.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
@@ -24,7 +25,7 @@ const BLANK = {
   group: '', customer: '', subBrand: '', jobName: '', jobType: '', material: '',
   mic: '', gsm: '', filmWidth: '', ups: '', width: '', height: '',
   gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', status: 'Active',
-  groupNew: '', customerNew: '',
+  groupNew: '', customerNew: '', materialNew: '',
 };
 
 // Status -> legacy .tag colour class.
@@ -59,6 +60,8 @@ export default function QC() {
   const { mods, save } = useData();
   const jss = Array.isArray(mods.jss) ? mods.jss : [];
   const customers = Array.isArray(mods.customers) ? mods.customers : [];
+  // the materials the JSS master already uses, one spelling per identity
+  const materials = useMemo(() => knownMaterials(jss), [jss]);
 
   const [form, setForm] = useState(BLANK);
   const [q, setQ] = useState('');
@@ -77,6 +80,8 @@ export default function QC() {
     setFromSku(skuId);
     setForm((f) => {
       const next = { ...f, ...fields, groupNew: '', customerNew: '' };
+      // a CSA's material lands on the spelling already in use, when there is one
+      if (fields.material) next.material = materials.find((m) => materialKey(m) === materialKey(fields.material)) || fields.material;
       // a customer not yet in the master is typed rather than picked
       if (fields.customer && !custsInGroup(customers, fields.group || '').includes(fields.customer)
         && !jss.some((j) => String(j.customer || '').trim() === fields.customer)) {
@@ -182,7 +187,8 @@ export default function QC() {
     const group = effGroup;
     const customer = effCustomer;
     const jobName = form.jobName.trim();
-    const material = form.material.trim();
+    // "＋ Add new material…" takes the typed name, tidied to the house spelling
+    const material = form.material === '__new__' ? materialLabel(form.materialNew) : form.material.trim();
     const dispatchForm = form.dispatchForm;
     // Legacy required-field rule (saveQCSpec, ~11227): a Group or a Company, plus
     // Job Name, Material and Dispatch Form.
@@ -353,7 +359,23 @@ export default function QC() {
         <div className="g4">
           <Field label="Job Name" required value={form.jobName} onChange={set('jobName')} />
           <Field label="Job Type" value={form.jobType} onChange={set('jobType')} />
-          <Field label="Material" required value={form.material} onChange={set('material')} />
+          {/* the materials already in use, one spelling each ("CC PET + LDPE", not
+              that and "cc pet +LDPE" as two) — a new spec picks one rather than
+              inventing a spelling; a genuinely new film is added by name */}
+          <div className="fg">
+            <label>Material *</label>
+            <select value={form.material === '__new__' ? '__new__' : (materials.includes(form.material) ? form.material : (form.material ? form.material : ''))}
+              aria-label="Material" onChange={set('material')}>
+              <option value="">— select material —</option>
+              {form.material && form.material !== '__new__' && !materials.includes(form.material) && <option value={form.material}>{form.material}</option>}
+              {materials.map((m) => <option key={m} value={m}>{m}</option>)}
+              <option value="__new__">＋ Add new material…</option>
+            </select>
+            {form.material === '__new__' && (
+              <input placeholder="New material, e.g. CC PET + LDPE" value={form.materialNew} aria-label="New material"
+                style={{ marginTop: 6 }} onChange={set('materialNew')} />
+            )}
+          </div>
           <div className="fg">
             <label>Dispatch Form *</label>
             <select value={form.dispatchForm} onChange={set('dispatchForm')}>

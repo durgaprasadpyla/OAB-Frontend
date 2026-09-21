@@ -4,7 +4,8 @@ import { useAuth } from '../auth.jsx';
 import {
   blankProjection, validateProjection, saveProjection, removeProjection,
   reconcileMonth, byCustomer, materialForMonth, projectedVsActual, projectedMonths,
-  monthLabel, monthsFrom, currentMonth, projectionList,
+  monthLabel, monthsFrom, currentMonth, projectionList, jssActive,
+  enrichProjection, blankProjFilter, filterProjections, projFilterOptions, projectionValue, valueByMonth,
 } from '../lib/projections.js';
 import { bomMaterialForSO, plannedBomMap } from '../lib/bom.js';
 import { useApi } from '../lib/useApi.js';
@@ -26,14 +27,20 @@ import { num } from '../lib/calc.js';
 
 const rt = { textAlign: 'right' };
 const qty = (v) => (v == null || v === '' ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 3 }));
+const inr = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
 
 export default function Projections() {
   const { mods, save } = useData();
   const { user, role } = useAuth() || {};
   const projections = mods.projections || { entries: [] };
   const jss = useMemo(() => (mods.jss || []).filter((j) => j && j.spec), [mods.jss]);
+  // "only those JSS which are active": the picker offers the live specs alone —
+  // an Inactive / Redundant / Sample one cannot be projected. The full list stays
+  // for reading back what was saved against a spec retired since.
+  const liveJss = useMemo(() => jss.filter(jssActive), [jss]);
   const sales = mods.sales || {};
   const customers = mods.customers || [];
+  const prices = mods.prices || {};
 
   // The BOM behind a spec: the planning store is the live one, the module-13 blob is
   // the fallback — the same layering the Raw Material and BOM panels use.
@@ -56,6 +63,9 @@ export default function Projections() {
   // them. Neither is saved: the projection still takes its customer from the JSS.
   const [pickGroup, setPickGroup] = useState('');
   const [pickCust, setPickCust] = useState('');
+  // One filter — Group / Customer / JSS / Marketing person — over the opened month
+  // and the order-value table alike, so the page reads as one filtered view.
+  const [filt, setFilt] = useState(blankProjFilter);
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
@@ -82,23 +92,28 @@ export default function Projections() {
   // The buying group a spec belongs to — its own, else the one its customer sits in.
   const groupOf = (j) => specGroup(j, customers) || String(j.group || '').trim();
   const specGroups = useMemo(
-    () => [...new Set(jss.map(groupOf).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [jss, customers], // eslint-disable-line react-hooks/exhaustive-deps
+    () => [...new Set(liveJss.map(groupOf).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [liveJss, customers], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const specCustomers = useMemo(
-    () => [...new Set(jss
+    () => [...new Set(liveJss
       .filter((j) => !pickGroup || groupOf(j) === pickGroup)
       .map((j) => String(j.customer || '').trim()).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b)),
-    [jss, pickGroup], // eslint-disable-line react-hooks/exhaustive-deps
+    [liveJss, pickGroup], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // The JSS list the picker offers: only the specs of the chosen group / customer.
-  const specChoices = useMemo(() => jss
-    .filter((j) => !pickGroup || groupOf(j) === pickGroup)
-    .filter((j) => !pickCust || String(j.customer || '').trim() === pickCust)
-    .slice()
-    .sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true })),
-  [jss, pickGroup, pickCust]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The JSS list the picker offers: only the ACTIVE specs of the chosen group /
+  // customer — plus the one an edited projection already holds, even if retired.
+  const specChoices = useMemo(() => {
+    const list = liveJss
+      .filter((j) => !pickGroup || groupOf(j) === pickGroup)
+      .filter((j) => !pickCust || String(j.customer || '').trim() === pickCust);
+    if (form.id && form.spec && !list.some((j) => String(j.spec).trim() === String(form.spec).trim())) {
+      const held = jss.find((j) => String(j.spec).trim() === String(form.spec).trim());
+      if (held) list.push(held);
+    }
+    return list.slice().sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
+  }, [liveJss, jss, pickGroup, pickCust, form.id, form.spec]); // eslint-disable-line react-hooks/exhaustive-deps
   // Picking a JSS straight away (typing its number) fills the group and customer
   // back in, so the three boxes always agree.
   function chooseSpec(v) {
@@ -121,7 +136,7 @@ export default function Projections() {
 
   async function submit() {
     let entry;
-    try { entry = validateProjection(form, { jss }); }
+    try { entry = validateProjection(form, { jss, customers }); }
     catch (e) { flash('r', e.message); return; }
     setBusy(true);
     try {
@@ -165,10 +180,37 @@ export default function Projections() {
     () => (openMonth ? reconcileMonth(projections, mods.oab, openMonth) : null),
     [openMonth, projections, mods.oab],
   );
-  const groups = useMemo(() => (open ? byCustomer(open.rows) : []), [open]);
+  // Every row carries its group and sub-brand, read live off the JSS — so Amazon
+  // (a group whose specs name no customer) heads its own block instead of "(unnamed)".
+  const openRows = useMemo(
+    () => (open ? open.rows.map((r) => enrichProjection(r, { jss, customers })) : []),
+    [open, jss, customers],
+  );
+  const shownRows = useMemo(() => filterProjections(openRows, filt), [openRows, filt]);
+  const groups = useMemo(() => byCustomer(shownRows), [shownRows]);
   const material = useMemo(
     () => (open ? materialForMonth(open.rows, materialFor, { basis }) : null),
     [open, materialFor, basis],
+  );
+  // The filter offers what has been projected at all (any month), so a group can
+  // be picked before its month is opened.
+  const allRows = useMemo(
+    () => projectionList(projections).map((r) => enrichProjection(r, { jss, customers })),
+    [projections, jss, customers],
+  );
+  const filterOpts = useMemo(() => projFilterOptions(allRows), [allRows]);
+  // The projected order VALUE, month by month, for what passes the filter.
+  const valueRows = useMemo(
+    () => valueByMonth(projections, mods.oab, monthsWithWork, { prices, filter: filt, jss, customers }),
+    [projections, mods.oab, monthsWithWork, prices, filt, jss, customers],
+  );
+  const valueTotal = useMemo(() => valueRows.reduce((t, m) => ({
+    count: t.count + m.count, qty: t.qty + m.qty, value: t.value + m.value, actualValue: t.actualValue + m.actualValue,
+    remainingValue: t.remainingValue + m.remainingValue, unpriced: t.unpriced + m.unpriced,
+  }), { count: 0, qty: 0, value: 0, actualValue: 0, remainingValue: 0, unpriced: 0 }), [valueRows]);
+  const filterOn = !!(filt.group || filt.customer || filt.spec || filt.marketer);
+  const filterBar = (
+    <ProjFilterBar filt={filt} setFilt={setFilt} opts={filterOpts} />
   );
   const chart = useMemo(
     () => projectedVsActual(projections, mods.oab, monthsWithWork),
@@ -232,7 +274,9 @@ export default function Projections() {
                     placeholder={pickCust || pickGroup ? 'pick one of these specs…' : 'type or pick a spec…'}
                     onChange={(e) => chooseSpec(e.target.value)} />
                   <datalist id="proj-specs">
-                    {specChoices.map((j) => <option key={j.spec} value={j.spec}>{`${j.customer || ''} — ${j.jobName || ''}`}</option>)}
+                    {/* the group / customer is already chosen above, so each spec reads
+                        by its SUB-BRAND and job name — what tells two specs apart */}
+                    {specChoices.map((j) => <option key={j.spec} value={j.spec}>{`${j.subBrand || '(no sub-brand)'} — ${j.jobName || ''}${jssActive(j) ? '' : ` (${j.status})`}`}</option>)}
                   </datalist>
                   {form.spec && !chosenSpec && (
                     <div style={{ fontSize: 10, color: 'var(--red)', marginTop: 2 }}>
@@ -240,8 +284,10 @@ export default function Projections() {
                     </div>
                   )}
                   {chosenSpec && (
-                    <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>
-                      Customer <strong>{chosenSpec.customer || '—'}</strong> (from the JSS)
+                    <div style={{ fontSize: 10, color: jssActive(chosenSpec) ? 'var(--i3)' : 'var(--red)', marginTop: 2 }}>
+                      Customer <strong>{chosenSpec.customer || groupOf(chosenSpec) || '—'}</strong>
+                      {chosenSpec.subBrand ? <> · Sub-brand <strong>{chosenSpec.subBrand}</strong></> : null} (from the JSS)
+                      {!jssActive(chosenSpec) && <> — this JSS is <strong>{chosenSpec.status}</strong></>}
                     </div>
                   )}
                 </div>
@@ -376,6 +422,46 @@ export default function Projections() {
         </table></div>
       </div>
 
+      {/* ── projected order value ─────────────────────────────────────────── */}
+      <div className="card">
+        <div className="ctitle">Projected order value</div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>
+          Quantity × the Price Master sale price of each JSS, month by month — narrowed by group, customer, JSS
+          number or marketing person. A projection whose JSS has no Price Master price (or a lead, which has no
+          JSS yet) is counted as <b>unpriced</b>, not booked at zero.
+        </div>
+        {filterBar}
+        <div className="tw"><table aria-label="Projected order value">
+          <thead><tr>
+            <th>Month</th><th style={rt}>Projections</th><th style={rt}>Projected qty</th><th style={rt}>Projected value</th>
+            <th style={rt}>Received value</th><th style={rt}>Still to come</th><th style={rt}>Unpriced</th>
+          </tr></thead>
+          <tbody>
+            {valueRows.length === 0 ? (
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>Nothing projected yet.</td></tr>
+            ) : valueRows.map((m) => (
+              <tr key={m.month} style={m.month === openMonth ? { background: 'var(--gl)' } : undefined}>
+                <td><strong>{m.label}</strong></td>
+                <td style={rt}>{m.count || '—'}</td>
+                <td style={rt}>{m.count ? qty(m.qty) : '—'}</td>
+                <td style={{ ...rt, fontWeight: 700 }}>{m.count ? inr(m.value) : '—'}</td>
+                <td style={{ ...rt, color: 'var(--g)' }}>{m.count ? inr(m.actualValue) : '—'}</td>
+                <td style={rt}>{m.count ? inr(m.remainingValue) : '—'}</td>
+                <td style={{ ...rt, color: m.unpriced ? '#B7770D' : undefined }}>{m.unpriced || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          {valueRows.length > 0 && (
+            <tfoot><tr style={{ fontWeight: 700, background: 'var(--bg)' }}>
+              <td>Total{filterOn ? ' (filtered)' : ''}</td>
+              <td style={rt}>{valueTotal.count}</td><td style={rt}>{qty(valueTotal.qty)}</td><td style={rt}>{inr(valueTotal.value)}</td>
+              <td style={{ ...rt, color: 'var(--g)' }}>{inr(valueTotal.actualValue)}</td><td style={rt}>{inr(valueTotal.remainingValue)}</td>
+              <td style={rt}>{valueTotal.unpriced || '—'}</td>
+            </tr></tfoot>
+          )}
+        </table></div>
+      </div>
+
       {/* ── projected vs actual ───────────────────────────────────────────── */}
       {chart && chart.points.length > 1 && <ProjectionChart chart={chart} />}
 
@@ -390,20 +476,24 @@ export default function Projections() {
               <span style={{ flex: 1 }} />
               <button className="btn btn-s" onClick={() => setOpenMonth('')}>✕ Close</button>
             </div>
+            {filterBar}
             {open.rows.length === 0 ? (
               <div className="al al-b">Nothing was projected for {monthLabel(open.month)}.</div>
+            ) : shownRows.length === 0 ? (
+              <div className="al al-b">None of the {open.rows.length} projection(s) for {monthLabel(open.month)} match the filter.</div>
             ) : groups.map((g) => (
-              <div key={g.customer} style={{ marginBottom: 12 }}>
-                <div className="ctitle" style={{ fontSize: 12, margin: '8px 0 2px' }}>
-                  {g.customer}
+              <div key={g.key} style={{ marginBottom: 12 }}>
+                {/* the GROUP heads the block; the customer follows when it adds something */}
+                <div className="ctitle" style={{ fontSize: 12, margin: '8px 0 2px' }} aria-label={`Party ${g.label}`}>
+                  {g.label}
                   <span className="tag tb" style={{ marginLeft: 8, fontSize: 9 }}>
                     {qty(g.projected)} projected · {qty(g.actual)} in · {qty(g.remaining)} to come
                   </span>
                 </div>
                 <div className="tw"><table>
                   <thead><tr>
-                    <th>SKU</th><th>JSS</th><th>Location</th><th>Marketing</th>
-                    <th style={rt}>Projected</th><th style={rt}>Received</th><th style={rt}>Still to come</th>
+                    <th>SKU</th><th>Sub-brand</th><th>JSS</th><th>Location</th><th>Marketing</th>
+                    <th style={rt}>Projected</th><th style={rt}>Value</th><th style={rt}>Received</th><th style={rt}>Still to come</th>
                     <th>Orders</th>{canWrite && <th style={{ width: 80 }}></th>}
                   </tr></thead>
                   <tbody>
@@ -413,10 +503,15 @@ export default function Projections() {
                           {r.jobName || '—'}
                           {r.source === 'lead' && <span className="tag ty" style={{ marginLeft: 6, fontSize: 9 }}>lead</span>}
                         </td>
-                        <td style={{ fontSize: 11 }}>{r.spec ? <span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span> : '—'}</td>
+                        <td style={{ fontSize: 11, color: 'var(--amber)' }}>{r.subBrand || '—'}</td>
+                        <td style={{ fontSize: 11 }}>
+                          {r.spec ? <span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span> : '—'}
+                          {r.spec && r.jssStatus && r.jssStatus.toLowerCase() !== 'active' && <span className="tag ty" style={{ marginLeft: 4, fontSize: 9 }}>{r.jssStatus}</span>}
+                        </td>
                         <td style={{ fontSize: 11 }}>{r.dispLoc || <span style={{ color: 'var(--i3)' }}>all locations</span>}</td>
                         <td style={{ fontSize: 11 }}>{r.marketer || '—'}</td>
                         <td style={rt}>{qty(r.qty)}</td>
+                        <td style={{ ...rt, fontSize: 11 }}>{(() => { const v = projectionValue(r, prices); return v.priced ? inr(v.projectedValue) : <span style={{ color: '#B7770D' }} title="no Price Master price for this JSS">unpriced</span>; })()}</td>
                         <td style={{ ...rt, color: 'var(--g)' }}>
                           {qty(r.actual)}
                           {r.over > 0 && <div style={{ fontSize: 9, color: '#B7770D' }}>+{qty(r.over)} over</div>}
@@ -489,7 +584,8 @@ export default function Projections() {
                 <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                   {material.noBom.map((r) => (
                     <li key={r.id} style={{ fontSize: 11 }}>
-                      {r.customer} — {r.jobName || '(no SKU)'} ({qty(r.qty)}): {r.reason}
+                      {r.spec && <span className="tag tb" style={{ fontSize: 9, marginRight: 6 }}>{r.spec}</span>}
+                      {r.customer || r.group || '(no customer)'} — {r.jobName || '(no SKU)'} ({qty(r.qty)}): {r.reason}
                     </li>
                   ))}
                 </ul>
@@ -498,6 +594,36 @@ export default function Projections() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/* ───────────────────────────── the filter bar ───────────────────────────── */
+
+/** Group / Customer / JSS number / Marketing person — one bar, blank = everything. */
+function ProjFilterBar({ filt, setFilt, opts }) {
+  const set = (k) => (e) => setFilt((f) => ({ ...f, [k]: e.target.value }));
+  const on = !!(filt.group || filt.customer || filt.spec || filt.marketer);
+  const sel = { height: 26, fontSize: 11 };
+  return (
+    <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }} aria-label="Projection filters">
+      <select value={filt.group} onChange={set('group')} aria-label="Filter group" style={sel}>
+        <option value="">— every group —</option>
+        {opts.groups.map((g) => <option key={g} value={g}>{g}</option>)}
+      </select>
+      <select value={filt.customer} onChange={set('customer')} aria-label="Filter customer" style={sel}>
+        <option value="">— every customer —</option>
+        {opts.customers.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select value={filt.spec} onChange={set('spec')} aria-label="Filter JSS" style={sel}>
+        <option value="">— every JSS —</option>
+        {opts.specs.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select value={filt.marketer} onChange={set('marketer')} aria-label="Filter marketing person" style={sel}>
+        <option value="">— every marketing person —</option>
+        {opts.marketers.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {on && <button className="btn btn-s" style={{ height: 26, fontSize: 11 }} onClick={() => setFilt(blankProjFilter())}>✕ Clear</button>}
     </div>
   );
 }
