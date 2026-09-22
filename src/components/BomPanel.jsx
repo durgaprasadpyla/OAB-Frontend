@@ -6,6 +6,7 @@ import { inr, fmtDate } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { bomUOM, hasBOM, bomSaveSpec, bomMaterialForSO, plannedBomMap } from '../lib/bom.js';
 import { specGroup } from '../lib/master.js';
+import { uniqueSpecs } from '../lib/specs.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 
@@ -102,10 +103,13 @@ export default function BomPanel() {
 
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
 
-  // One row per unique spec — a spec repeated across JSS entries has ONE BOM.
+  // One row per unique spec — a spec repeated across JSS entries has ONE BOM, and
+  // the row that speaks for it is the one specs.js picks, not whichever copy came
+  // first in the list (that is how A1404 read "Label" here and "Shrink Sleeve" in
+  // the JSS editor).
   const specs = useMemo(() => {
     const seen = new Map();
-    jss.forEach((j) => { const sp = String(j.spec).trim(); if (!seen.has(sp)) seen.set(sp, j); });
+    uniqueSpecs(jss).forEach((j) => seen.set(String(j.spec).trim(), j));
     const s = q.trim().toLowerCase();
     return [...seen.entries()]
       .filter(([sp, j]) => !s || [sp, j.customer, j.jobName, specGroup(j, mods.customers)].some((v) => String(v || '').toLowerCase().includes(s)))

@@ -1,6 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
+import { specFor } from '../lib/specs.js';
 import { getPM } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
@@ -212,7 +213,7 @@ export default function Invoice() {
    *  editable — the document is the editor. (openPackingList) */
   const qtyPerBagOf = (spec) => {
     const k = String(spec || '').trim().toUpperCase();
-    const row = (mods.jss || []).find((r) => String(r.spec || '').trim().toUpperCase() === k);
+    const row = specFor(mods.jss, k);
     return row ? row.qtyPerBag : 0;
   };
 

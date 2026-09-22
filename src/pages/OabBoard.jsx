@@ -9,6 +9,7 @@ import { exportAOA } from '../lib/xlsx.js';
 import { downloadOabPdf } from '../lib/oabPdf.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import { getCustByLoc, custGroupOf } from '../lib/master.js';
+import { specIndex } from '../lib/specs.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
@@ -59,11 +60,7 @@ export default function OabBoard() {
   const tableRef = useRef(null);
 
   // JSS is authoritative for customer / sub-brand / SKU (job) names (syncOABFromJSS, 1826).
-  const jssBySpec = useMemo(() => {
-    const m = {};
-    (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; });
-    return m;
-  }, [mods.jss]);
+  const jssBySpec = useMemo(() => specIndex(mods.jss), [mods.jss]);
 
   const allRows = useMemo(() => (Array.isArray(rawRows) ? rawRows : []).map((r) => {
     const p = r.payload ?? r.PAYLOAD;          // MySQL lowercases columns, H2 uppercases

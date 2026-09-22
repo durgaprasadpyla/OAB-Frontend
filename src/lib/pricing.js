@@ -1,6 +1,7 @@
 // Sale/cost pricing, ported from the legacy app. All functions take the data
 // context ({ prices, jss, matRates }) instead of reading globals.
 import { num } from './calc.js';
+import { specFor } from './specs.js';
 
 /** Price Master lookup for a spec. (getPM 4359) */
 export function getPM(spec, prices) {
@@ -23,7 +24,7 @@ export function getUOM(dispatchForm) {
  * in which case callers fall back to the Price Master cost. (getDynamicCost 4408)
  */
 export function getDynamicCost(spec, { jss, matRates } = {}) {
-  const jssRow = (jss || []).find((j) => String(j.spec || '').trim() === String(spec || '').trim());
+  const jssRow = specFor(jss, spec);
   if (!jssRow || !jssRow.pouchWeight) return null;
   const mat = String(jssRow.material || '').toLowerCase().trim();
   if (mat.includes('+')) return null; // multi-layer laminate

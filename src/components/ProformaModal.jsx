@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { getPM } from '../lib/pricing.js';
 import { gstBreakup } from '../lib/calc.js';
 import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
+import { specFor } from '../lib/specs.js';
 import { today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { saveDocPdf, PLAIN_PDF } from '../lib/invoicePdf.js';
@@ -69,7 +70,7 @@ export default function ProformaModal({ onClose }) {
   const addRow = () => setRows((rs) => [...rs, blankRow()]);
   const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : rs));
 
-  const jssFor = (spec) => jss.find((j) => j.spec === spec) || {};
+  const jssFor = (spec) => specFor(jss, spec) || {};
 
   // Money — same 18% GST math as the tax invoice (reuses gstBreakup).
   const calc = useMemo(() => {

@@ -5,11 +5,14 @@ import { useData } from '../data.jsx';
 import { ordersApi, stockApi, masterApi } from '../api.js';
 import { today, fmtDate, dash, rupees } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
-import { getCustLocations, getCustByLoc, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
+import { getCustLocations, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
+import { uniqueSpecs } from '../lib/specs.js';
 import { fgAvail, fgAddAllocation } from '../lib/fg.js';
 import FgAllocModal from '../components/FgAllocModal.jsx';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+/** A Customer Master row's identity in the location picker: the location AND its warehouse. */
+const locRowKey = (r) => `${String((r && r.dispatchLoc) || '').trim()}||${String((r && r.warehouseName) || '').trim()}`;
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
 export default function NewPO() {
@@ -26,6 +29,13 @@ export default function NewPO() {
   const [group, setGroup] = useState('');
   const [customer, setCustomer] = useState('');
   const [loc, setLoc] = useState('');
+  // Which Customer Master ROW the location came from. Two rows of one customer can
+  // carry the SAME dispatch location with DIFFERENT warehouses ("Dharapuram" →
+  // DHARAPURAM for the Swiggy filler, "Dharapuram" → KOVAI OWN for the independent
+  // account). The name alone cannot tell them apart — picking the second one still
+  // read back as the first, warehouse and all — so the picker keeps the row's key
+  // and the warehouse is taken FROM THAT ROW rather than looked up by name again.
+  const [locKey, setLocKey] = useState('');
   const [skus, setSkus] = useState([]);           // [{...jss, checked, qty}]
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
@@ -52,6 +62,7 @@ export default function NewPO() {
     setGroup(master ? (master.group || '') : '');
     setCustomer(repPo.customer || '');
     setLoc(repPo.loc || '');
+    setLocKey('');
     setSkus([]); setStep(1);
   }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
   const customers = useMemo(() => (
@@ -60,7 +71,16 @@ export default function NewPO() {
   // The locations of THIS customer under THIS group — no group picked means the
   // customer's own (ungrouped) rows, so a name that is also a filler for a group
   // ("Kova Agro" for Swiggy) offers only its own warehouse here.
-  const locations = useMemo(() => getCustLocations(mods.customers, customer, group), [mods.customers, customer, group]);
+  const locations = useMemo(() => {
+    const rows = getCustLocations(mods.customers, customer, group);
+    // identical rows (same location AND warehouse) are one choice, not two
+    const seen = new Set();
+    return rows.filter((r) => { const k = locRowKey(r); if (seen.has(k)) return false; seen.add(k); return true; });
+  }, [mods.customers, customer, group]);
+  const locRow = useMemo(
+    () => locations.find((r) => locRowKey(r) === locKey) || null,
+    [locations, locKey],
+  );
 
   const lastSO = (mods.oab && mods.oab.lastSO) || { y: '26', n: 400 };
   const soY = lastSO.y || '26';
@@ -74,7 +94,9 @@ export default function NewPO() {
   }, [mods.oab, lastSO.n]);
   const autoSO = `${soY}/${startN}`;
 
-  const warehouse = loc ? (getCustByLoc(mods.customers, customer, loc, group) || {}).warehouseName || '' : '';
+  // the warehouse of the row that was actually picked; with no master row (a typed
+  // location) there is none to show
+  const warehouse = locRow ? String(locRow.warehouseName || '') : '';
 
   // Issues 3.0 §5: the order value is quoted the way the tax invoice states it —
   // base (taxable) value, the GST on it, and the gross. 18% is the rate the invoice
@@ -91,11 +113,21 @@ export default function NewPO() {
       .filter((r) => String(r.poNum || '').trim().toLowerCase() === key);
   }
 
+  function pickLoc(key) {
+    setLocKey(key);
+    const row = getCustLocations(mods.customers, customer, group).find((r) => locRowKey(r) === key);
+    setLoc(row ? String(row.dispatchLoc || '') : '');
+  }
+
   function onCustomer(cu) {
     setCustomer(cu);
     setSkus([]);
     const locs = getCustLocations(mods.customers, cu, group);
-    setLoc(locs.length === 1 ? locs[0].dispatchLoc : '');
+    // one row → nothing to choose; more than one → the desk picks, even when two of
+    // them are spelt the same
+    const only = locs.length === 1 ? locs[0] : null;
+    setLoc(only ? String(only.dispatchLoc || '') : '');
+    setLocKey(only ? locRowKey(only) : '');
   }
 
   // Changing the group clears everything downstream — customer, location and any SKU
@@ -104,6 +136,7 @@ export default function NewPO() {
     setGroup(g);
     setCustomer('');
     setLoc('');
+    setLocKey('');
     setSkus([]);
   }
 
@@ -130,7 +163,9 @@ export default function NewPO() {
     // Only ACTIVE specs are orderable, and only those this customer may see under the
     // group rules — a redundant or another company's spec must not appear at all.
     // (buildSKUTable / specVisibleTo)
-    const list = jssNow
+    // uniqueSpecs first: a code on two JSS rows is ONE sale-order line, and the row
+    // that speaks for it is the one every other screen now reads (specs.js).
+    const list = uniqueSpecs(jssNow)
       .filter((r) => String(r.status || '').trim().toLowerCase() === 'active' && specVisibleTo(r, customer, mods.customers))
       .reverse()
       .map((s) => ({ ...s, checked: false, qty: '' }));
@@ -159,7 +194,7 @@ export default function NewPO() {
     let n = startN;
     const rows = chosen.map((s) => ({
       so: `${soY}/${n++}`, spec: s.spec, jobName: s.jobName, jobType: s.jobType, subBrand: s.subBrand || '',
-      customer, dispLoc: loc, warehouseName: (getCustByLoc(mods.customers, customer, loc, group) || {}).warehouseName || '',
+      customer, dispLoc: loc, warehouseName: warehouse,
       poNum: poNum.trim(), poDate, poExp, poQty: num(s.qty), invDisp: 0, manDisp: 0, fg: 0, stage: '',
       width: s.width, material: s.material, mic: s.mic, height: s.height, filmWidth: s.filmWidth,
       gsm: s.gsm, dispatchForm: s.dispatchForm || '', pouchingMachines: s.pouchingMachines || '',
@@ -250,7 +285,7 @@ export default function NewPO() {
   }
 
   function reset() {
-    setPoNum(''); setPoExp(''); setGroup(''); setCustomer(''); setLoc(''); setSkus([]); setSelPO([]); setAdded(null);
+    setPoNum(''); setPoExp(''); setGroup(''); setCustomer(''); setLoc(''); setLocKey(''); setSkus([]); setSelPO([]); setAdded(null);
     setShortages([]); setFilmShort(false);
     setShortages([]); setPoDate(today()); setStep(1);
   }
@@ -315,12 +350,12 @@ export default function NewPO() {
           <div className="g2">
             <div className="fg"><label>Dispatch Location * <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(applies to all SKUs)</span></label>
               {locations.length ? (
-                <select value={loc} aria-label="Dispatch Location" onChange={(e) => setLoc(e.target.value)}>
+                <select value={locKey} aria-label="Dispatch Location" onChange={(e) => pickLoc(e.target.value)}>
                   <option value="">— Select Location —</option>
-                  {locations.map((l) => <option key={l.dispatchLoc} value={l.dispatchLoc}>{l.dispatchLoc}{l.warehouseName ? ` (${l.warehouseName})` : ''}</option>)}
+                  {locations.map((l) => <option key={locRowKey(l)} value={locRowKey(l)}>{l.dispatchLoc}{l.warehouseName ? ` (${l.warehouseName})` : ''}</option>)}
                 </select>
               ) : (
-                <input value={loc} aria-label="Dispatch Location" onChange={(e) => setLoc(e.target.value)} placeholder="Dispatch location" />
+                <input value={loc} aria-label="Dispatch Location" onChange={(e) => { setLoc(e.target.value); setLocKey(''); }} placeholder="Dispatch location" />
               )}
               <div style={{ fontSize: 11, color: 'var(--g)', marginTop: 3 }}>{warehouse ? '🏭 Warehouse: ' + warehouse : ''}</div>
             </div>
@@ -337,7 +372,10 @@ export default function NewPO() {
               <div className="ctitle" style={{ marginBottom: 2 }}>SKUs for <span style={{ color: 'var(--g)', textTransform: 'none', fontWeight: 700 }}>{customer}</span></div>
               <div style={{ fontSize: 11, color: 'var(--i3)' }}>{activeCount} active spec{activeCount === 1 ? '' : 's'}</div>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--i2)' }}>📍 Location: <strong>{loc}</strong></div>
+            <div style={{ fontSize: 12, color: 'var(--i2)' }}>
+              📍 Location: <strong>{loc}</strong>
+              {warehouse ? <> · 🏭 <strong>{warehouse}</strong></> : null}
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, fontSize: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
@@ -437,7 +475,12 @@ export default function NewPO() {
                       <td style={{ fontSize: 11 }}>{r.jobName}</td>
                       <td><span className={'tag ' + (r.jobType === 'StayFresh' ? 'tg' : 'tgr')}>{r.jobType}</span></td>
                       <td style={{ fontSize: 11 }}>{r.customer}</td>
-                      <td style={{ fontSize: 11 }}>{r.dispLoc}</td>
+                      <td style={{ fontSize: 11 }}>
+                        {r.dispLoc}
+                        {/* the warehouse, because two locations of one customer can be
+                            spelt the same and only this says which one was picked */}
+                        {r.warehouseName ? <div style={{ fontSize: 10, color: 'var(--i3)' }}>🏭 {r.warehouseName}</div> : null}
+                      </td>
                       <td style={{ fontSize: 11 }}>{r.poNum}</td>
                       <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>

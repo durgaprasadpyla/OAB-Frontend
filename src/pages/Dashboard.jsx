@@ -10,6 +10,7 @@ import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import { materialKey, materialLabel, knownMaterials } from '../lib/material.js';
+import { specIndex, specFor, duplicateSpecs, specKey } from '../lib/specs.js';
 import { reconcileMonth, projectedMonths, monthLabel } from '../lib/projections.js';
 import UsersAccess from '../components/UsersAccess.jsx';
 import CustomersAdmin from '../components/CustomersAdmin.jsx';
@@ -603,7 +604,7 @@ function JssEditor() {
   const [rows, setRows] = useState(() => clone(mods.jss || []));
   // The Material picker: every material already in use (one spelling per identity,
   // "CC PET + LDPE" and "cc pet +LDPE" being one) — so a spec picks a spelling
-  // rather than inventing one. Typing still works, for a genuinely new film.
+  // rather than inventing one.
   const materials = useMemo(() => knownMaterials([...(mods.jss || []), ...rows]), [mods.jss, rows]);
   const dispForms = useMemo(() => {
     const out = [...JSS_DISP_FORMS];
@@ -614,24 +615,42 @@ function JssEditor() {
   const [statusFil, setStatusFil] = useState('all');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  // Issues 22.09: the table is READ-ONLY and a RADIO picks the row to work on —
+  // "I want a radio button selection against each of these rows. Just like a
+  // customer item, I should be able to edit whatever data the QC has added in the
+  // same format on the top". Typing straight into the grid is what let a spec be
+  // half-edited (a dispatch form typed over, a spec code re-used), so the fields
+  // are now the same guided ones QC creates a spec with.
+  const [sel, setSel] = useState(-1);          // index into `rows`, -1 = nothing picked
+  const [form, setForm] = useState(null);      // the picked row, being edited
+  const [materialNew, setMaterialNew] = useState('');
+
+  useEffect(() => { setRows(clone(mods.jss || [])); setSel(-1); setForm(null); }, [mods.jss]);
 
   // Group dropdown options come from the Customer Master (legacy jssGroupOptions).
   const groups = useMemo(() => custGroups(customers), [customers]);
+  // A code on more than one row is a data fault: every screen now reads the same
+  // row (specs.js), but the other copy is still there to be deleted.
+  const dupes = useMemo(() => duplicateSpecs(rows), [rows]);
 
-  const setCell = (i, field, val) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)));
-  // Changing a row's Group repopulates its Company list; the company is kept only if
-  // it still belongs to the new group (legacy jssGroupChange).
-  const setGroup = (i, val) => setRows((rs) => rs.map((r, j) => {
-    if (j !== i) return r;
-    const stillValid = !r.customer || custsInGroup(customers, val).includes(r.customer);
-    return { ...r, group: val, customer: stillValid ? r.customer : '' };
-  }));
-  // Recalculate pouch weight from H/W/GSM/gusset/sealing (legacy jssCalcPW / pouchWeightJSS).
-  const recalcPW = (i) => setRows((rs) => rs.map((r, j) => {
-    if (j !== i) return r;
-    const pw = pouchWeightJSS(r);
-    return pw ? { ...r, pouchWeight: Number(pw.toFixed(6)) } : r;
-  }));
+  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
+  function pick(i) {
+    setSel(i);
+    setForm({ ...rows[i] });
+    setMaterialNew('');
+    setMsg('');
+  }
+  // Changing the Group repopulates the Company list; the company is kept only if it
+  // still belongs to the new group (legacy jssGroupChange).
+  function setFormGroup(v) {
+    const stillValid = !form.customer || custsInGroup(customers, v).includes(form.customer);
+    set({ group: v, customer: stillValid ? form.customer : '' });
+  }
+  function recalcPW() {
+    const pw = pouchWeightJSS(form);
+    if (pw) set({ pouchWeight: Number(pw.toFixed(6)) });
+    else setMsg('Pouch weight needs Height, Width and GSM on this spec.');
+  }
 
   const filtered = rows.map((r, i) => ({ r, i })).filter(({ r }) => {
     if (statusFil !== 'all' && String(r.status || '').toLowerCase() !== statusFil) return false;
@@ -641,25 +660,58 @@ function JssEditor() {
       .some((v) => String(v || '').toLowerCase().includes(s));
   });
 
-  async function saveAll() {
+  /** Write `next` to module 2 and carry the identity fields onto the OAB rows. */
+  async function persist(next, note) {
+    await save('jss', next);
+    // Sync customer/subBrand/jobName — and the dispatch form and job type — onto OAB
+    // rows sharing a spec (syncOABFromJSS). An SO copies the JSS at PO time; a spec
+    // re-tagged afterwards (A1404: Label → Shrink Sleeve) must reach its open orders
+    // too, or the OAB keeps showing the old form.
+    const map = specIndex(next);
+    const nextOab = clone(mods.oab); let dirty = false;
+    ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => {
+      const j = map[specKey(r.spec)]; if (!j) return;
+      ['customer', 'subBrand', 'jobName', 'dispatchForm', 'jobType'].forEach((f) => {
+        if (j[f] && r[f] !== j[f]) { r[f] = j[f]; dirty = true; }
+      });
+    }));
+    if (dirty) await save('oab', nextOab);
+    setMsg(`✅ ${note}${dirty ? ' · OAB synced' : ''}`);
+    setTimeout(() => setMsg(''), 4000);
+  }
+
+  /** Save the picked row back into the master. */
+  async function saveRow() {
+    const next = [...rows];
+    const spec = String(form.spec || '').trim();
+    if (!spec) { setMsg('A Spec No. is required.'); return; }
+    if (!String(form.jobName || '').trim()) { setMsg('A Job Name is required.'); return; }
+    const material = form.material === '__new__' ? materialLabel(materialNew) : String(form.material || '').trim();
+    // Material is required the way QC requires it — but an OLD row that never had one
+    // must not be held hostage over it: fixing this spec's status or dispatch form
+    // should not mean inventing a material nobody recorded. Clearing one that IS
+    // there is refused, because that is a loss.
+    const hadMaterial = String((rows[sel] || {}).material || '').trim();
+    if (!material && hadMaterial) { setMsg('Material cannot be cleared — pick the film this spec runs on.'); return; }
+    if (!String(form.dispatchForm || '').trim()) { setMsg('A Dispatch Form is required.'); return; }
+    // Re-using a code that another row already holds is how the master ended up with
+    // two A1404s reading differently on different screens. Warn before allowing it.
+    const clash = next.some((r, i) => i !== sel && specKey(r.spec) === specKey(spec));
+    if (clash && !window.confirm(`Spec ${spec} is already on another row.\n\nTwo rows with one code disagree the moment either is edited — the tool will read the Active, most recent one and flag the pair. Keep this code anyway?`)) return;
+    next[sel] = { ...form, spec, material };
     setBusy(true);
     try {
-      await save('jss', rows);
-      // Sync customer/subBrand/jobName — and the dispatch form and job type — onto OAB
-      // rows sharing a spec (syncOABFromJSS). An SO copies the JSS at PO time; a spec
-      // re-tagged afterwards (A1404: Label → Shrink Sleeve) must reach its open orders
-      // too, or the OAB keeps showing the old form.
-      const map = {}; rows.forEach((j) => { if (j.spec) map[j.spec] = j; });
-      const nextOab = clone(mods.oab); let dirty = false;
-      ['SF', 'OT'].forEach((key) => (nextOab.OAB[key] || []).forEach((r) => {
-        const j = map[r.spec]; if (!j) return;
-        [['customer', 'customer'], ['subBrand', 'subBrand'], ['jobName', 'jobName'], ['dispatchForm', 'dispatchForm'], ['jobType', 'jobType']].forEach(([from, to]) => {
-          if (j[from] && r[to] !== j[from]) { r[to] = j[from]; dirty = true; }
-        });
-      }));
-      if (dirty) await save('oab', nextOab);
-      setMsg('✅ JSS saved' + (dirty ? ' · OAB names synced' : '')); setTimeout(() => setMsg(''), 4000);
-    } catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
+      setRows(next);
+      await persist(next, `Spec ${spec} saved${!material ? ' (no material on this spec yet)' : ''}`);
+      setForm({ ...next[sel] }); setMaterialNew('');
+    }
+    catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
+  }
+
+  async function saveAll() {
+    setBusy(true);
+    try { await persist(rows, 'JSS saved'); }
+    catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
   }
 
   // Permanently delete a spec (legacy jssDeleteRow) — persists immediately.
@@ -668,6 +720,8 @@ function JssEditor() {
     if (!window.confirm(`Permanently delete spec "${r.spec || '(no spec no.)'}" — ${r.jobName || 'no job name'}?\n\nSale orders / FG history referencing it remain, but the spec is gone. This cannot be undone.`)) return;
     const next = rows.filter((_, j) => j !== i);
     setRows(next);
+    if (sel === i) { setSel(-1); setForm(null); }
+    else if (sel > i) { setSel(sel - 1); }
     setBusy(true);
     try { await save('jss', next); setMsg('🗑 Spec deleted'); setTimeout(() => setMsg(''), 4000); }
     catch (e) { setMsg('Delete failed: ' + e.message); } finally { setBusy(false); }
@@ -697,70 +751,18 @@ function JssEditor() {
         const spec = String(aoa[r][idxOf.spec] ?? '').trim();
         if (!spec) continue;
         const patch = {}; Object.entries(idxOf).forEach(([k, idx]) => { patch[k] = String(aoa[r][idx] ?? '').trim(); });
-        const at = next.findIndex((x) => String(x.spec || '').trim() === spec);
+        // match on the CODE's identity, so an import updates the row that is in force
+        // instead of appending a second copy of it
+        const at = next.findIndex((x) => specKey(x.spec) === specKey(spec));
         if (at >= 0) { next[at] = { ...next[at], ...patch }; updated++; } else { next.push(patch); added++; }
       }
-      setRows(next);
+      setRows(next); setSel(-1); setForm(null);
       setMsg(`Imported ${updated} updated, ${added} added — review, then Save All Changes.`);
     } catch (e) { setMsg('Import failed: ' + e.message); }
   }
 
-  // Per-column body cell for a row (legacy order); selects for group/customer/disp/status,
-  // pouch-weight with a recalc button, plain text for the rest.
-  const txt = (i, field, w) => (
-    <input value={rows[i][field] ?? ''} onChange={(e) => setCell(i, field, e.target.value)} style={{ ...jssInp, width: w }} />
-  );
-  function cell(i, r, field) {
-    if (field === 'group') return (
-      <select value={r.group || ''} onChange={(e) => setGroup(i, e.target.value)} style={jssInp}>
-        <option value="">— No group —</option>
-        {!(!r.group || groups.includes(r.group)) && <option value={r.group}>{r.group}</option>}
-        {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-      </select>
-    );
-    if (field === 'customer') {
-      const custOpts = custsInGroup(customers, r.group);
-      const inList = !r.customer || custOpts.includes(r.customer);
-      return (
-        <select value={r.customer || ''} onChange={(e) => setCell(i, 'customer', e.target.value)} style={jssInp}>
-          <option value="">— Select customer —</option>
-          {!inList && <option value={r.customer}>{r.customer}</option>}
-          {custOpts.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      );
-    }
-    if (field === 'dispatchForm') {
-      const inList = !r.dispatchForm || dispForms.includes(r.dispatchForm);
-      return (
-        <select value={r.dispatchForm || ''} onChange={(e) => setCell(i, 'dispatchForm', e.target.value)} style={jssInp}>
-          <option value="">—</option>
-          {!inList && <option value={r.dispatchForm}>{r.dispatchForm}</option>}
-          {dispForms.map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
-      );
-    }
-    if (field === 'material') return (
-      <input value={r.material ?? ''} list="jss-materials" aria-label={`Material ${r.spec || i}`}
-        onChange={(e) => setCell(i, 'material', e.target.value)}
-        onBlur={(e) => { const t = materialLabel(e.target.value); if (t && t !== e.target.value) setCell(i, 'material', t); }}
-        style={{ ...jssInp, width: 130 }} />
-    );
-    if (field === 'status') return (
-      <select value={r.status || ''} onChange={(e) => setCell(i, 'status', e.target.value)} style={jssInp}>
-        <option value="">—</option>
-        {JSS_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-      </select>
-    );
-    if (field === 'pouchWeight') return (
-      <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-        <input type="number" step="0.0001" value={r.pouchWeight ?? ''} placeholder="auto"
-          onChange={(e) => setCell(i, 'pouchWeight', e.target.value)} style={{ ...jssInp, flex: 1, minWidth: 60 }} />
-        <button title="Recalculate from H / W / GSM" onClick={() => recalcPW(i)}
-          style={{ height: 26, width: 22, flexShrink: 0, border: 'none', background: 'var(--g)', color: '#fff', borderRadius: 3, fontSize: 10, cursor: 'pointer', padding: 0 }}>↺</button>
-      </div>
-    );
-    return txt(i, field);
-  }
+  const custOpts = form ? custsInGroup(customers, form.group) : [];
+  const inputStyle = { width: '100%' };
 
   return (
     <div className="card">
@@ -778,30 +780,171 @@ function JssEditor() {
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={(e) => { importJSS(e.target.files[0]); e.target.value = ''; }} />
         </label>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--i3)', margin: '2px 0 8px' }}>Click any field to edit. Save All Changes to sync with the QC JSS report. Fields marked * are required.</div>
-      {msg && <div className="al al-g">{msg}</div>}
-      {/* the materials in use, one spelling each — what the Material cells pick from */}
-      <datalist id="jss-materials">{materials.map((m) => <option key={m} value={m} />)}</datalist>
+      <div style={{ fontSize: 11, color: 'var(--i3)', margin: '2px 0 8px' }}>
+        Pick a row with its radio button to edit it in the form above the table — the same fields QC creates a spec with. Fields marked * are required.
+      </div>
+      {msg && <div className={'al ' + (msg.startsWith('✅') || msg.startsWith('🗑') || msg.startsWith('Imported') ? 'al-g' : 'al-r')}>{msg}</div>}
+
+      {/* A code held by two rows: every screen reads the same one now, but the other
+          copy is still there and will keep disagreeing until it is deleted. */}
+      {dupes.length > 0 && (
+        <div className="al al-y" aria-label="Duplicate spec numbers">
+          <strong>{dupes.length} spec number{dupes.length > 1 ? 's are' : ' is'} on more than one row.</strong>{' '}
+          The tool reads the Active, most recent row of each; delete the stale one to stop them disagreeing.
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {dupes.slice(0, 8).map((d) => (
+              <li key={d.code} style={{ fontSize: 11 }}>
+                <strong>{d.code}</strong> — {d.count} rows
+                {d.differing.length > 0 && <> · they disagree on {d.differing.map((f) => `${f.label} (${f.values.join(' / ')})`).join(', ')}</>}
+                {' · in force: '}
+                <span className="tag tg" style={{ fontSize: 9 }}>{d.winner.dispatchForm || '—'}{d.winner.status ? ` · ${d.winner.status}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── the picked row, edited the way QC creates one ─────────────────── */}
+      {form ? (
+        <div className="card" style={{ background: 'var(--bg)', marginBottom: 10 }} aria-label="Edit spec">
+          <div className="ctitle">✏ Editing {form.spec || '(no spec no.)'} — {form.jobName || 'no job name'}</div>
+          <div className="g4">
+            <div className="fg">
+              <label>Spec No. *</label>
+              <input value={form.spec ?? ''} aria-label="Spec No." style={inputStyle} onChange={(e) => set({ spec: e.target.value })} />
+            </div>
+            <div className="fg">
+              <label>Job Type</label>
+              <input value={form.jobType ?? ''} aria-label="Job Type" style={inputStyle} onChange={(e) => set({ jobType: e.target.value })} />
+            </div>
+            <div className="fg">
+              <label>Group</label>
+              <select value={form.group ?? ''} aria-label="Group" onChange={(e) => setFormGroup(e.target.value)}>
+                <option value="">— No group —</option>
+                {form.group && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
+                {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div className="fg">
+              <label>Customer</label>
+              <select value={form.customer ?? ''} aria-label="Customer" onChange={(e) => set({ customer: e.target.value })}>
+                <option value="">— Select customer —</option>
+                {form.customer && !custOpts.includes(form.customer) && <option value={form.customer}>{form.customer}</option>}
+                {custOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="g4">
+            <div className="fg">
+              <label>Sub Brand</label>
+              <input value={form.subBrand ?? ''} aria-label="Sub Brand" style={inputStyle} onChange={(e) => set({ subBrand: e.target.value })} />
+            </div>
+            <div className="fg">
+              <label>Job Name *</label>
+              <input value={form.jobName ?? ''} aria-label="Job Name" style={inputStyle} onChange={(e) => set({ jobName: e.target.value })} />
+            </div>
+            <div className="fg">
+              <label>Material *</label>
+              <select value={form.material === '__new__' ? '__new__' : (form.material ?? '')} aria-label="Material" onChange={(e) => set({ material: e.target.value })}>
+                <option value="">— select material —</option>
+                {form.material && form.material !== '__new__' && !materials.includes(form.material) && <option value={form.material}>{form.material}</option>}
+                {materials.map((m) => <option key={m} value={m}>{m}</option>)}
+                <option value="__new__">＋ Add new material…</option>
+              </select>
+              {form.material === '__new__' && (
+                <input placeholder="New material, e.g. CC PET + LDPE" value={materialNew} aria-label="New material"
+                  style={{ marginTop: 6 }} onChange={(e) => setMaterialNew(e.target.value)} />
+              )}
+            </div>
+            <div className="fg">
+              <label>Dispatch Form *</label>
+              <select value={form.dispatchForm ?? ''} aria-label="Dispatch Form" onChange={(e) => set({ dispatchForm: e.target.value })}>
+                <option value="">—</option>
+                {form.dispatchForm && !dispForms.includes(form.dispatchForm) && <option value={form.dispatchForm}>{form.dispatchForm}</option>}
+                {dispForms.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="g4">
+            <div className="fg"><label>MIC</label><input type="number" value={form.mic ?? ''} aria-label="MIC" style={inputStyle} onChange={(e) => set({ mic: e.target.value })} /></div>
+            <div className="fg"><label>GSM</label><input type="number" value={form.gsm ?? ''} aria-label="GSM" style={inputStyle} onChange={(e) => set({ gsm: e.target.value })} /></div>
+            <div className="fg"><label>Film Width</label><input type="number" value={form.filmWidth ?? ''} aria-label="Film Width" style={inputStyle} onChange={(e) => set({ filmWidth: e.target.value })} /></div>
+            <div className="fg"><label>Ups</label><input type="number" value={form.ups ?? ''} aria-label="Ups" style={inputStyle} onChange={(e) => set({ ups: e.target.value })} /></div>
+          </div>
+
+          <div className="g4">
+            <div className="fg"><label>Width</label><input type="number" value={form.width ?? ''} aria-label="Width" style={inputStyle} onChange={(e) => set({ width: e.target.value })} /></div>
+            <div className="fg"><label>Height</label><input type="number" value={form.height ?? ''} aria-label="Height" style={inputStyle} onChange={(e) => set({ height: e.target.value })} /></div>
+            <div className="fg"><label>Gusset</label><input value={form.gusset ?? ''} aria-label="Gusset" placeholder="e.g. 40 or 20+20" style={inputStyle} onChange={(e) => set({ gusset: e.target.value })} /></div>
+            <div className="fg"><label>Qty per Bag (packing)</label><input type="number" value={form.qtyPerBag ?? ''} aria-label="Qty per Bag" style={inputStyle} onChange={(e) => set({ qtyPerBag: e.target.value })} /></div>
+          </div>
+
+          <div className="g4">
+            <div className="fg">
+              <label>Pouch Weight (g)</label>
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                <input value={form.pouchWeight ?? ''} aria-label="Pouch Weight" placeholder="auto or enter manually"
+                  style={{ flex: 1 }} onChange={(e) => set({ pouchWeight: e.target.value })} />
+                <button type="button" className="btn btn-g" onClick={recalcPW} aria-label="Auto-calculate pouch weight"
+                  title="Calculate from Height, Width, Gusset & GSM" style={{ height: 32, width: 32, flexShrink: 0, padding: 0 }}>↺</button>
+              </div>
+            </div>
+            <div className="fg">
+              <label>Status</label>
+              <select value={form.status ?? ''} aria-label="Status" onChange={(e) => set({ status: e.target.value })}>
+                <option value="">—</option>
+                {JSS_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="fg" />
+            <div className="fg" />
+          </div>
+
+          <div className="act">
+            <button className="btn btn-g" onClick={saveRow} disabled={busy}>{busy ? 'Saving…' : '💾 Save spec'}</button>
+            <button className="btn btn-s" disabled={busy} onClick={() => { setSel(-1); setForm(null); }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div className="al al-b">Pick a row below with its radio button to edit that spec here.</div>
+      )}
+
       <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
             <tr style={{ background: 'var(--g)' }}>
+              <th style={{ ...jssTh, minWidth: 34, textAlign: 'center' }}>Edit</th>
               {JSS_COLS.map(([k, label, w]) => <th key={k} style={{ ...jssTh, minWidth: w }}>{label}</th>)}
               <th style={{ ...jssTh, minWidth: 60, textAlign: 'center' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={JSS_COLS.length + 1} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
-            ) : filtered.map(({ r, i }, idx) => (
-              <tr key={i} style={{ background: idx % 2 ? '#f8f8f8' : '' }}>
-                {JSS_COLS.map(([k]) => <td key={k} style={jssTd}>{cell(i, r, k)}</td>)}
-                <td style={{ ...jssTd, textAlign: 'center' }}>
-                  <button title="Permanently delete this spec" disabled={busy} onClick={() => delRow(i)}
-                    style={{ height: 26, padding: '0 10px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>Del</button>
-                </td>
-              </tr>
-            ))}
+              <tr><td colSpan={JSS_COLS.length + 2} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
+            ) : filtered.map(({ r, i }, idx) => {
+              const dup = dupes.some((d) => d.code === specKey(r.spec));
+              return (
+                <tr key={i} style={{ background: sel === i ? 'var(--gl)' : (idx % 2 ? '#f8f8f8' : '') }}>
+                  <td style={{ ...jssTd, textAlign: 'center' }}>
+                    <input type="radio" name="jss-row" checked={sel === i} onChange={() => pick(i)}
+                      aria-label={`Edit ${r.spec || 'row ' + (i + 1)}`} style={{ cursor: 'pointer' }} />
+                  </td>
+                  {JSS_COLS.map(([k]) => (
+                    <td key={k} style={{ ...jssTd, fontSize: 11, padding: '5px 5px' }}>
+                      {k === 'spec' && dup
+                        ? <span title="This spec number is on more than one row">{r[k]} <span className="tag ty" style={{ fontSize: 8 }}>dup</span></span>
+                        : (r[k] === 0 ? '0' : (r[k] || ''))}
+                    </td>
+                  ))}
+                  <td style={{ ...jssTd, textAlign: 'center' }}>
+                    <button title="Permanently delete this spec" disabled={busy} onClick={() => delRow(i)}
+                      style={{ height: 26, padding: '0 10px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>Del</button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -817,7 +960,7 @@ function DeleteSOs() {
   // JSS is authoritative for customer / sub-brand / SKU (job) names: show the current
   // spec's values, not the copy stored on the row when the SO was created, so a repointed
   // spec shows the right SKU here too (mirrors OabBoard's openRows enrichment).
-  const jssBySpec = useMemo(() => { const m = {}; (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; }); return m; }, [mods.jss]);
+  const jssBySpec = useMemo(() => specIndex(mods.jss), [mods.jss]);
   // Issues 3.0 §7: only LIVE orders are listed. A closed SO is finished business —
   // editing or deleting one is not something this tab is for, and the closed rows
   // (the bulk of the OAB) buried the handful that can actually be worked on.
@@ -893,7 +1036,7 @@ function DeleteSOs() {
     const spec = entry.trim();
     if (!spec) { alert('Spec cannot be blank.'); return; }
     if (spec === String(row.spec || '').trim()) return;   // unchanged
-    const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === spec);
+    const j = specFor(mods.jss, spec);
     if (!j) { alert(`Unknown spec "${spec}" — it is not in the JSS master. Add it in the JSS Editor first.`); return; }
     if (!window.confirm(`Re-point SO ${row.so} to spec ${spec}?\n\nSKU (Job Name) becomes: ${j.jobName || '(blank)'}\nCustomer: ${j.customer || row.customer || '(unchanged)'}`)) return;
     const next = clone(mods.oab);
@@ -946,7 +1089,7 @@ const emptyTd = { textAlign: 'center', padding: 16, color: 'var(--i3)' };
 
 function Trends() {
   const { mods } = useData();
-  const jssBySpec = useMemo(() => { const m = {}; (mods.jss || []).forEach((j) => { if (j && j.spec) m[j.spec] = j; }); return m; }, [mods.jss]);
+  const jssBySpec = useMemo(() => specIndex(mods.jss), [mods.jss]);
   const openRows = useMemo(() => ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).filter((r) => !r.closed), [mods.oab]);
   // What the material table is worked out from: the open-SO balance (what is on the
   // OAB and not yet made), or ONLY the projections entered on the Projections page —
@@ -1114,7 +1257,7 @@ function SOCosting() {
   const totMargin = lines.reduce((s, x) => s + x.margin, 0);
   const avgMPct = totVal > 0 ? (totMargin / totVal * 100) : 0;
 
-  const mat = String((mods.jss.find((j) => j.spec === (r && r.spec)) || {}).material || '').toLowerCase().trim();
+  const mat = String((specFor(mods.jss, r && r.spec) || {}).material || '').toLowerCase().trim();
   const R = ctx.matRates;
   let rmRate = 0;
   if (mat.includes('af-bopp') || mat.includes('af_bopp')) rmRate = num(R.afbopp);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { groupOptions, specGroup } from '../lib/master.js';
+import { specFor } from '../lib/specs.js';
 import { fmtDate, inr } from '../lib/format.js';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import { COMPANY } from '../lib/company.js';
@@ -26,7 +27,7 @@ export default function CertificatePanel() {
   const lines = useMemo(() => certLines(mods.oab), [mods.oab]);
   const groups = useMemo(() => groupOptions(mods.customers, mods.jss), [mods.customers, mods.jss]);
   const lineGroupOf = (l) => {
-    const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === String(l.spec || '').trim());
+    const j = specFor(mods.jss, l.spec);
     return (j && specGroup(j, mods.customers)) || '';
   };
   const custNames = useMemo(() => {
@@ -37,7 +38,7 @@ export default function CertificatePanel() {
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
     const groupOf = (l) => {
-      const j = (mods.jss || []).find((x) => String(x.spec || '').trim() === String(l.spec || '').trim());
+      const j = specFor(mods.jss, l.spec);
       return (j && specGroup(j, mods.customers)) || '';
     };
     let list = lines;

@@ -1,6 +1,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
+import { specIndex } from '../lib/specs.js';
 import { navTabs, ROLE_LABEL, OPS_ROLES } from '../lib/roles.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { today } from '../lib/format.js';
@@ -109,8 +110,7 @@ export default function Shell() {
     const cols = ['sheet', 'sno', 'so', 'spec', 'customer', 'jobName', 'poQty', 'invDisp', 'manDisp', 'fg', 'stage', 'closed'];
     // JSS is authoritative for the SKU (job name): export the current spec's name so a
     // repointed spec self-corrects in the backup too (falls back to the stored name).
-    const jssBySpec = {};
-    (mods.jss || []).forEach((j) => { if (j && j.spec) jssBySpec[j.spec] = j; });
+    const jssBySpec = specIndex(mods.jss);
     const rows = [cols];
     for (const sheet of ['SF', 'OT']) {
       (mods.oab && mods.oab.OAB && mods.oab.OAB[sheet] || []).forEach((r) =>

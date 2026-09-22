@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { screen, fireEvent, cleanup, within } from '@testing-library/react';
+import { screen, fireEvent, cleanup, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp, oabModule } from './harness.jsx';
 import NewPO from '../pages/NewPO.jsx';
@@ -48,15 +48,56 @@ describe('one name, two customers — the locations follow the group', () => {
     // no group → the ungrouped customers only, and Kova Agro's own location is picked by itself
     await user.selectOptions(screen.getByLabelText('Customer'), 'Kova Agro');
     const loc = screen.getByLabelText('Dispatch Location');
-    expect([...loc.options].map((o) => o.value)).toEqual(['', 'Dharapuram Kovai Own']);
-    expect(loc.value).toBe('Dharapuram Kovai Own');
-    expect(screen.getAllByText(/KOVAI OWN/).length).toBeGreaterThanOrEqual(1);   // the option label and the warehouse line
+    expect([...loc.options].map((o) => o.textContent)).toEqual(['— Select Location —', 'Dharapuram Kovai Own (KOVAI OWN)']);
+    expect(screen.getByText(/Warehouse: KOVAI OWN/)).toBeInTheDocument();
 
     // under the Swiggy group, the filler Kova Agro offers the Swiggy warehouse alone
     await user.selectOptions(screen.getByLabelText('Group'), 'Swiggy');
     await user.selectOptions(screen.getByLabelText('Customer'), 'Kova Agro');
     const loc2 = screen.getByLabelText('Dispatch Location');
-    expect([...loc2.options].map((o) => o.value)).toEqual(['', 'Dharapuram']);
+    expect([...loc2.options].map((o) => o.textContent)).toEqual(['— Select Location —', 'Dharapuram (DHARAPURAM)']);
+  });
+
+  // The shape the client actually has: BOTH rows carry the dispatch location
+  // "Dharapuram" and differ only by the warehouse, so a picker keyed on the name
+  // could not tell them apart — "I selected Kovai own but it is still showing
+  // Darapuram at both the location and the warehouse".
+  const SAME_NAME = [
+    { customer: 'Kova Agro', group: 'Swiggy', dispatchLoc: 'Dharapuram', warehouseName: 'DHARAPURAM' },
+    { customer: 'Kova Agro', group: '', dispatchLoc: 'Dharapuram', warehouseName: 'KOVAI OWN' },
+  ];
+
+  it('tells two same-named locations apart and carries the chosen warehouse onto the order', async () => {
+    const user = userEvent.setup();
+    const jss = [{ spec: 'A1', customer: 'Kova Agro', jobName: 'Coconut water 200 ml', dispatchForm: 'Shrink Sleeve', status: 'Active' }];
+    // no group narrowing here: the customer is looked at across both rows, the way
+    // an older record or a group-less master would leave it
+    const both = SAME_NAME.map((r) => ({ ...r, group: '' }));
+    const { saved } = renderApp(<NewPO />, { modules: { jss, prices: { A1: { price: 2 } }, customers: both, oab: oabModule({ lastSO: { y: '26', n: 766 } }) } });
+    await screen.findByText('New PO Entry');
+
+    await user.type(fieldByLabel(/PO Number/), 'PO-767');
+    await user.selectOptions(screen.getByLabelText('Customer'), 'Kova Agro');
+    const loc = screen.getByLabelText('Dispatch Location');
+    // both are offered, each legible by its warehouse, and they are DIFFERENT choices
+    expect([...loc.options].map((o) => o.textContent)).toEqual([
+      '— Select Location —', 'Dharapuram (DHARAPURAM)', 'Dharapuram (KOVAI OWN)',
+    ]);
+    const kovai = [...loc.options].find((o) => o.textContent.includes('KOVAI OWN')).value;
+    await user.selectOptions(loc, kovai);
+    expect(screen.getByText(/Warehouse: KOVAI OWN/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
+    const checks = screen.getAllByRole('checkbox');
+    await user.click(checks[checks.length - 1]);
+    await user.type(screen.getByRole('spinbutton'), '100');
+    await user.click(screen.getByRole('button', { name: /Review →/ }));
+    // the confirm step names the warehouse on the order line, so the desk can see
+    // WHICH "Dharapuram" this order is going to before it is created
+    const row = (await screen.findByText('26/767')).closest('tr');
+    expect(within(row).getByText('Dharapuram')).toBeInTheDocument();
+    expect(within(row).getByText(/KOVAI OWN/)).toBeInTheDocument();
+    expect(saved).toBeTruthy();
   });
 });
 

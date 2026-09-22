@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useData } from '../data.jsx';
+import { specFor } from '../lib/specs.js';
 import { masterApi, jssApi, bomApi } from '../api.js';
 import { bomUOM } from '../lib/bom.js';
 import { calcMetres, calcKg } from '../lib/calc.js';
@@ -77,7 +78,7 @@ export default function JssPlanningPanel() {
       setMSel(sel);
       setBaseQty(String(b.baseQty ?? 1));
       // Issues 1.0 #2: no stored base UOM yet → auto-pick it from the JSS's dispatch form.
-      const row = (specsRef.current || []).find((x) => String(x.spec || '').trim() === s);
+      const row = specFor(specsRef.current, s);
       setBaseUom(b.baseUom || (row && row.dispatchForm ? bomUOM(row.dispatchForm) : ''));
       setLines((b.items || []).map((it) => ({ departmentId: it.departmentId, itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '' })));
       setSetupMin(j.config?.setupMin != null ? String(j.config.setupMin) : '');
@@ -109,7 +110,8 @@ export default function JssPlanningPanel() {
   }
 
   // ── Issues 1.0 #1: the Dispatch Form comes FROM the JSS, not a manual pick ──
-  const specRow = useMemo(() => (Array.isArray(specs) ? specs : []).find((x) => String(x.spec || '').trim() === spec) || null, [specs, spec]);
+  // the row that speaks for this code (specs.js), not simply the first copy of it
+  const specRow = useMemo(() => specFor(specs, spec), [specs, spec]);
   const jssFormName = String(specRow?.dispatchForm || '').trim();
   const matchedForm = useMemo(
     () => (master.dispatchTypes || []).find((t) => String(t.name || '').trim().toLowerCase() === jssFormName.toLowerCase()) || null,
@@ -249,7 +251,7 @@ export default function JssPlanningPanel() {
     return list;
   }, [specs, customers, fGroup, fCust, fStatus, fSpec]);
   function openFromList(sp) {
-    const row = specs.find((x) => String(x.spec || '').trim() === sp);
+    const row = specFor(specs, sp);
     setSpecText(`${sp} — ${(row && (row.jobName || row.customer)) || ''}`);
     setSpec(sp);
   }

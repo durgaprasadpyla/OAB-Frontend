@@ -5,6 +5,7 @@ import { storesApi } from '../api.js';
 import { inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
 import { specGroup } from '../lib/master.js';
+import { specFor } from '../lib/specs.js';
 import { fgSpecsWithActivity, fgAvail, fgAgeingInfo, fgAddProduction, fgTodayISO } from '../lib/fg.js';
 
 const nfmt = (v) => Math.round(Number(v) || 0).toLocaleString('en-IN');
@@ -52,7 +53,7 @@ export default function FgValuePanel() {
     finally { setSaving(''); }
   }
 
-  const jssFor = (sp) => jss.find((j) => String(j.spec || '').trim() === String(sp).trim()) || {};
+  const jssFor = (sp) => specFor(jss, sp) || {};
 
   // Only specs with FG actually on hand. "Customer Or Group" is the buying group
   // when the customer has one, so a group's stock reads as one line of business.

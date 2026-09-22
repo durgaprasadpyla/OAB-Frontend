@@ -17,6 +17,8 @@
 // Storing a second copy would mean two numbers that could disagree, and the OAB is
 // the one that is true.
 
+import { specFor, specIsActive } from './specs.js';
+
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const s = (v) => String(v == null ? '' : v).trim();
 const key = (v) => s(v).toLowerCase();
@@ -68,11 +70,8 @@ export const blankProjection = (month) => ({
   group: '', subBrand: '', leadId: '', dispLoc: '', qty: '', marketer: '', note: '',
 });
 
-/** A JSS with no status at all is Active — the JSS Editor reads it that way too. */
-export function jssActive(j) {
-  const st = s(j && j.status) || 'Active';
-  return st.toLowerCase() === 'active';
-}
+/** A JSS with no status at all is Active — one rule, kept in specs.js. */
+export const jssActive = specIsActive;
 
 /** Rows out of the blob, newest first, with only the shape this module promises. */
 export function projectionList(projections) {
@@ -93,7 +92,7 @@ export function validateProjection(form, { jss = [], customers = [] } = {}) {
   if (out.source === 'customer') {
     out.spec = s(out.spec);
     if (!out.spec) throw new Error('Choose the JSS number this projection is for.');
-    const j = jss.find((x) => key(x.spec) === key(out.spec));
+    const j = specFor(jss, out.spec);
     if (!j) throw new Error(`JSS ${out.spec} is not in the spec master — add it in the JSS Editor first.`);
     // "only those JSS which are active": a new projection cannot be made against an
     // Inactive / Redundant / Sample spec. One saved earlier, whose spec was retired
@@ -256,7 +255,7 @@ export function groupOfCustomer(customer, customers) {
  * projection), falling back to what was stored and then to the Customer Master.
  */
 export function enrichProjection(r, { jss = [], customers = [] } = {}) {
-  const j = r.spec ? (jss.find((x) => key(x.spec) === key(r.spec)) || null) : null;
+  const j = r.spec ? specFor(jss, r.spec) : null;
   const customer = s((j && j.customer) || r.customer);
   const group = s((j && j.group) || r.group) || groupOfCustomer(customer, customers);
   const subBrand = s((j && j.subBrand) || r.subBrand);

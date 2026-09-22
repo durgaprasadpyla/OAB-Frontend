@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
+import { uniqueSpecs, specFor } from '../lib/specs.js';
 import { today, fmtDate, inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
 import { specGroup } from '../lib/master.js';
@@ -118,17 +119,10 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   // A JSS with no status at all is Active — the JSS Editor reads it that way too.
   const jssStatus = (j) => String((j && j.status) || 'Active').trim() || 'Active';
   const jssActive = (j) => jssStatus(j).toLowerCase() === 'active';
-  // Spec pool: unique specs (first occurrence per code). Active specs always; the
-  // inactive ones only behind the toggle, listed after the active ones so an
-  // active record wins when the same spec appears twice.
-  const allPool = useMemo(() => {
-    const seen = {}, out = [];
-    [...jss.filter(jssActive), ...jss.filter((j) => !jssActive(j))].forEach((j) => {
-      const sp = String((j && j.spec) || '').trim();
-      if (sp && !seen[sp]) { seen[sp] = 1; out.push(j); }
-    });
-    return out;
-  }, [jss]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Spec pool: one row per code — the row specs.js picks (an Active record wins
+  // when the same spec appears twice, which this screen has always assumed and
+  // every other screen now does too).
+  const allPool = useMemo(() => uniqueSpecs(jss), [jss]);
   const specPool = useMemo(
     () => (inclInactive ? allPool : allPool.filter(jssActive)),
     [allPool, inclInactive], // eslint-disable-line react-hooks/exhaustive-deps
@@ -155,7 +149,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     return pool.slice().sort((a, b) => String(a.spec).localeCompare(String(b.spec), undefined, { numeric: true }));
   }, [specPool, custFilter, groupFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const jssFor = (sp) => allPool.find((j) => String(j.spec || '').trim() === String(sp || '').trim()) || {};
+  const jssFor = (sp) => specFor(allPool, sp) || {};
   const selJss = spec ? jssFor(spec) : {};
   // Whether the spec's JSS is inactive: its FG can only ever be non-moving.
   const inactiveSpec = (sp) => { const j = jssFor(sp); return !!j.spec && !jssActive(j); };
