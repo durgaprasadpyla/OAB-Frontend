@@ -110,7 +110,9 @@ export function csaCompanyItem(sales, report) {
 
 /** Structure summary, e.g. "PET/MET PET/AF LDPE". */
 export function csaStructure(report) {
-  return [report.substrate1, report.substrate2, report.substrate3].filter(Boolean).join('/') || '—';
+  // 24.09 ¶8: a multi-substrate structure reads as its layers added together —
+  // "primary substrate + secondary substrate + third substrate".
+  return [report.substrate1, report.substrate2, report.substrate3].filter(Boolean).join(' + ') || '—';
 }
 
 const CSA_NUMERIC = [
@@ -119,8 +121,13 @@ const CSA_NUMERIC = [
 ];
 
 export const CSA_BLANK = {
+  // 24.09 ¶7: a direct CSA names a CUSTOMER or a LEAD, picked from the master —
+  // `party_kind` is which of the two, `company_name` the name itself.
+  party_kind: 'customer',
   company_name: '', product_desc: '', dispatch_type: '', responsible_person: '',
-  substrate1: '', substrate1_val: '', substrate2: '', substrate2_val: '', substrate3: '', substrate3_val: '',
+  substrate1: '', substrate1_val: '', substrate1_specialty: '',
+  substrate2: '', substrate2_val: '', substrate2_specialty: '',
+  substrate3: '', substrate3_val: '', substrate3_specialty: '',
   coating: '', glue_tape: '', printed: '', plant_comment_req: '',
   ...Object.fromEntries(CSA_NUMERIC.map((k) => [k, ''])),
 };
@@ -148,7 +155,12 @@ export function buildCsaReport(form, { sales, skuId = '', user = '', now = new D
     product_desc: direct ? s(form.product_desc) : null,
     dispatch_type: direct ? s(form.dispatch_type) : (sku ? sku.dispatch_type : null),
     responsible_person: direct ? s(form.responsible_person) : null,
+    party_kind: direct ? (s(form.party_kind) === 'lead' ? 'lead' : 'customer') : null,
     substrate1: s(form.substrate1), substrate2: s(form.substrate2), substrate3: s(form.substrate3),
+    // ¶6: the speciality chosen against each substrate, from the Item Master
+    substrate1_specialty: s(form.substrate1_specialty),
+    substrate2_specialty: s(form.substrate2_specialty),
+    substrate3_specialty: s(form.substrate3_specialty),
     substrate1_val: Number(form.substrate1_val) || 0, substrate1_unit: substrateUnit(sales, form.substrate1),
     substrate2_val: Number(form.substrate2_val) || 0, substrate2_unit: substrateUnit(sales, form.substrate2),
     substrate3_val: Number(form.substrate3_val) || 0, substrate3_unit: substrateUnit(sales, form.substrate3),

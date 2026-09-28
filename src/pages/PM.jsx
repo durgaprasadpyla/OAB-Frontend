@@ -1,10 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { balance, num } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import { dash, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import CsaPanel from '../components/CsaPanel.jsx';
+import PpcDashboard from './PpcDashboard.jsx';
+import DailyBoard from './DailyBoard.jsx';
+import { custGroupOf } from '../lib/master.js';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 import { OnHand } from './Stores.jsx';
 
@@ -25,6 +28,11 @@ export default function PM() {
   const { mods, save } = useData();
   const [q, setQ] = useState('');
   const [specFil, setSpecFil] = useState('');
+  // BOM calculations 24.09 §16: "In PM login, there should be filters on customer
+  // name, group name, and location on top."
+  const [groupFil, setGroupFil] = useState('');
+  const [custFil, setCustFil] = useState('');
+  const [locFil, setLocFil] = useState('');
   const [tab, setTab] = useState('print');
   const [edits, setEdits] = useState({});   // { [so]: {printDate?, printedKg?} }
   const [msg, setMsg] = useState(null);
@@ -59,6 +67,7 @@ export default function PM() {
           // SKU follows the current spec (j) — the row's stored jobName is only the copy
           // captured at SO creation, so a repointed spec self-corrects here too.
           sheet, so: r.so, spec: r.spec || '', customer: r.customer || '', sku: (j && j.jobName) || r.jobName || '',
+          group: custGroupOf(r.customer, mods.customers) || '',
           dispLoc: r.dispLoc || '', poQty: num(r.poQty), disp, bal,
           prodStatus: ps[r.so] || 'Ready', stage: r.stage || '',
           substrate: j ? (j.material || '') : '', filmWidth: j ? (j.filmWidth || '') : '',
@@ -71,18 +80,34 @@ export default function PM() {
       });
     });
     return out;
-  }, [mods.oab, jss, pmData, mods.prodStatus]);
+  }, [mods.oab, jss, pmData, mods.prodStatus, mods.customers]);
 
   // Distinct specs across all open rows, for the spec filter. (legacy pm-spec-fil)
   const specOptions = useMemo(() => [...new Set(rows.map((r) => r.spec).filter(Boolean))].sort(), [rows]);
+  // §16: group / customer / location, each narrowing the next so the lists stay short.
+  const groupOptions = useMemo(() => [...new Set(rows.map((r) => r.group).filter(Boolean))].sort(), [rows]);
+  const custOptions = useMemo(() => [...new Set(rows
+    .filter((r) => !groupFil || r.group === groupFil)
+    .map((r) => r.customer).filter(Boolean))].sort(), [rows, groupFil]);
+  const locOptions = useMemo(() => [...new Set(rows
+    .filter((r) => (!groupFil || r.group === groupFil) && (!custFil || r.customer === custFil))
+    .map((r) => r.dispLoc).filter(Boolean))].sort(), [rows, groupFil, custFil]);
 
-  // Spec filter + text search over SO / customer / spec / SKU / location.
+  // Every filter, plus the text search over SO / customer / spec / SKU / location.
   const filtered = useMemo(() => {
-    let list = specFil ? rows.filter((r) => String(r.spec || '') === specFil) : rows;
+    let list = rows;
+    if (groupFil) list = list.filter((r) => r.group === groupFil);
+    if (custFil) list = list.filter((r) => r.customer === custFil);
+    if (locFil) list = list.filter((r) => r.dispLoc === locFil);
+    if (specFil) list = list.filter((r) => String(r.spec || '') === specFil);
     const s = q.trim().toLowerCase();
     if (s) list = list.filter((r) => [r.so, r.customer, r.spec, r.sku, r.dispLoc].some((v) => String(v || '').toLowerCase().includes(s)));
     return list;
-  }, [rows, q, specFil]);
+  }, [rows, q, specFil, groupFil, custFil, locFil]);
+  const filterOn = !!(groupFil || custFil || locFil || specFil || q.trim());
+  // a filter that no longer has its value in the narrowed list clears itself
+  useEffect(() => { if (custFil && !custOptions.includes(custFil)) setCustFil(''); }, [custOptions, custFil]);
+  useEffect(() => { if (locFil && !locOptions.includes(locFil)) setLocFil(''); }, [locOptions, locFil]);
 
   const dirty = Object.keys(edits).length > 0;
   const setEdit = (so, patch) => setEdits((e) => ({ ...e, [so]: { ...e[so], ...patch } }));
@@ -108,17 +133,41 @@ export default function PM() {
     finally { setBusy(false); }
   }
 
-  // Export Excel — header + all rows (unfiltered), from saved values.
+  // §17: "once I select a particular spec number here and export it to Excel, it
+  // should actually export the filtered data whereas now it is exporting everything."
   function exportExcel() {
-    if (!rows.length) { flash('No data to export.', 'y'); return; }
+    const out = filtered;
+    if (!out.length) { flash('Nothing to export — no rows match the filters.', 'y'); return; }
     const header = ['SO', 'Sheet', 'Spec', 'Customer', 'SKU', 'Disp Loc', 'PO Qty', 'Dispatched', 'Balance',
       'Prod Status', 'Stage', 'Substrate', 'Film Width', 'Thickness', 'GSM', 'Pouch Width', 'Pouch Height',
       'Total Kg', 'Total Mt', 'Print Date', 'Printed Kg', 'Printed Mt', 'Bal Kg', 'Bal Mt'];
-    const body = rows.map((r) => [r.so, r.sheet, r.spec, r.customer, r.sku, r.dispLoc, r.poQty, r.disp, r.bal,
+    const body = out.map((r) => [r.so, r.sheet, r.spec, r.customer, r.sku, r.dispLoc, r.poQty, r.disp, r.bal,
       r.prodStatus, r.stage, r.substrate, r.filmWidth, r.thickness, r.gsm, r.pouchW, r.pouchH,
       Math.round(r.totalKg), Math.round(r.totalMt), r.printDate, r.printedKg, Math.round(r.printedMt),
       Math.round(r.balKg), Math.round(r.balMt)]);
     exportAOA([header, ...body], `Bloomflex_Printing_Progress_${today()}.xlsx`, 'Printing Progress');
+    flash(`⬇ ${out.length} row(s) exported${filterOn ? ' — the filtered rows' : ''}.`);
+  }
+
+  // §10: the PPC dashboard and the daily board, read from the plant login.
+  if (tab === 'dash') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">Production</div>
+        <PmTabs tab={tab} setTab={setTab} />
+        <PpcDashboard embedded />
+      </div>
+    );
+  }
+
+  if (tab === 'today') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">Production — Today&rsquo;s Plan</div>
+        <PmTabs tab={tab} setTab={setTab} />
+        <DailyBoard embedded />
+      </div>
+    );
   }
 
   if (tab === 'csa') {
@@ -163,6 +212,18 @@ export default function PM() {
         <select value={specFil} onChange={(e) => setSpecFil(e.target.value)} aria-label="Filter by spec">
           <option value="">All Specs</option>
           {specOptions.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
+        </select>
+        <select value={groupFil} onChange={(e) => { setGroupFil(e.target.value); setCustFil(''); }} aria-label="Filter group">
+          <option value="">All groups</option>
+          {groupOptions.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={custFil} onChange={(e) => setCustFil(e.target.value)} aria-label="Filter customer">
+          <option value="">All customers</option>
+          {custOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={locFil} onChange={(e) => setLocFil(e.target.value)} aria-label="Filter location">
+          <option value="">All locations</option>
+          {locOptions.map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
         <input placeholder="Search SO / customer / spec / SKU / location…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 260 }} />
         <span style={{ color: 'var(--i3)', fontSize: 12 }}>{filtered.length} open SO{filtered.length === 1 ? '' : 's'}</span>
@@ -242,8 +303,14 @@ export default function PM() {
   );
 }
 
+// §10: "Dashboard and Daily board are the only items which are missing in the PM
+// login, which is present in the PPC login. Include the PPC login dashboard in the
+// PM login and also include the daily board in the PM login. Let us change the label
+// name for the daily board to 'Today's Plan'."
 const PM_TABS = [
+  { k: 'dash', label: '📊 Dashboard' },
   { k: 'print', label: '🖨 Production Tracker' },
+  { k: 'today', label: '📋 Today\u2019s Plan' },
   { k: 'csa', label: '🔬 CSA — plant comments' },
   { k: 'material', label: '🧱 Raw Material' },
   { k: 'onhand', label: '📦 Raw Material on Hand' },

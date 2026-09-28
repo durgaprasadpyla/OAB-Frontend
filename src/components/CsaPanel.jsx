@@ -5,6 +5,11 @@ import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
 import { ddList } from '../lib/dropdowns.js';
+import { materialOptions, specialtyOptions } from '../lib/jssSpec.js';
+import { useApi } from '../lib/useApi.js';
+
+/** ¶6: Substrate 1 / 2 / 3 read as what they are. */
+const SUBSTRATE_LABELS = ['Primary', 'Secondary', 'Third'];
 import CsaRequestCard from './CsaRequestCard.jsx';
 import {
   CSA_BLANK, DISPATCH_TYPES, YES_NO,
@@ -33,6 +38,10 @@ function QcCsa() {
   const { user } = useAuth();
   const sales = mods.sales || {};
   const patch = patcher(save);
+  // The Item Master backs the substrate dropdowns (¶5) — the same list the JSS is
+  // built from, so a CSA and the spec it becomes name the same film.
+  const itemsApi = useApi('/api/master/items');
+  const items = useMemo(() => (Array.isArray(itemsApi.data) ? itemsApi.data : []), [itemsApi.data]);
 
   const [draft, setDraft] = useState(null);   // { skuId, form } — skuId '' = direct
   const [viewing, setViewing] = useState(null);   // a report shown read-only
@@ -109,6 +118,7 @@ function QcCsa() {
     return (
       <CsaForm
         draft={draft} setDraft={setDraft} sales={sales} msg={msg} busy={busy}
+        customers={mods.customers || []} items={items}
         onCancel={() => { setDraft(null); setMsg(null); }} onSubmit={submit}
       />
     );
@@ -132,9 +142,11 @@ function QcCsa() {
         </div>
         <div className="tw sy" style={{ maxHeight: 300 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 160 }}>Customer</th><th>SKU</th><th>Dispatch</th><th>Despatch location</th><th style={{ textAlign: 'right' }}>Tentative qty</th><th style={{ textAlign: 'right' }}>Target ₹</th><th>Sample date</th><th style={{ textAlign: 'center' }}>Waiting</th><th style={{ width: 150 }}></th></tr></thead>
+            {/* ¶8-¶9: "Job name" everywhere, "Dispatch location" spelt one way, and
+                the target price is Sales' figure — not something QC works from. */}
+            <thead><tr><th style={{ minWidth: 160 }}>Customer or lead</th><th>Job name</th><th>Dispatch</th><th>Dispatch location</th><th style={{ textAlign: 'right' }}>Tentative qty</th><th>Sample date</th><th style={{ textAlign: 'center' }}>Waiting</th><th style={{ width: 150 }}></th></tr></thead>
             <tbody>
-              {pending.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No samples pending from Sales</td></tr>
+              {pending.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No samples pending from Sales</td></tr>
                 : pending.map((sk) => {
                   const d = csaSampleDate(sk);
                   return (
@@ -144,7 +156,6 @@ function QcCsa() {
                       <td style={{ fontSize: 11 }}>{sk.dispatch_form || sk.dispatch_type || '—'}</td>
                       <td style={{ fontSize: 11 }}>{(sk.csa_request || {}).despatch_location || '—'}</td>
                       <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? Number(sk.csa_request.tentative_qty || 0).toLocaleString('en-IN') : '—'}</td>
-                      <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? Number(sk.csa_request.target_price || 0).toLocaleString('en-IN') : '—'}</td>
                       <td style={{ fontSize: 11 }}>{d ? fmtDate(String(d).slice(0, 10)) : '—'}</td>
                       <td style={{ textAlign: 'center' }}><Age days={csaDaysSince(d)} /></td>
                       <td style={{ textAlign: 'center' }}>
@@ -179,7 +190,7 @@ function QcCsa() {
         </div>
         <div className="tw sy" style={{ maxHeight: 340 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 150 }}>Customer</th><th>Item</th><th>Structure</th><th>Source</th><th>Raised</th><th>Status</th><th>Plant comments</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+            <thead><tr><th style={{ minWidth: 150 }}>Customer or lead</th><th>Job name</th><th>Structure</th><th>Source</th><th>Raised</th><th>Status</th><th>Plant comments</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
               {reports.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{q ? 'No matching reports' : 'No reports yet'}</td></tr>
                 : reports.map((r) => {
@@ -215,7 +226,11 @@ function QcCsa() {
 function CsaReportView({ report: r, sales, onClose }) {
   const ci = csaCompanyItem(sales, r);
   const rows = [
-    ['Substrate 1', r.substrate1], ['Substrate 2', r.substrate2], ['Substrate 3', r.substrate3],
+    // ¶6: the same names the form uses, with the speciality where one was recorded
+    ...[1, 2, 3].map((n) => [
+      `${SUBSTRATE_LABELS[n - 1]} Substrate`,
+      [r[`substrate${n}`], r[`substrate${n}_specialty`]].filter(Boolean).join(' · '),
+    ]),
     ['Ink GSM', r.ink_gsm], ['Adhesive GSM', r.adhesive_gsm], ['Coating', r.coating],
     ['Film Width', r.film_width ? r.film_width + 'mm' : ''], ['Pouch Height', r.pouch_height ? r.pouch_height + 'mm' : ''],
     ['Pouch Width', r.pouch_width ? r.pouch_width + 'mm' : ''], ['Seal Width', r.seal_width ? r.seal_width + 'mm' : ''],
@@ -254,13 +269,30 @@ function CsaReportView({ report: r, sales, onClose }) {
 }
 
 /* ─────────────────────────── The CSA form ─────────────────────────── */
-function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit }) {
+function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, customers = [], items = [] }) {
   const direct = !draft.skuId;
   const f = draft.form;
   const set = (k, v) => setDraft((d) => ({ ...d, form: { ...d.form, [k]: v } }));
-  const subs = substrateList(sales);
   const sku = (sales.skus || []).find((x) => x.id === draft.skuId);
   const lead = sku && (sales.leads || []).find((l) => l.id === sku.lead_id);
+
+  // Some More Issues 24.09 ¶5: "while they are selecting substrates, again the
+  // drop-downs should be from the item master sub-material type of all the materials
+  // under film or paper" — the same list the JSS is built from, so a CSA and the spec
+  // it becomes describe the same film. The saved substrate list stays as a fallback
+  // for a site whose Item Master has no film in it yet.
+  const fromMaster = materialOptions(items);
+  const subs = fromMaster.length ? fromMaster.map((name) => ({ name })) : substrateList(sales);
+
+  // ¶7: "let us not give the QC the ability to enter a company name, let us just have
+  // radio button selection for customer or lead — drop-down selections similar to the
+  // JSS creation page."
+  const party = f.party_kind === 'lead' ? 'lead' : 'customer';
+  const custNames = [...new Set((customers || []).map((c) => String((c && c.customer) || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const leadNames = [...new Set((sales.leads || []).map((l) => String((l && (l.client_name || l.company_name)) || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const partyOptions = party === 'lead' ? leadNames : custNames;
 
   return (
     <div className="card">
@@ -275,28 +307,62 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit }) {
       {sku && <CsaRequestCard sku={sku} />}
 
       {direct && (
-        <div className="g4">
-          <T label="Company *" v={f.company_name} on={(v) => set('company_name', v)} />
-          <T label="Product description *" v={f.product_desc} on={(v) => set('product_desc', v)} />
-          <S label="Dispatch type" v={f.dispatch_type} on={(v) => set('dispatch_type', v)} opts={ddList(sales, 'despatch')} />
-          <S label="Responsible person *" v={f.responsible_person} on={(v) => set('responsible_person', v)} opts={ddList(sales, 'responsible')} />
-        </div>
+        <>
+          <div className="fbar" style={{ gap: 14, margin: '4px 0' }}>
+            <span style={{ fontSize: 11, fontWeight: 700 }}>This CSA is for</span>
+            {[['customer', 'A customer'], ['lead', 'A lead']].map(([v, label]) => (
+              <label key={v} className="cb" style={{ fontSize: 12 }}>
+                <input type="radio" name="csa-party-kind" checked={party === v} aria-label={label}
+                  onChange={() => setDraft((d) => ({ ...d, form: { ...d.form, party_kind: v, company_name: '' } }))} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="g4">
+            <S label={party === 'lead' ? 'Lead *' : 'Customer *'} v={f.company_name}
+              on={(v) => set('company_name', v)} opts={partyOptions} />
+            {/* ¶8: "Only the text field can be the Job name. Let us have the
+                nomenclature the same all over the tool." */}
+            <T label="Job name *" v={f.product_desc} on={(v) => set('product_desc', v)} />
+            <S label="Dispatch type" v={f.dispatch_type} on={(v) => set('dispatch_type', v)} opts={ddList(sales, 'despatch')} />
+            <S label="Responsible person *" v={f.responsible_person} on={(v) => set('responsible_person', v)} opts={ddList(sales, 'responsible')} />
+          </div>
+        </>
       )}
 
+      {/* ¶6: Primary / Secondary / Third Substrate, each with the speciality the
+          Item Master records for it, and the micron under its own plain label. */}
       <div className="ctitle" style={{ marginTop: 12 }}>Structure</div>
-      {[1, 2, 3].map((n) => (
-        <div className="g3" key={n}>
-          <div className="fg">
-            <label>Substrate {n}</label>
-            <select value={f[`substrate${n}`]} aria-label={`Substrate ${n}`} onChange={(e) => set(`substrate${n}`, e.target.value)}>
-              <option value="">—</option>
-              {subs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
-            </select>
+      {[1, 2, 3].map((n) => {
+        const label = SUBSTRATE_LABELS[n - 1];
+        const chosen = f[`substrate${n}`];
+        const specialties = specialtyOptions(items, chosen);
+        const unit = fromMaster.length ? 'Micron' : substrateUnit(sales, chosen);
+        return (
+          <div className="g4" key={n}>
+            <div className="fg">
+              <label>{label} Substrate</label>
+              <select value={chosen} aria-label={`${label} Substrate`}
+                onChange={(e) => { set(`substrate${n}`, e.target.value); set(`substrate${n}_specialty`, ''); }}>
+                <option value="">—</option>
+                {subs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
+                {chosen && !subs.some((x) => x.name === chosen) && <option value={chosen}>{chosen}</option>}
+              </select>
+            </div>
+            <div className="fg">
+              <label>{label} Speciality</label>
+              <select value={f[`substrate${n}_specialty`] || ''} aria-label={`${label} Speciality`}
+                disabled={!chosen || specialties.length === 0}
+                onChange={(e) => set(`substrate${n}_specialty`, e.target.value)}>
+                <option value="">{chosen && specialties.length === 0 ? '— none recorded —' : '—'}</option>
+                {specialties.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+            </div>
+            <N label={unit} v={f[`substrate${n}_val`]} on={(v) => set(`substrate${n}_val`, v)} aria={`${label} Substrate ${unit}`} />
+            <div />
           </div>
-          <N label={`Value (${substrateUnit(sales, f[`substrate${n}`])})`} v={f[`substrate${n}_val`]} on={(v) => set(`substrate${n}_val`, v)} aria={`Substrate ${n} value`} />
-          <div />
-        </div>
-      ))}
+        );
+      })}
 
       <div className="ctitle" style={{ marginTop: 12 }}>Measurements</div>
       <div className="g4">
@@ -388,7 +454,7 @@ function PlantCsa() {
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         <div className="tw sy" style={{ maxHeight: 400 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 150 }}>Customer</th><th>Item</th><th>Structure</th><th>Raised</th><th style={{ width: 120, textAlign: 'center' }}></th></tr></thead>
+            <thead><tr><th style={{ minWidth: 150 }}>Customer or lead</th><th>Job name</th><th>Structure</th><th>Raised</th><th style={{ width: 120, textAlign: 'center' }}></th></tr></thead>
             <tbody>
               {pending.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>Nothing pending</td></tr>
                 : pending.map((r) => (
@@ -408,7 +474,7 @@ function PlantCsa() {
         <div className="ctitle">Answered <span className="tag tgr">{done.length}</span></div>
         <div className="tw sy" style={{ maxHeight: 320 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 150 }}>Customer</th><th>Item</th><th>Structure</th><th>Raised</th><th style={{ width: 120, textAlign: 'center' }}>Plate cost</th></tr></thead>
+            <thead><tr><th style={{ minWidth: 150 }}>Customer or lead</th><th>Job name</th><th>Structure</th><th>Raised</th><th style={{ width: 120, textAlign: 'center' }}>Plate cost</th></tr></thead>
             <tbody>
               {done.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>Nothing answered yet</td></tr>
                 : done.map((r) => (

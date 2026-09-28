@@ -146,13 +146,20 @@ describe('QC — the JSS from the accepted CSA', () => {
       skus: [sku({ quotation_accepted: true, structure: 'PET 12 / LDPE 60', csa_request: { despatch_location: 'Pune', details: { pouch_width_mm: 150, pouch_height_mm: 220 } } })],
       qc_reports: [{ id: 'c1', sku_id: 'S1', substrate1: 'PET', substrate1_val: 12, gsm: 80 }],
     });
-    const { saved } = renderApp(<QC />, { modules: { sales, customers, jss: [] }, role: 'qc', user: 'qc1' });
+    // the film the CSA names has to exist in the Item Master for QC to pick it
+    const masterItems = [{ code: 'BLM1', name: '600 MM', materialType: 'FILM', subGroup: 'PET', specialtyName: '', microns: '12', widthMm: 600, uom: 'Kg' }];
+    const { saved } = renderApp(<QC />, { modules: { sales, customers, jss: [], masterItems }, role: 'qc', user: 'qc1' });
     const panel = await screen.findByLabelText('CSAs awaiting a JSS');
     await userEvent.click(within(panel).getByLabelText('JSS from CSA 200g Pouch'));
     await waitFor(() => expect(screen.getByLabelText('Job Name')).toHaveValue('200g Pouch'));
-    expect(screen.getByLabelText('Material')).toHaveValue('PET 12 / LDPE 60');
     expect(screen.getByLabelText('Customer')).toHaveValue('Beta Foods');
     expect(screen.getByLabelText('Group')).toHaveValue('BETA GROUP');
+    // The CSA's structure is free text and the Item Master has no such material, so
+    // the layer is left for QC to choose rather than written in as invented text.
+    expect(screen.getByLabelText('Primary Material')).toHaveValue('');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Job Type'), 'SF Pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Primary Material'), 'PET');
     await userEvent.click(screen.getByRole('button', { name: 'Add Spec' }));
     await waitFor(() => expect(saved.some((s) => s.key === 'jss')).toBe(true));
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));

@@ -110,7 +110,8 @@ describe('csaCompanyItem / csaStructure', () => {
       .toEqual({ company: 'Walk-in Ltd', item: 'Sample bag' });
   });
   it('summarises the structure, dashing when empty', () => {
-    expect(csaStructure(SALES.qc_reports[0])).toBe('PET/AF LDPE');
+    // 24.09 ¶8: a multi-substrate structure reads as its layers added together
+    expect(csaStructure(SALES.qc_reports[0])).toBe('PET + AF LDPE');
     expect(csaStructure({})).toBe('—');
   });
 });
@@ -203,8 +204,9 @@ describe('QC — CSA tab', () => {
   it('saves a report and marks the SKU as analysed', async () => {
     const { saved } = await openCsa();
     await userEvent.click(await screen.findByLabelText('Add CSA report for Pouch A'));
-    await userEvent.selectOptions(screen.getByLabelText('Substrate 1'), 'PET');
-    await userEvent.type(screen.getByLabelText('Substrate 1 value'), '12');
+    // ¶6: Substrate 1 / 2 / 3 now read Primary / Secondary / Third
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'PET');
+    await userEvent.type(screen.getByLabelText('Primary Substrate Micron'), '12');
     await userEvent.click(screen.getByText(/Save CSA report/));
 
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
@@ -223,11 +225,15 @@ describe('QC — CSA tab', () => {
     expect(saved.some((s) => s.key === 'sales')).toBe(false);
   });
 
-  it('shows the substrate unit for the chosen material', async () => {
+  it('shows the substrate unit for the chosen material, under its own plain label', async () => {
     await openCsa();
     await userEvent.click(await screen.findByLabelText('Add CSA report for Pouch A'));
-    await userEvent.selectOptions(screen.getByLabelText('Substrate 1'), 'Paper');
-    expect(screen.getByText('Value (GSM)')).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'Paper');
+    // ¶6: "The value is written against the label which is not needed - let us just
+    // have microns." With no Item Master film on file the saved substrate list still
+    // decides the unit, and it is now the label itself.
+    expect(screen.getByLabelText('Primary Substrate GSM')).toBeInTheDocument();
+    expect(screen.queryByText('Value (GSM)')).toBeNull();
   });
 });
 
@@ -241,7 +247,7 @@ describe('PM — CSA tab', () => {
   it('lists reports awaiting a plant comment', async () => {
     await openCsa();
     await waitFor(() => expect(screen.getByText('Acme Foods')).toBeInTheDocument());
-    expect(screen.getByText('PET/AF LDPE')).toBeInTheDocument();
+    expect(screen.getByText('PET + AF LDPE')).toBeInTheDocument();
   });
 
   it('records comments and plate cost back to the report', async () => {

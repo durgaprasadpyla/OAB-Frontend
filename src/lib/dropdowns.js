@@ -12,6 +12,7 @@
 
 import { REP_CATEGORIES, REP_PAYTYPES, REP_STATUSES } from './sales.js';
 import { SUBSTRATE_DEFAULTS, QC_RESPONSIBLE } from './csa.js';
+import { JOB_TYPE_DEFAULTS } from './jssSpec.js';
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 
@@ -38,6 +39,15 @@ export const DROPDOWN_DEFS = [
   // in the dashboard under drop-down selections … with respect to the department".
   // Backed by hr_designation (per department) — the HR login only picks from it.
   { key: 'hrDesignations', label: 'Designations & HR-only departments', where: 'HR — Employee details', type: 'list', master: 'designation' },
+  // JSS+QC 24.09: "the job type is a text field. I want it to be a dropdown field and
+  // I want the dropdown options to be given from the super admin login dashboard
+  // drop-down selections page". A type named "SF …" is Stay Fresh work and its sale
+  // orders land on the Stay Fresh OAB; every other type goes to Others.
+  // It is the SUPER ADMIN who maintains this one ("the dropdown options to be given
+  // from the super admin login dashboard drop-down selections page"), so it is not on
+  // the Sales Admin's copy of this screen — `superadminOnly` says so without making it
+  // a normalized master, since the list lives in the sales blob like its neighbours.
+  { key: 'jobTypes', label: 'JSS Job Types', where: 'QC — Add JSS Spec · JSS Editor', type: 'list', superadminOnly: true },
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.
@@ -64,6 +74,7 @@ export const DROPDOWN_DEFS = [
 export const UOM_DEFAULTS = ['Kg', 'Lt', 'Mtr', "No's"];
 
 export const DD_DEFAULTS = {
+  jobTypes: JOB_TYPE_DEFAULTS,
   categories: REP_CATEGORIES,
   despatch: ['Roll', 'Label', 'Shrink Sleeve', 'Pouch', 'Bulk Bags', 'Others'],
   paytypes: REP_PAYTYPES,

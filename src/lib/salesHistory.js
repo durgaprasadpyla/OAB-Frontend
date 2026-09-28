@@ -9,6 +9,7 @@ import { getPM } from './pricing.js';
 import { custGroupOf, custGroups } from './master.js';
 import { kamLeadFor } from './kam.js';
 import { repName } from './sales.js';
+import { isStayFreshJobType } from './jssSpec.js';
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const norm = (v) => String(v || '').trim().toLowerCase();
@@ -37,11 +38,14 @@ export function daysIn(p) {
   return new Date(y, m, 0).getDate();
 }
 
-/** Stay Fresh or not, from the JSS job type as the OAB decides its sheet (jobType === 'StayFresh' → SF). */
+/**
+ * Stay Fresh or not, from the JSS job type — decided by the SAME rule the OAB uses
+ * to pick its sheet (jssSpec.isStayFreshJobType), so the Stay Fresh sale report and
+ * the Stay Fresh OAB can never disagree about what counts.
+ */
 export function segmentOf(jobType) {
-  const t = norm(jobType).replace(/[^a-z]/g, '');
-  if (!t) return 'unknown';
-  return t === 'stayfresh' ? 'stayfresh' : 'domestic';
+  if (!norm(jobType)) return 'unknown';
+  return isStayFreshJobType(jobType) ? 'stayfresh' : 'domestic';
 }
 
 /**

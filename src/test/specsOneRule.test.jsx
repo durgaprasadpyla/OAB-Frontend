@@ -84,7 +84,12 @@ describe('which row IS a spec code', () => {
 const oab = oabModule({ SF: [
   { so: '26/767', spec: 'A1404', customer: 'Just Coco', jobName: 'Coconut water 200 ml', dispLoc: 'Dharapuram', dispatchForm: 'Label', poQty: 1000, invDisp: 0, manDisp: 0, fg: 0, closed: false, poDate: '2026-09-21', poNum: 'PO-767' },
 ] });
-const seed = { jss: BOTH, oab, customers: [{ customer: 'Just Coco', group: '', dispatchLoc: 'Dharapuram', warehouseName: 'KOVAI OWN' }], prices: {}, sales: {} };
+// the JSS form is Item-Master driven now, so the film both rows name has to be in it
+const masterItems = [
+  { code: 'BLM1', name: '600 MM', materialType: 'FILM', subGroup: 'BOPP', specialtyName: 'PLAIN', microns: '50', widthMm: 600, uom: 'Kg' },
+  { code: 'BLM2', name: '600 MM', materialType: 'FILM', subGroup: 'CC PET', specialtyName: '', microns: '12', widthMm: 600, uom: 'Kg' },
+];
+const seed = { jss: BOTH, oab, customers: [{ customer: 'Just Coco', group: '', dispatchLoc: 'Dharapuram', warehouseName: 'KOVAI OWN' }], prices: {}, sales: {}, masterItems };
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -124,8 +129,10 @@ describe('the JSS editor edits a row the way QC creates one', () => {
     // the form carries that row, in the same guided fields QC uses
     expect(screen.getByLabelText('Spec No.')).toHaveValue('A1404');
     expect(screen.getByLabelText('Dispatch Form')).toHaveValue('Shrink Sleeve');
-    expect(screen.getByLabelText('Material')).toHaveValue('CC PET + LDPE');
     expect(screen.getByLabelText('Status')).toHaveValue('Active');
+    // the composed material opens as the PRIMARY LAYER, so it can be re-picked from
+    // the Item Master rather than retyped
+    expect(screen.getByLabelText('Primary Material')).toHaveValue('CC PET');
 
     // retire it, save, and the whole master is written with that row changed
     await user.selectOptions(screen.getByLabelText('Status'), 'Inactive');
@@ -133,7 +140,7 @@ describe('the JSS editor edits a row the way QC creates one', () => {
     await waitFor(() => expect(saved.some((s) => s.id === 2)).toBe(true));
     const written = saved.filter((s) => s.id === 2).at(-1).data;
     expect(written).toHaveLength(2);
-    expect(written[1]).toMatchObject({ spec: 'A1404', dispatchForm: 'Shrink Sleeve', status: 'Inactive' });
+    expect(written[1]).toMatchObject({ spec: 'A1404', dispatchForm: 'Shrink Sleeve', status: 'Inactive', material: 'CC PET' });
     expect(written[0]).toMatchObject({ dispatchForm: 'Label', status: 'Active' });   // the other row is untouched
   });
 

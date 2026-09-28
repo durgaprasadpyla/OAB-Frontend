@@ -466,6 +466,10 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
     // Production-planning masters + stock/notifications default to empty lists, so a page
     // that reads them on mount (MasterData — now embedded in the Super Admin Dashboard, §6)
     // renders cleanly without every test having to stub them.
+    // The Item Master backs every JSS material / speciality / micron / film-width
+    // dropdown now, so a test can seed it with `modules.masterItems` and the spec
+    // form offers exactly those. Anything else under /api/master/ stays empty.
+    if (u.includes('/api/master/items')) return res(200, modules.masterItems || []);
     if (u.includes('/api/master/')) return res(200, []);
     if (u.includes('/api/stock/alerts')) return res(200, []);
     if (u.includes('/api/notifications')) return res(200, []);

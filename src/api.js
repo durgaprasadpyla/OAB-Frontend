@@ -399,6 +399,9 @@ export const storesApi = {
   rmPrices: () => api('/api/stores/rm-prices'),
   setItemPrice: (itemId, price) => api('/api/stores/items/' + encodeURIComponent(itemId) + '/price', { method: 'PUT', body: { price } }),
   allocations: (so) => api('/api/stores/allocations' + (so ? '?so=' + encodeURIComponent(so) : '')),
+  // 24.09: close an issue line the material is never coming back from, so the return
+  // picker stops offering it (and re-open it when the wrong one was closed).
+  closeIssueLine: (txnId, closed = true) => api('/api/stores/issue-lines/' + encodeURIComponent(txnId) + '/close?closed=' + (closed ? 'true' : 'false'), { method: 'POST' }),
   allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
   releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),
   // Issues 6: a sale order's route and BOM, read through its JSS — what the

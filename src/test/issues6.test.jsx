@@ -68,14 +68,16 @@ async function mountStores(tab) {
 /* ───────── §2 withdrawn items ───────── */
 
 describe('Stores — an item deleted from the Item Master', () => {
-  it('is off the board, listed as withdrawn, and the stores desk is told to ask the Super Admin', async () => {
+  // BOM calculations 24.09 §18: "In the Raw Material on Hand tab in the PM login and
+  // in the Stores login, I do not want this warning to be there. Because the material
+  // was already allocated to the other item code." Neither desk can act on it — only
+  // the Super Admin can move that stock — so the notice now appears only there.
+  it('is off the board, and the stores desk is no longer shown a warning it cannot act on', async () => {
     await mountStores();
-    const strip = await screen.findByLabelText('Withdrawn items holding stock');
-    expect(within(strip).getByText('BLM360')).toBeInTheDocument();
-    expect(within(strip).getByText(/146\.5/)).toBeInTheDocument();
-    expect(within(strip).getByText(/Ask the Super Admin to move that stock/)).toBeInTheDocument();
+    await screen.findByText('Material on hand');
+    expect(screen.queryByLabelText('Withdrawn items holding stock')).toBeNull();
     expect(screen.queryByLabelText('Move BLM360 stock onto')).toBeNull();
-    // not on the board itself
+    // and it is not on the board itself either
     const board = screen.getByText('Material on hand').closest('.card');
     expect(within(board).queryByText('BLM360 (dup)')).toBeNull();
   });

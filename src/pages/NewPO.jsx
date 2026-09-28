@@ -7,6 +7,7 @@ import { today, fmtDate, dash, rupees } from '../lib/format.js';
 import { getPM, getUOM } from '../lib/pricing.js';
 import { getCustLocations, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
 import { uniqueSpecs } from '../lib/specs.js';
+import { isStayFreshJobType } from '../lib/jssSpec.js';
 import { fgAvail, fgAddAllocation } from '../lib/fg.js';
 import FgAllocModal from '../components/FgAllocModal.jsx';
 
@@ -473,7 +474,7 @@ export default function NewPO() {
                       <td><span className="so-pill">{r.so}</span></td>
                       <td><span className="tag tb">{r.spec}</span></td>
                       <td style={{ fontSize: 11 }}>{r.jobName}</td>
-                      <td><span className={'tag ' + (r.jobType === 'StayFresh' ? 'tg' : 'tgr')}>{r.jobType}</span></td>
+                      <td><span className={'tag ' + (isStayFreshJobType(r.jobType) ? 'tg' : 'tgr')}>{r.jobType}</span></td>
                       <td style={{ fontSize: 11 }}>{r.customer}</td>
                       <td style={{ fontSize: 11 }}>
                         {r.dispLoc}

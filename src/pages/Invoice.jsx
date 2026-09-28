@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react';
 import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
 import { specFor } from '../lib/specs.js';
+import { sheetForJobType } from '../lib/jssSpec.js';
 import { getPM } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
@@ -126,7 +127,7 @@ export default function Invoice() {
       if (qty <= 0) return alert('Enter qty > 0 for: ' + (r.jobName || r.spec));
       if (qty > b) return alert(`Invoice qty (${qty.toLocaleString('en-IN')}) exceeds available balance (${b.toLocaleString('en-IN')}) for:\n${r.jobName || r.spec}`);
       out.push({
-        key: r.jobType === 'StayFresh' ? 'SF' : 'OT', so: r.so, spec: r.spec, jobName: r.jobName,
+        key: sheetForJobType(r.jobType), so: r.so, spec: r.spec, jobName: r.jobName,
         qty, rate, fgToUse, lineTotal: qty * rate, dispatchForm: r.dispatchForm || '',
         // The printed sheet shows the PO date and falls back to the dispatch location
         // for a missing Ship To, so both travel with the line. (renderInvoiceDoc)

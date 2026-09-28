@@ -139,22 +139,33 @@ describe('Stores — MSL from three months of consumption', () => {
 });
 
 describe('PLAN login — the planner assigns material, FIFO', () => {
-  it('offers free rolls oldest-first, assigns one, and can release it', async () => {
+  // BOM calculations 24.09 §3: the panel is the ORDER'S BILL OF MATERIALS now — the
+  // department, the BOM item and the quantity that order needs, with the rolls of
+  // that item beneath it. planMaterial.test.jsx covers that whole screen; what is
+  // still unique here is the escape hatch underneath it, which keeps the old
+  // behaviour for material the BOM does not name — every free roll, oldest first.
+  it('lets the planner assign a roll the BOM does not name, oldest first, and release it', async () => {
     const user = userEvent.setup();
-    render(<MaterialAssignPanel so="26/910" spec="A1" material="BOPP" />);
+    render(
+      <MemoryRouter><AuthProvider><DataProvider>
+        <MaterialAssignPanel so="26/910" spec="A1" material="BOPP" soQty={1000} />
+      </DataProvider></AuthProvider></MemoryRouter>,
+    );
 
-    const sel = await screen.findByLabelText('Free rolls for 26/910');
+    // A1 has no BOM in this fixture, so the panel says so instead of showing an
+    // empty picker — and the escape hatch is still there.
+    expect(await screen.findByText(/No BOM saved for A1/)).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Assign something not on the BOM for 26/910'));
+
+    const sel = await screen.findByLabelText('Any free roll for 26/910');
     const opts = [...sel.querySelectorAll('option')].map((o) => o.textContent);
     expect(opts[1]).toContain('BLMU-OLD');     // the older receipt first…
     expect(opts[1]).toContain('①');            // …flagged as the FIFO pick
     expect(opts[2]).toContain('BLMU-NEW');
 
-    // the list is narrowed to the spec's own material by default ("especially the film")
-    expect(calls.some((c) => c.u.includes('/api/stores/available') && c.u.includes('material=BOPP'))).toBe(true);
-
     fireEvent.change(sel, { target: { value: '11' } });
-    fireEvent.change(screen.getByLabelText('Quantity to assign to 26/910'), { target: { value: '300' } });
-    await user.click(screen.getByRole('button', { name: 'Assign material' }));
+    fireEvent.change(screen.getByLabelText('Quantity of any roll for 26/910'), { target: { value: '300' } });
+    await user.click(screen.getByRole('button', { name: 'Assign anyway' }));
 
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/allocations') && c.method === 'POST'
       && c.body.so === '26/910' && c.body.unitId === 11 && c.body.qty === 300)).toBe(true));

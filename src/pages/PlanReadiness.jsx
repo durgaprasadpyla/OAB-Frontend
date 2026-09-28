@@ -40,15 +40,22 @@ export default function PlanReadiness() {
   const [changes, setChanges] = useState([]);    // §56: jobs edited after first save
   const [q, setQ] = useState('');                // Issues 2.2 §7: search the board
   const [specFil, setSpecFil] = useState('');
-  // Which order has its material panel open — the planner assigns the film here
-  // while marking the order ready to plan.
+  // BOM calculations 24.09 §5: "let us have radio button selections against each
+  // sale order, just like item master … I select a radio button against a sale
+  // order, then let the list be populated at the top based on the BOM that is
+  // attached to this particular spec number." So the material list no longer opens
+  // inside the row — the radio picks the order and the panel sits ABOVE the board,
+  // where it reads without scrolling right and then back down.
   const [matFor, setMatFor] = useState('');
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
 
   const loadBoard = useCallback(async () => {
     setErr('');
-    try { setBoard(await planningApi.readiness() || []); }
+    // Anything but a list here (a proxy's error body, an empty 200) used to take the
+    // whole board down with "forEach is not a function" — the readiness state is a
+    // list or it is nothing.
+    try { const b = await planningApi.readiness(); setBoard(Array.isArray(b) ? b : []); }
     catch (e) { setErr(e.message || 'Failed to load the planning board'); }
   }, []);
   useEffect(() => { loadBoard(); }, [loadBoard]);
@@ -113,6 +120,9 @@ export default function PlanReadiness() {
     if (t) list = list.filter((r) => [r.so, r.customer, r.spec, r.sku, r.dispLoc, r.substrate].some((v) => String(v || '').toLowerCase().includes(t)));
     return list;
   }, [openRows, q, specFil]);
+
+  // The order whose material is being worked on — picked with the radio.
+  const pickedRow = useMemo(() => openRows.find((r) => r.so === matFor) || null, [openRows, matFor]);
 
   const readyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so]?.readyToPlan).length, [openRows, stateBySo]);
   const notReadyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so] && !stateBySo[r.so].readyToPlan && stateBySo[r.so].notReadyReason).length, [openRows, stateBySo]);
@@ -205,6 +215,31 @@ export default function PlanReadiness() {
         </div>
       )}
 
+      {/* The picked order's material — above the board, per §5. */}
+      {pickedRow && (
+        <div className="card" style={{ marginTop: 12 }} aria-label="Material for the picked sale order">
+          <div className="fbar" style={{ flexWrap: 'wrap' }}>
+            <div className="ctitle" style={{ margin: 0 }}>
+              Material for <span className="so-pill">{pickedRow.so}</span>
+              <span className="tag tb" style={{ marginLeft: 8, fontSize: 9 }}>{pickedRow.spec}</span>
+              <span style={{ fontWeight: 400, color: 'var(--i3)', marginLeft: 8, fontSize: 11 }}>
+                {pickedRow.customer} · {pickedRow.sku}
+              </span>
+            </div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-s" style={{ height: 26, fontSize: 11 }}
+              aria-label="Close the material panel" onClick={() => setMatFor('')}>✕ Close</button>
+          </div>
+          <MaterialAssignPanel
+            so={pickedRow.so}
+            spec={pickedRow.spec}
+            material={pickedRow.substrate}
+            soQty={pickedRow.bal}
+            onChange={loadBoard}
+          />
+        </div>
+      )}
+
       {/* Readiness list (§46-54) */}
       <div className="card" style={{ marginTop: 12 }}>
         <div className="fbar" style={{ flexWrap: 'wrap' }}>
@@ -221,6 +256,7 @@ export default function PlanReadiness() {
             {/* Issues 2.2 §7: the PM board's display fields — SKU and FILM WIDTH above
                 all, since the planner judges plannability off the film width. */}
             <thead><tr>
+              <th style={{ width: 34, textAlign: 'center' }}>Material</th>
               <th>Sale Order</th><th>Spec</th><th style={{ minWidth: 170 }}>SKU</th><th>Customer</th><th>Disp Loc</th>
               <th style={rt}>PO Qty</th><th style={rt}>Dispatched</th><th style={rt}>Balance</th>
               <th>Substrate</th><th style={rt}>Film W</th><th style={rt}>Thick (mic)</th><th style={rt}>GSM</th>
@@ -229,14 +265,20 @@ export default function PlanReadiness() {
             </tr></thead>
             <tbody>
               {visibleRows.length === 0 && (
-                <tr><td colSpan={18} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
+                <tr><td colSpan={19} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
               )}
               {visibleRows.map((r) => {
                 const cur = stateBySo[r.so];
                 const d = draftFor(r.so);
                 return (
                   <Fragment key={r.so}>
-                  <tr className={cur?.readyToPlan ? undefined : 'hi'}>
+                  <tr className={cur?.readyToPlan ? undefined : 'hi'}
+                      style={matFor === r.so ? { background: 'var(--gl)' } : undefined}>
+                    <td style={{ textAlign: 'center' }}>
+                      <input type="radio" name="plan-material-so" checked={matFor === r.so}
+                        aria-label={`Material for ${r.so}`} style={{ cursor: 'pointer' }}
+                        onChange={() => { setMatFor(r.so); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ } }} />
+                    </td>
                     <td><span className="so-pill">{r.so}</span></td>
                     <td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td>
                     <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.sku || '—'}</td>
@@ -292,29 +334,9 @@ export default function PlanReadiness() {
                         <button className="btn btn-g" style={{ height: 28 }} disabled={busy === r.so || !d.pick} onClick={() => apply(r)}>
                           {cur ? 'Update' : 'Save'}
                         </button>
-                        {/* The material the order will run on — FIFO, film first. */}
-                        <button className="btn btn-s" style={{ height: 28 }}
-                          aria-label={`Assign material for ${r.so}`}
-                          onClick={() => setMatFor(matFor === r.so ? '' : r.so)}>
-                          {matFor === r.so ? '▲ Material' : '▼ Material'}
-                        </button>
                       </div>
                     </td>
                   </tr>
-                  {matFor === r.so && (
-                    <tr><td colSpan={18} style={{ background: 'var(--bg)', padding: '4px 12px 12px' }}>
-                      {/* Issues 3.0: the panel opens under the row and pushes the rest of
-                          the board down. The ▼ Material button toggles it, but that button
-                          is now above a tall panel and easy to lose — so the way out is
-                          also here, where the eye already is. */}
-                      <div className="fbar" style={{ justifyContent: 'space-between', margin: '0 0 4px' }}>
-                        <div className="ctitle" style={{ margin: 0 }}>Material for <span className="so-pill">{r.so}</span></div>
-                        <button className="btn btn-s" style={{ height: 24, fontSize: 11 }}
-                          aria-label={`Close material for ${r.so}`} onClick={() => setMatFor('')}>✕ Close</button>
-                      </div>
-                      <MaterialAssignPanel so={r.so} spec={r.spec} material={r.substrate} />
-                    </td></tr>
-                  )}
                   </Fragment>
                 );
               })}

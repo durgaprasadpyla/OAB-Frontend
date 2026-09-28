@@ -26,7 +26,10 @@ export default function DropdownAdmin() {
 
   // Master-backed categories (Departments, §5) are Super-Admin-only. The sales dropdown
   // editor (SalesAdmin, sadmin) shows only the sales-blob lists, unchanged.
-  const DEFS = useMemo(() => DROPDOWN_DEFS.filter((d) => !d.master || role === 'superadmin'), [role]);
+  const DEFS = useMemo(
+    () => DROPDOWN_DEFS.filter((d) => (!d.master && !d.superadminOnly) || role === 'superadmin'),
+    [role],
+  );
   const [sel, setSel] = useState(DEFS[0].key);
   const [work, setWork] = useState(null);      // null = showing the saved list
   const [msg, setMsg] = useState(null);

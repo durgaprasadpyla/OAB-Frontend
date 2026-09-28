@@ -9,7 +9,10 @@ import { computeKPIs, dashRange } from '../lib/dashboard.js';
 import { dash, rupees, fmtDate, inr } from '../lib/format.js';
 import { exportAOA, readSheetAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
-import { materialKey, materialLabel, knownMaterials } from '../lib/material.js';
+import { materialKey, materialLabel } from '../lib/material.js';
+import SpecFields from '../components/SpecFields.jsx';
+import { blankLayer, layerFields, layersOfSpec, layerCountFor } from '../lib/jssSpec.js';
+import { ddList } from '../lib/dropdowns.js';
 import { specIndex, specFor, duplicateSpecs, specKey } from '../lib/specs.js';
 import { reconcileMonth, projectedMonths, monthLabel } from '../lib/projections.js';
 import UsersAccess from '../components/UsersAccess.jsx';
@@ -593,7 +596,9 @@ const jssTd = { padding: '3px 5px' };
 const JSS_COLS = [
   ['spec', 'Spec No.*', 80], ['jobType', 'Job Type', 100], ['group', 'Group', 120], ['customer', 'Customer', 140],
   ['subBrand', 'Sub Brand', 100], ['jobName', 'Job Name*', 200], ['mic', 'MIC', 60],
-  ['gsm', 'GSM', 60], ['material', 'Material*', 130], ['filmWidth', 'Film W', 70], ['width', 'W', 50],
+  // 24.09: the structure as it is now built — the composed Material, then the layers
+  // behind it, so a laminate reads as what it is made of rather than one string.
+  ['gsm', 'GSM', 60], ['material', 'Material*', 130], ['structure', 'Structure', 200], ['filmWidth', 'Film W', 70], ['width', 'W', 50],
   ['height', 'H', 50], ['pouchWeight', 'Pouch Wt (g)', 100], ['qtyPerBag', 'Qty/Bag', 70], ['dispatchForm', 'Disp Form*', 80],
   ['status', 'Status', 80],
 ];
@@ -602,10 +607,10 @@ function JssEditor() {
   const { mods, save } = useData();
   const customers = mods.customers || [];
   const [rows, setRows] = useState(() => clone(mods.jss || []));
-  // The Material picker: every material already in use (one spelling per identity,
-  // "CC PET + LDPE" and "cc pet +LDPE" being one) — so a spec picks a spelling
-  // rather than inventing one.
-  const materials = useMemo(() => knownMaterials([...(mods.jss || []), ...rows]), [mods.jss, rows]);
+  // JSS+QC 24.09 §24: "I should be able to edit all the existing JSS from the super
+  // admin login based on the above criteria" — so this edits with the SAME form QC
+  // creates a spec with (SpecFields), over the same Item Master dropdowns.
+  const jobTypes = useMemo(() => ddList(mods.sales, 'jobTypes'), [mods.sales]);
   const dispForms = useMemo(() => {
     const out = [...JSS_DISP_FORMS];
     effectiveDespatchList(mods.sales).forEach((f) => { if (!out.some((o) => o.toLowerCase() === String(f).toLowerCase())) out.push(f); });
@@ -623,7 +628,6 @@ function JssEditor() {
   // are now the same guided ones QC creates a spec with.
   const [sel, setSel] = useState(-1);          // index into `rows`, -1 = nothing picked
   const [form, setForm] = useState(null);      // the picked row, being edited
-  const [materialNew, setMaterialNew] = useState('');
 
   useEffect(() => { setRows(clone(mods.jss || [])); setSel(-1); setForm(null); }, [mods.jss]);
 
@@ -636,15 +640,10 @@ function JssEditor() {
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   function pick(i) {
     setSel(i);
-    setForm({ ...rows[i] });
-    setMaterialNew('');
+    // A spec saved before the layers existed opens on what it actually says — its
+    // composed material becomes the primary layer (layersOfSpec).
+    setForm({ ...rows[i], layers: layersOfSpec(rows[i]) });
     setMsg('');
-  }
-  // Changing the Group repopulates the Company list; the company is kept only if it
-  // still belongs to the new group (legacy jssGroupChange).
-  function setFormGroup(v) {
-    const stillValid = !form.customer || custsInGroup(customers, v).includes(form.customer);
-    set({ group: v, customer: stillValid ? form.customer : '' });
   }
   function recalcPW() {
     const pw = pouchWeightJSS(form);
@@ -686,7 +685,14 @@ function JssEditor() {
     const spec = String(form.spec || '').trim();
     if (!spec) { setMsg('A Spec No. is required.'); return; }
     if (!String(form.jobName || '').trim()) { setMsg('A Job Name is required.'); return; }
-    const material = form.material === '__new__' ? materialLabel(materialNew) : String(form.material || '').trim();
+    // The layers the form is holding, composed into the Material string every other
+    // screen reads. With no layer picked at all, the row keeps the material it came
+    // with — writing the empty composition over it would silently lose the spec's film.
+    const layers = (form.layers || []).slice(0, layerCountFor(form.jobType));
+    const composed = layers.some((l) => String((l && l.material) || '').trim())
+      ? layerFields(layers)
+      : {};
+    const material = composed.material || String(form.material || '').trim();
     // Material is required the way QC requires it — but an OLD row that never had one
     // must not be held hostage over it: fixing this spec's status or dispatch form
     // should not mean inventing a material nobody recorded. Clearing one that IS
@@ -698,7 +704,10 @@ function JssEditor() {
     // two A1404s reading differently on different screens. Warn before allowing it.
     const clash = next.some((r, i) => i !== sel && specKey(r.spec) === specKey(spec));
     if (clash && !window.confirm(`Spec ${spec} is already on another row.\n\nTwo rows with one code disagree the moment either is edited — the tool will read the Active, most recent one and flag the pair. Keep this code anyway?`)) return;
-    next[sel] = { ...form, spec, material };
+    // `layers` is the form's own working copy — the spec row keeps the composed
+    // fields, not the draft.
+    const { layers: _draftLayers, ...rest } = form;   // eslint-disable-line no-unused-vars
+    next[sel] = { ...rest, spec, ...composed, material };
     setBusy(true);
     try {
       setRows(next);
@@ -811,75 +820,26 @@ function JssEditor() {
           <div className="g4">
             <div className="fg">
               <label>Spec No. *</label>
-              <input value={form.spec ?? ''} aria-label="Spec No." style={inputStyle} onChange={(e) => set({ spec: e.target.value })} />
+              <input value={form.spec ?? ''} aria-label="Spec No." style={{ width: '100%' }} onChange={(e) => set({ spec: e.target.value })} />
             </div>
-            <div className="fg">
-              <label>Job Type</label>
-              <input value={form.jobType ?? ''} aria-label="Job Type" style={inputStyle} onChange={(e) => set({ jobType: e.target.value })} />
-            </div>
-            <div className="fg">
-              <label>Group</label>
-              <select value={form.group ?? ''} aria-label="Group" onChange={(e) => setFormGroup(e.target.value)}>
-                <option value="">— No group —</option>
-                {form.group && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
-                {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
-            <div className="fg">
-              <label>Customer</label>
-              <select value={form.customer ?? ''} aria-label="Customer" onChange={(e) => set({ customer: e.target.value })}>
-                <option value="">— Select customer —</option>
-                {form.customer && !custOpts.includes(form.customer) && <option value={form.customer}>{form.customer}</option>}
-                {custOpts.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
+            <div className="fg" />
+            <div className="fg" />
+            <div className="fg" />
           </div>
 
-          <div className="g4">
-            <div className="fg">
-              <label>Sub Brand</label>
-              <input value={form.subBrand ?? ''} aria-label="Sub Brand" style={inputStyle} onChange={(e) => set({ subBrand: e.target.value })} />
-            </div>
-            <div className="fg">
-              <label>Job Name *</label>
-              <input value={form.jobName ?? ''} aria-label="Job Name" style={inputStyle} onChange={(e) => set({ jobName: e.target.value })} />
-            </div>
-            <div className="fg">
-              <label>Material *</label>
-              <select value={form.material === '__new__' ? '__new__' : (form.material ?? '')} aria-label="Material" onChange={(e) => set({ material: e.target.value })}>
-                <option value="">— select material —</option>
-                {form.material && form.material !== '__new__' && !materials.includes(form.material) && <option value={form.material}>{form.material}</option>}
-                {materials.map((m) => <option key={m} value={m}>{m}</option>)}
-                <option value="__new__">＋ Add new material…</option>
-              </select>
-              {form.material === '__new__' && (
-                <input placeholder="New material, e.g. CC PET + LDPE" value={materialNew} aria-label="New material"
-                  style={{ marginTop: 6 }} onChange={(e) => setMaterialNew(e.target.value)} />
-              )}
-            </div>
-            <div className="fg">
-              <label>Dispatch Form *</label>
-              <select value={form.dispatchForm ?? ''} aria-label="Dispatch Form" onChange={(e) => set({ dispatchForm: e.target.value })}>
-                <option value="">—</option>
-                {form.dispatchForm && !dispForms.includes(form.dispatchForm) && <option value={form.dispatchForm}>{form.dispatchForm}</option>}
-                {dispForms.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="g4">
-            <div className="fg"><label>MIC</label><input type="number" value={form.mic ?? ''} aria-label="MIC" style={inputStyle} onChange={(e) => set({ mic: e.target.value })} /></div>
-            <div className="fg"><label>GSM</label><input type="number" value={form.gsm ?? ''} aria-label="GSM" style={inputStyle} onChange={(e) => set({ gsm: e.target.value })} /></div>
-            <div className="fg"><label>Film Width</label><input type="number" value={form.filmWidth ?? ''} aria-label="Film Width" style={inputStyle} onChange={(e) => set({ filmWidth: e.target.value })} /></div>
-            <div className="fg"><label>Ups</label><input type="number" value={form.ups ?? ''} aria-label="Ups" style={inputStyle} onChange={(e) => set({ ups: e.target.value })} /></div>
-          </div>
-
-          <div className="g4">
-            <div className="fg"><label>Width</label><input type="number" value={form.width ?? ''} aria-label="Width" style={inputStyle} onChange={(e) => set({ width: e.target.value })} /></div>
-            <div className="fg"><label>Height</label><input type="number" value={form.height ?? ''} aria-label="Height" style={inputStyle} onChange={(e) => set({ height: e.target.value })} /></div>
-            <div className="fg"><label>Gusset</label><input value={form.gusset ?? ''} aria-label="Gusset" placeholder="e.g. 40 or 20+20" style={inputStyle} onChange={(e) => set({ gusset: e.target.value })} /></div>
-            <div className="fg"><label>Qty per Bag (packing)</label><input type="number" value={form.qtyPerBag ?? ''} aria-label="Qty per Bag" style={inputStyle} onChange={(e) => set({ qtyPerBag: e.target.value })} /></div>
-          </div>
+          {/* the same fields QC creates a spec with — the Super Admin may additionally
+              set a group, customer or sub-brand that is not on file yet */}
+          <SpecFields
+            form={form}
+            onChange={(patch) => set(patch)}
+            customers={customers}
+            jss={rows}
+            jobTypes={jobTypes}
+            dispatchOptions={dispForms}
+            statuses={JSS_STATUSES}
+            canAddNew
+            showStatus
+          />
 
           <div className="g4">
             <div className="fg">
@@ -891,13 +851,7 @@ function JssEditor() {
                   title="Calculate from Height, Width, Gusset & GSM" style={{ height: 32, width: 32, flexShrink: 0, padding: 0 }}>↺</button>
               </div>
             </div>
-            <div className="fg">
-              <label>Status</label>
-              <select value={form.status ?? ''} aria-label="Status" onChange={(e) => set({ status: e.target.value })}>
-                <option value="">—</option>
-                {JSS_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
+            <div className="fg" />
             <div className="fg" />
             <div className="fg" />
           </div>

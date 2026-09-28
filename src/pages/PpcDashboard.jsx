@@ -31,7 +31,12 @@ const PPC_TABS = [
 
 import SoBomDownloads from '../components/SoBomDownloads.jsx';
 
-export default function PpcDashboard() {
+/**
+ * @param embedded  rendered inside another login's tab bar (the PM login carries
+ *                  this same dashboard — BOM calculations 24.09 §10), so it drops
+ *                  its own page frame and heading.
+ */
+export default function PpcDashboard({ embedded = false }) {
   const nav = useNavigate();
   const [tab, setTab] = useState('dash');
   const [from, setFrom] = useState(addDays(today(), -6));
@@ -67,9 +72,9 @@ export default function PpcDashboard() {
   const changedJobs = useMemo(() => (week.jobs || []).filter((j) => j.changed), [week]);   // §56
 
   return (
-    <div id="app">
-      <div className="pg-ttl">📊 PPC — Production Planning Dashboard</div>
-      <div className="pg-sub">Your at-a-glance view of planned vs actual and wastage. Plan and re-sequence machine jobs from the Weekly Plan and Daily Planning tabs.</div>
+    <div id={embedded ? undefined : 'app'}>
+      {!embedded && <div className="pg-ttl">📊 PPC — Production Planning Dashboard</div>}
+      {!embedded && <div className="pg-sub">Your at-a-glance view of planned vs actual and wastage. Plan and re-sequence machine jobs from the Weekly Plan and Daily Planning tabs.</div>}
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
 
       {/* C1: the five PPC tabs from the requirements doc */}

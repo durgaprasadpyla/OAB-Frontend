@@ -12,6 +12,14 @@ const fieldByLabel = (label) => {
   return (lbl.closest('.fg') || lbl.parentElement).querySelector('input, textarea, select');
 };
 const jss = [{ spec: 'A1', customer: 'Acme', jobName: 'Pouch A', dispatchForm: 'pouch', width: 100, status: 'Active' }];
+// JSS+QC 24.09: QC picks the customer, the material, its speciality, micron and the
+// film width from masters — it types only the Job Name. So the customer has to be in
+// the Customer Master and the film in the Item Master for a spec to be creatable.
+const customers = [{ customer: 'NewCust', group: '', dispatchLoc: 'Hyderabad' }];
+const masterItems = [
+  { code: 'BLM1', name: '600 MM', materialType: 'FILM', subGroup: 'BOPP', specialtyName: 'PLAIN', microns: '50', widthMm: 600, uom: 'Kg' },
+  { code: 'BLM2', name: '700 MM', materialType: 'FILM', subGroup: 'BOPP', specialtyName: 'PLAIN', microns: '50', widthMm: 700, uom: 'Kg' },
+];
 
 describe('Purchase — Generate PO flow', () => {
   it('raises a PO into module 6 with a price-history entry and bumped counter', async () => {
@@ -42,22 +50,27 @@ describe('Purchase — Generate PO flow', () => {
 describe('QC — add spec flow', () => {
   it('appends a new auto-numbered spec to module 2', async () => {
     const user = userEvent.setup();
-    const { saved } = renderApp(<QC />, { modules: { jss }, role: 'qc' });
+    const { saved } = renderApp(<QC />, { modules: { jss, customers, masterItems }, role: 'qc' });
     await screen.findByText(/Add New Spec/);
 
-    await user.selectOptions(screen.getByLabelText('Customer'), '__new__');
-    await user.type(screen.getByLabelText('New customer name'), 'NewCust');
-    await user.type(fieldByLabel('Job Name *'), 'New Job');
-    // Material is required, and is picked from the materials in use — or added by
-    // name, which lands in the house spelling ("bopp/pe" → "BOPP / PE")
-    await user.selectOptions(screen.getByLabelText('Material'), '__new__');
-    await user.type(screen.getByLabelText('New material'), 'bopp/pe');
+    await user.selectOptions(await screen.findByLabelText('Customer'), 'NewCust');
+    await user.type(screen.getByLabelText('Job Name'), 'New Job');
+    await user.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
+    await user.selectOptions(screen.getByLabelText('Job Type'), 'SF Pouch');
+    // the material, its speciality and micron all come from the Item Master
+    await user.selectOptions(await screen.findByLabelText('Primary Material'), 'BOPP');
+    await user.selectOptions(screen.getByLabelText('Primary Speciality'), 'PLAIN');
+    await user.selectOptions(screen.getByLabelText('Primary Micron'), '50');
+    await user.selectOptions(screen.getByLabelText('Film Width (mm)'), '700');
     await user.click(screen.getByRole('button', { name: /Add Spec/ }));
 
     await waitFor(() => expect(saved.some((s) => s.id === 2)).toBe(true));
     const arr = saved.find((s) => s.id === 2).data;
     expect(arr).toHaveLength(2);
-    expect(arr.at(-1)).toMatchObject({ spec: 'A2', customer: 'NewCust', jobName: 'New Job', material: 'BOPP / PE' });
+    expect(arr.at(-1)).toMatchObject({
+      spec: 'A2', customer: 'NewCust', jobName: 'New Job', jobType: 'SF Pouch',
+      material: 'BOPP', material1: 'BOPP', specialty1: 'PLAIN', microns1: '50', mic: '50', filmWidth: 700,
+    });
   });
 });
 

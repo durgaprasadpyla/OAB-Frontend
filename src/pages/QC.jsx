@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { pouchWeightQC } from '../lib/calc.js';
-import { custsInGroup, groupOptions, specGroup } from '../lib/master.js';
-import { knownMaterials, materialLabel, materialKey } from '../lib/material.js';
+import { groupOptions, specGroup } from '../lib/master.js';
+import { materialKey } from '../lib/material.js';
+import SpecFields from '../components/SpecFields.jsx';
+import { ddList } from '../lib/dropdowns.js';
+import { blankLayer, layerFields, layerCountFor, materialOptions } from '../lib/jssSpec.js';
+import { useApi } from '../lib/useApi.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
@@ -20,12 +24,15 @@ import CsaToJssPanel from '../components/CsaToJssPanel.jsx';
 const DISPATCH_FORMS = ['Pouch', 'Bulk Bag', 'Roll', 'Label'];
 const STATUSES = ['Active', 'Sample', 'Inactive', 'Redundant'];
 
-// A fresh, empty entry form. Selects default the way the legacy form did.
+// A fresh, empty entry form. Every value is picked from a master — JSS+QC 24.09:
+// "Let us not allow any text inputs from the QC login … Only the job name can be
+// added by the QC". The film is three LAYERS chosen from the Item Master, composed
+// into the single `material` string the rest of the tool reads.
 const BLANK = {
-  group: '', customer: '', subBrand: '', jobName: '', jobType: '', material: '',
-  mic: '', gsm: '', filmWidth: '', ups: '', width: '', height: '',
-  gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: 'Pouch', status: 'Active',
-  groupNew: '', customerNew: '', materialNew: '',
+  group: '', customer: '', subBrand: '', jobName: '', jobType: '',
+  layers: [blankLayer(), blankLayer(), blankLayer()],
+  gsm: '', filmWidth: '', ups: '', width: '', height: '',
+  gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: '', status: 'Active',
 };
 
 // Status -> legacy .tag colour class.
@@ -60,8 +67,11 @@ export default function QC() {
   const { mods, save } = useData();
   const jss = Array.isArray(mods.jss) ? mods.jss : [];
   const customers = Array.isArray(mods.customers) ? mods.customers : [];
-  // the materials the JSS master already uses, one spelling per identity
-  const materials = useMemo(() => knownMaterials(jss), [jss]);
+  // The Item Master — the only place a JSS material may come from now. Fetched once
+  // here and handed to the form, so the page and its dropdowns read one list.
+  const itemsApi = useApi('/api/master/items');
+  const items = useMemo(() => (Array.isArray(itemsApi.data) ? itemsApi.data : []), [itemsApi.data]);
+  const materials = useMemo(() => materialOptions(items), [items]);
 
   const [form, setForm] = useState(BLANK);
   const [q, setQ] = useState('');
@@ -79,15 +89,15 @@ export default function QC() {
   function pickCsa(skuId, fields) {
     setFromSku(skuId);
     setForm((f) => {
-      const next = { ...f, ...fields, groupNew: '', customerNew: '' };
-      // a CSA's material lands on the spelling already in use, when there is one
-      if (fields.material) next.material = materials.find((m) => materialKey(m) === materialKey(fields.material)) || fields.material;
-      // a customer not yet in the master is typed rather than picked
-      if (fields.customer && !custsInGroup(customers, fields.group || '').includes(fields.customer)
-        && !jss.some((j) => String(j.customer || '').trim() === fields.customer)) {
-        next.customer = '__new__'; next.customerNew = fields.customer;
+      const { material, ...rest } = fields || {};
+      const next = { ...f, ...rest };
+      // The CSA's structure fills the first layer; QC then picks its speciality and
+      // micron from the Item Master. A material the master does not carry is left
+      // for QC to choose rather than written in as free text.
+      if (material) {
+        const known = materials.find((m) => materialKey(m) === materialKey(material));
+        next.layers = [{ ...blankLayer(), material: known || '' }, blankLayer(), blankLayer()];
       }
-      if (fields.group && !groups.includes(fields.group)) { next.group = '__new__'; next.groupNew = fields.group; }
       return next;
     });
     setMsg({ type: 'g', text: 'Filled from the CSA — check the fields and press Add Spec.' });
@@ -107,28 +117,15 @@ export default function QC() {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  // Customer Master lookups: groups for the Group dropdown, and the companies
-  // in the chosen group (blank group -> the ungrouped companies) for the
-  // cascading Customer picker. (legacy qcPopulateGroups / qcPopulateCustomers)
+  // The groups the All-Specs filter offers. The entry form's own Group / Customer
+  // pickers live in SpecFields now, over the Customer Master.
   const groups = useMemo(() => groupOptions(customers, jss), [customers, jss]);
-  const custOptions = useMemo(() => {
-    const g = form.group === '__new__' ? '' : form.group;
-    if (form.group === '__new__') return [];   // a brand-new group has no members yet
-    const fromMaster = custsInGroup(customers, g);
-    if (fromMaster.length) return fromMaster;
-    // Customer Master unreadable/empty -> offer the customers already on specs.
-    const names = new Set();
-    jss.forEach((j) => {
-      const c = String(j.customer || '').trim();
-      if (!c) return;
-      if (!g || specGroup(j, customers) === g) names.add(c);
-    });
-    return [...names].sort((a, b) => a.localeCompare(b));
-  }, [customers, jss, form.group]);
-
-  // The names actually saved on the spec — "__new__" resolves to the typed name.
-  const effGroup = form.group === '__new__' ? form.groupNew.trim() : form.group.trim();
-  const effCustomer = form.customer === '__new__' ? form.customerNew.trim() : form.customer.trim();
+  // QC can no longer invent a group or a customer, so what is on the form IS what
+  // is saved.
+  const effGroup = String(form.group || '').trim();
+  const effCustomer = String(form.customer || '').trim();
+  // The job types the Super Admin maintains (Dashboard → Drop-down selections).
+  const jobTypes = useMemo(() => ddList(mods.sales, 'jobTypes'), [mods.sales]);
 
   // Auto spec code = 'A' + (max numeric suffix among existing /^A(\d+)$/ specs) + 1.
   const nextSpec = useMemo(() => {
@@ -186,14 +183,21 @@ export default function QC() {
   async function addSpec() {
     const group = effGroup;
     const customer = effCustomer;
-    const jobName = form.jobName.trim();
-    // "＋ Add new material…" takes the typed name, tidied to the house spelling
-    const material = form.material === '__new__' ? materialLabel(form.materialNew) : form.material.trim();
+    const jobName = String(form.jobName || '').trim();
     const dispatchForm = form.dispatchForm;
-    // Legacy required-field rule (saveQCSpec, ~11227): a Group or a Company, plus
-    // Job Name, Material and Dispatch Form.
-    if ((!group && !customer) || !jobName || !material || !dispatchForm) {
-      setMsg({ type: 'r', text: 'Please fill required fields: a Group or Company, plus Job Name, Material and Dispatch Form.' });
+    const layers = form.layers || [];
+    const composed = layerFields(layers.slice(0, layerCountFor(form.jobType)));
+    const material = composed.material;
+    // Every field is a choice from a master now, so the check names the box that is
+    // still empty rather than one catch-all sentence.
+    const missing = [];
+    if (!customer) missing.push('Customer');
+    if (!jobName) missing.push('Job Name');
+    if (!dispatchForm) missing.push('Dispatch Form');
+    if (!String(form.jobType || '').trim()) missing.push('Job Type');
+    if (!material) missing.push('Primary Material');
+    if (missing.length) {
+      setMsg({ type: 'r', text: 'Still to choose: ' + missing.join(', ') + '.' });
       return;
     }
     const spec = nextSpec;
@@ -206,14 +210,12 @@ export default function QC() {
     const row = {
       sno: maxSno + 1,
       spec,
-      jobType: form.jobType.trim(),
+      jobType: String(form.jobType || '').trim(),
       group,
       customer,
-      subBrand: form.subBrand.trim(),
+      subBrand: String(form.subBrand || '').trim(),
       jobName,
-      mic: form.mic || '',
       gsm: parseFloat(form.gsm) || '',
-      material,
       filmWidth: parseFloat(form.filmWidth) || '',
       ups: parseInt(form.ups, 10) || '',
       width: parseFloat(form.width) || '',
@@ -221,6 +223,8 @@ export default function QC() {
       gusset: String(form.gusset).trim(),
       dispatchForm,
       status: form.status,
+      // material / mic / structure and the per-layer fields, from the layers above
+      ...composed,
     };
     // Manual pouch weight wins; otherwise fall back to the derived figure.
     // Packing standard: pcs per bag — drives the AUTO-GENERATED packing list.
@@ -250,7 +254,7 @@ export default function QC() {
       }
       setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully.' + (fromSku ? ' The JSS number is on the sales SKU now.' : ' Next spec ready.') });
       // Reset entry fields but keep the group + customer for fast repeat entry.
-      setForm((f) => ({ ...BLANK, group: f.group, groupNew: f.groupNew, customer: f.customer, customerNew: f.customerNew }));
+      setForm((f) => ({ ...BLANK, layers: [blankLayer(), blankLayer(), blankLayer()], group: f.group, customer: f.customer }));
     } catch (e) {
       setMsg({ type: 'r', text: 'Save failed: ' + (e && e.message ? e.message : String(e)) });
     } finally {
@@ -324,79 +328,26 @@ export default function QC() {
         <div className="ctitle">Add New Spec{fromSku ? <span className="tag tb" style={{ marginLeft: 8, fontSize: 10 }}>from CSA</span> : null}</div>
         {msg && <div className={'al al-' + msg.type}>{msg.text}</div>}
 
-        <div className="g4">
-          <Field label="Spec Code" value={nextSpec} readOnly />
-          <div className="fg">
-            <label>Group</label>
-            <select value={form.group} aria-label="Group"
-              onChange={(e) => setForm((f) => ({ ...f, group: e.target.value, customer: '', customerNew: '' }))}>
-              <option value="">— No group —</option>
-              {form.group && form.group !== '__new__' && !groups.includes(form.group) && <option value={form.group}>{form.group}</option>}
-              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-              <option value="__new__">＋ Add new group…</option>
-            </select>
-            {form.group === '__new__' && (
-              <input placeholder="New group name" value={form.groupNew} aria-label="New group name"
-                style={{ marginTop: 6 }} onChange={set('groupNew')} />
-            )}
-          </div>
-          <div className="fg">
-            <label>Customer *</label>
-            <select value={form.customer} aria-label="Customer" onChange={set('customer')}>
-              <option value="">{form.group && form.group !== '__new__' ? '— whole group —' : '— select customer —'}</option>
-              {form.customer && form.customer !== '__new__' && !custOptions.includes(form.customer) && <option value={form.customer}>{form.customer}</option>}
-              {custOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-              <option value="__new__">＋ Add new customer…</option>
-            </select>
-            {form.customer === '__new__' && (
-              <input placeholder="New customer name" value={form.customerNew} aria-label="New customer name"
-                style={{ marginTop: 6 }} onChange={set('customerNew')} />
-            )}
-          </div>
-          <Field label="Sub Brand" value={form.subBrand} onChange={set('subBrand')} />
+        <div className="pg-sub" style={{ marginTop: 0 }}>
+          Everything here is chosen from a master the business maintains — the Job Name is the only thing typed.
+          The material layers, their speciality, micron and the film width come from the Item Master.
         </div>
 
-        <div className="g4">
-          <Field label="Job Name" required value={form.jobName} onChange={set('jobName')} />
-          <Field label="Job Type" value={form.jobType} onChange={set('jobType')} />
-          {/* the materials already in use, one spelling each ("CC PET + LDPE", not
-              that and "cc pet +LDPE" as two) — a new spec picks one rather than
-              inventing a spelling; a genuinely new film is added by name */}
-          <div className="fg">
-            <label>Material *</label>
-            <select value={form.material === '__new__' ? '__new__' : (materials.includes(form.material) ? form.material : (form.material ? form.material : ''))}
-              aria-label="Material" onChange={set('material')}>
-              <option value="">— select material —</option>
-              {form.material && form.material !== '__new__' && !materials.includes(form.material) && <option value={form.material}>{form.material}</option>}
-              {materials.map((m) => <option key={m} value={m}>{m}</option>)}
-              <option value="__new__">＋ Add new material…</option>
-            </select>
-            {form.material === '__new__' && (
-              <input placeholder="New material, e.g. CC PET + LDPE" value={form.materialNew} aria-label="New material"
-                style={{ marginTop: 6 }} onChange={set('materialNew')} />
-            )}
-          </div>
-          <div className="fg">
-            <label>Dispatch Form *</label>
-            <select value={form.dispatchForm} onChange={set('dispatchForm')}>
-              {form.dispatchForm && !dispatchOptions.includes(form.dispatchForm) && <option value={form.dispatchForm}>{form.dispatchForm}</option>}
-              {dispatchOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-        </div>
+        <SpecFields
+          form={form}
+          onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          customers={customers}
+          jss={jss}
+          jobTypes={jobTypes}
+          dispatchOptions={dispatchOptions}
+          statuses={STATUSES}
+          items={items}
+          canAddNew={false}
+          specCode={nextSpec}
+          showStatus
+        />
 
         <div className="g4">
-          <Field label="MIC" type="number" value={form.mic} onChange={set('mic')} />
-          <Field label="GSM" type="number" value={form.gsm} onChange={set('gsm')} />
-          <Field label="Film Width" type="number" value={form.filmWidth} onChange={set('filmWidth')} />
-          <Field label="Ups" type="number" value={form.ups} onChange={set('ups')} />
-        </div>
-
-        <div className="g4">
-          <Field label="Width" type="number" value={form.width} onChange={set('width')} />
-          <Field label="Height" type="number" value={form.height} onChange={set('height')} />
-          <Field label="Gusset" value={form.gusset} onChange={set('gusset')} placeholder="e.g. 40 or 20+20" />
-          <Field label="Qty per Bag (packing)" type="number" value={form.qtyPerBag} onChange={set('qtyPerBag')} placeholder="pcs per bag" />
           <div className="fg">
             <label>Pouch Weight (g)</label>
             <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
@@ -404,6 +355,7 @@ export default function QC() {
                 value={form.pouchWeight}
                 onChange={set('pouchWeight')}
                 placeholder="auto or enter manually"
+                aria-label="Pouch Weight (g)"
                 style={{ flex: 1 }}
               />
               <button
@@ -414,15 +366,9 @@ export default function QC() {
               >↺</button>
             </div>
           </div>
-        </div>
-
-        <div className="g4">
-          <div className="fg">
-            <label>Status</label>
-            <select value={form.status} onChange={set('status')}>
-              {STATUSES.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
+          <div className="fg" />
+          <div className="fg" />
+          <div className="fg" />
         </div>
 
         <div className="act">

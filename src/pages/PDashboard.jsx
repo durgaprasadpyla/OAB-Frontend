@@ -10,6 +10,7 @@ import { exportAOA, readSheet } from '../lib/xlsx.js';
 import { buildScrapChart, scrapChartTitle, bestByItem, CHART_BOX } from '../lib/scrapChart.js';
 import { readAttachments, viewAttachment } from '../lib/attach.js';
 import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
+import { OnHand } from './Stores.jsx';
 
 // Native port of the legacy Purchase Admin ("P Dashboard") — a tabbed admin page
 // over module 6 (purchase) and module 8 (scrap). Ported from index.html:
@@ -138,6 +139,22 @@ export default function PDashboard() {
       {tab === 'po' && <POTracking />}
       {tab === 'asl' && <ASLEditor />}
       {tab === 'im' && <ItemMaster />}
+      {/* Some More Issues 24.09 ¶2: "display the stock that is available on the
+          PDashboard page, the same display that is there in the stores login raw
+          material on hand page, next to the item master." It IS that board — the
+          stores desk's own — read here as it stands. Under its own heading, because
+          it carries its own search and filters and must not read as part of the
+          Item Master's list above it. */}
+      {tab === 'im' && (
+        <div style={{ marginTop: 14 }} aria-label="Stock on hand">
+          <div className="ctitle" style={{ marginBottom: 6 }}>
+            📦 Stock on hand <span style={{ fontWeight: 400, color: 'var(--i3)', fontSize: 11 }}>
+              — the stores desk&rsquo;s Raw Material on Hand board, read as it stands
+            </span>
+          </div>
+          <OnHand readOnly />
+        </div>
+      )}
       {tab === 'price' && <PriceTrends />}
       {tab === 'pay' && <Payments />}
       {tab === 'scrap' && <ScrapAdmin />}
@@ -294,6 +311,10 @@ const ASL_NEW_FIELDS = [
 // Item-level fields — one row per material within a supplier group.
 const ASL_ITEM_COLS = [
   { k: 'itemCode', label: 'Item Code', w: 90 }, { k: 'materialType', label: 'Material Type', w: 110 }, { k: 'subGroup', label: 'Sub-Group', w: 100 },
+  // Some More Issues 24.09 ¶1: "in the approved suppliers list, the specialty is not
+  // being displayed. It will be very helpful if it is displayed here." It is part of
+  // the item's identity (set in the Item Master) — read-only here, like the rest.
+  { k: 'specialty', label: 'Specialty', w: 110 },
   { k: 'microns', label: 'Microns', w: 70 }, { k: 'specificMaterial', label: 'Item Description', w: 180 }, { k: 'uom', label: 'UOM', w: 60 },
   { k: 'basicPrice', label: 'Basic Price', w: 90, numeric: true }, { k: 'moq', label: 'MOQ', w: 80 }, { k: 'leadTime', label: 'Lead Time', w: 90 },
 ];

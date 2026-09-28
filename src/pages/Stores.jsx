@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
@@ -74,7 +74,21 @@ export default function Stores() {
 
 /* ───────────────────────── Material on Hand (landing) ───────────────────── */
 
-export function OnHand({ flash, readOnly = false }) {
+// `flash` is optional: this board is embedded in logins that have no message bar of
+// their own (the plant's Raw Material on Hand, the Padmin's Item Master), and an
+// error must never take the screen down for want of somewhere to say it.
+//
+// It is also held in a REF and wrapped in a stable callback, because `load` depends
+// on it and every caller passes an inline lambda — a fresh `flash` on each render
+// would rebuild `load`, re-fire its effect, set state, and fetch the whole board
+// again, for ever.
+export function OnHand({ flash: flashProp, readOnly = false }) {
+  const flashRef = useRef(flashProp);
+  flashRef.current = flashProp;
+  const flash = useCallback((t, text) => {
+    if (flashRef.current) flashRef.current(t, text);
+    else if (t === 'r') window.alert(text);
+  }, []);
   const { role } = useAuth() || {};
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -110,12 +124,17 @@ export function OnHand({ flash, readOnly = false }) {
 
   const load = useCallback(async () => {
     setBusy(true);
-    try { setRows(await storesApi.onHand() || []); }
-    catch (e) { flash('r', e.message); }
+    // A board is a LIST or it is nothing: anything else here (an error body, a proxy
+    // page, an empty 200) used to reach `rows.filter` and take the whole screen down
+    // with it — and this board is embedded in the plant and Padmin logins now, so a
+    // crash here blanked their tabs too.
+    try { const r = await storesApi.onHand(); setRows(Array.isArray(r) ? r : []); }
+    catch (e) { setRows([]); flash('r', e.message); }
     finally { setBusy(false); }
-    try { setWithdrawn((await storesApi.withdrawn()) || []); } catch { setWithdrawn([]); }
+    try { const w = await storesApi.withdrawn(); setWithdrawn(Array.isArray(w) ? w : []); } catch { setWithdrawn([]); }
     try {
-      const all = (await storesApi.allUnits(false)) || [];
+      const raw = await storesApi.allUnits(false);
+      const all = Array.isArray(raw) ? raw : [];
       const m = {};
       all.forEach((u) => { const k = String(u.itemId); (m[k] = m[k] || []).push(String(u.internalCode || '').toLowerCase()); });
       setCodesByItem(m);
@@ -290,13 +309,16 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
         Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
         {readOnly ? ' This is the Stores login\u2019s board, read here as it stands; MSL and dispositions are set by Stores.' : ' MSL can be typed per item, or set for every item at once from the average of the last three months\u2019 consumption.'}
       </div>
-      {withdrawn.length > 0 && (
+      {/* BOM calculations 24.09 §18: "In the Raw Material on Hand tab in the PM login
+          and in the Stores login, I do not want this warning to be there. Because the
+          material was already allocated to the other item code." Neither desk can act
+          on it — only the Super Admin can move that stock — so it is now shown where
+          it can actually be dealt with, and nowhere else. */}
+      {withdrawn.length > 0 && role === 'superadmin' && (
         <div className="al al-y" style={{ marginBottom: 6 }} aria-label="Withdrawn items holding stock">
           <b>{withdrawn.length} item{withdrawn.length === 1 ? '' : 's'} deleted from the Item Master still hold stock.</b>{' '}
           They are no longer offered anywhere in Stores and cannot be issued.
-          {role === 'superadmin'
-            ? ' Move each one’s stock onto the item code that replaced it:'
-            : ' Ask the Super Admin to move that stock onto the retained item code.'}
+          {' Move each one’s stock onto the item code that replaced it:'}
           <div className="tw" style={{ marginTop: 6 }}><table>
             <thead><tr><th>Item code</th><th>Description</th><th>Material</th><th style={{ textAlign: 'right' }}>Stock</th><th style={{ textAlign: 'right' }}>Rolls</th>
               {role === 'superadmin' && <th style={{ minWidth: 260 }}>Move stock onto</th>}</tr></thead>
@@ -892,10 +914,16 @@ function Grn({ flash }) {
   /** Does this code match the pickers — by the Item Master, or by any ASL row for it? */
   const matchesFilters = useCallback((code, masterRow) => {
     const ok = (row, f, want) => !want || norm(row && row[f]) === norm(want);
+    // An ASL row carries the speciality under the ITEM-level key `specialty`; the
+    // supplier's own trade speciality is the different, supplier-level `speciality`.
+    // Reading only the latter made a speciality filter drop every row that had the
+    // item one set — which is how the supplier list stayed at all 175.
+    const okSpecialty = (row) => !fSpec || norm(row && row.specialty) === norm(fSpec)
+      || norm(row && row.speciality) === norm(fSpec);
     if (masterRow && ok(masterRow, 'materialType', fMat) && ok(masterRow, 'subGroup', fSub)
       && ok(masterRow, 'specialtyName', fSpec)) return true;
     return (aslByCode.get(norm(code)) || []).some((r) => (
-      ok(r, 'materialType', fMat) && ok(r, 'subGroup', fSub) && ok(r, 'speciality', fSpec)
+      ok(r, 'materialType', fMat) && ok(r, 'subGroup', fSub) && okSpecialty(r)
     ));
   }, [aslByCode, fMat, fSub, fSpec]);
 
@@ -1404,6 +1432,28 @@ function IssuesReturns({ flash }) {
   const loadIssueLines = useCallback(async () => {
     try { setIssueLines((await storesApi.issueLines({ open: 1, limit: 300 })) || []); } catch { setIssueLines([]); }
   }, []);
+
+  /**
+   * Some More Issues 24.09 ¶4: "There should be a way in which, from the Stores
+   * Login, they should be able to close the issue line items. Because in the create a
+   * return the dropdown options for issue slips are very huge because there is no way
+   * that I can close an issue slip." Material that went into the job is never coming
+   * back, so its line is closed off and leaves this picker. Nothing about the stock
+   * moves — the issue already happened.
+   */
+  async function closeIssueLine(line) {
+    if (!line) return;
+    const out = num(line.qtyIssued) - num(line.qtyReturned);
+    if (!window.confirm(`Close ${line.lineNo || line.slipNo}?\n\n`
+      + `${qty(out)} ${line.uom || ''} of ${line.itemCode} is still shown as out on it. Closing says that material was `
+      + `consumed and none of it is coming back, and takes the line off this list. Stock is not changed.`)) return;
+    try {
+      await storesApi.closeIssueLine(line.txnId, true);
+      if (String(issueLinePick) === String(line.txnId)) { setIssueLinePick(''); }
+      await loadIssueLines();
+      flash('g', `${line.lineNo || line.slipNo} closed — it is off the return list.`);
+    } catch (e) { flash('r', e.message); }
+  }
   useEffect(() => { if (mode === 'return') loadIssueLines(); }, [mode, loadIssueLines]);
   const issueSlips = useMemo(() => [...new Set(issueLines.map((l) => l.slipNo).filter(Boolean))], [issueLines]);
   const linesOfSlip = useMemo(() => issueLines.filter((l) => !issueSlipPick || l.slipNo === issueSlipPick), [issueLines, issueSlipPick]);
@@ -1478,6 +1528,22 @@ function IssuesReturns({ flash }) {
       .finally(() => { if (live) setCtxBusy(false); });
     return () => { live = false; };
   }, [form.so]);
+
+  // BOM calculations 24.09 §15: "Sale order-wise allocation in the stores: issues
+  // under return stamp. He will be able to allocate that particular roll or ink tin
+  // or anything to that particular sale order." The PLAN login has already promised
+  // rolls to this order — the desk issuing against it needs to SEE them, so it hands
+  // over the material that was set aside rather than whatever is nearest.
+  const [soAlloc, setSoAlloc] = useState([]);
+  useEffect(() => {
+    const so = String(form.so || '').trim();
+    if (!so) { setSoAlloc([]); return undefined; }
+    let live = true;
+    storesApi.allocations(so)
+      .then((a) => { if (live) setSoAlloc(Array.isArray(a) ? a : []); })
+      .catch(() => { if (live) setSoAlloc([]); });
+    return () => { live = false; };
+  }, [form.so, lastSlip]);
 
   const soChosen = !!String(form.so || '').trim();
   const ctxReady = !!(ctx && ctx.so === String(form.so || '').trim());
@@ -1903,6 +1969,12 @@ function IssuesReturns({ flash }) {
                   ))}
                 </select>
                 {issueLines.length === 0 && <div className="pg-sub" style={{ margin: '3px 0 0' }}>Nothing is out on a numbered slip yet — a roll issued before slips existed can still be returned by picking it under ③.</div>}
+                {issueLines.length > 0 && (
+                  <div className="pg-sub" style={{ margin: '3px 0 0' }}>
+                    {issueLines.length} line(s) still open. A line whose material was consumed can be closed —
+                    it then leaves this list.
+                  </div>
+                )}
               </div>
             </div>
             {pickedLine && (
@@ -1911,9 +1983,36 @@ function IssuesReturns({ flash }) {
                 {pickedLine.so ? ` for ${pickedLine.so}` : ''} on {String(pickedLine.ts || '').slice(0, 10)} ·
                 back so far <b>{qty(pickedLine.qtyReturned)}</b> in {pickedLine.rollsReturned} roll(s) · still out <b>{qty(num(pickedLine.qtyIssued) - num(pickedLine.qtyReturned))} {pickedLine.uom || ''}</b>
                 {' '}· next return slip <b>RET/{String(pickedLine.lineNo || '').replace(/^ISS\//, '')}/{num(pickedLine.rollsReturned) + 1}</b>
+                <div style={{ marginTop: 4 }}>
+                  <button className="btn btn-s" style={{ height: 24, fontSize: 11 }}
+                    aria-label={`Close issue line ${pickedLine.lineNo || pickedLine.slipNo}`}
+                    onClick={() => closeIssueLine(pickedLine)}>
+                    ✔ Nothing is coming back — close this line
+                  </button>
+                </div>
               </div>
             )}
           </>
+        )}
+        {/* §15: what the planner has already set aside for this order. The desk hands
+            over THESE rolls — that is what the allocation was for. */}
+        {mode === 'issue' && soChosen && soAlloc.length > 0 && (
+          <div className="al al-b" style={{ margin: '4px 0 6px' }} aria-label={`Material allocated to ${form.so}`}>
+            <b>{soAlloc.length} roll(s) are already allocated to {form.so} by the planning login</b> — issue these first:
+            <div className="tw" style={{ marginTop: 4 }}><table>
+              <thead><tr><th>Roll</th><th>Item</th><th>Location</th><th style={{ textAlign: 'right' }}>Allocated</th></tr></thead>
+              <tbody>
+                {soAlloc.map((a) => (
+                  <tr key={a.id}>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{a.internalCode}</td>
+                    <td style={{ fontSize: 11 }}>{a.itemCode}{a.itemName ? ` — ${a.itemName}` : ''}</td>
+                    <td style={{ fontSize: 11 }}>{a.location || '—'}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(a.qty)} {a.uom || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          </div>
         )}
         <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}{form.department ? ` for ${form.department}` : ''}</span> : null}</div>
         {mode === 'issue' && soChosen && ctxReady && !bomMissing && form.department && bomItems.length === 0 && (
