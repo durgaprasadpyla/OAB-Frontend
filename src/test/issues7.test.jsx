@@ -44,7 +44,13 @@ describe('Sales Login — leads and customers', () => {
     const book = repBook({ leads }, customers, REP);
     expect(book.leads.map((l) => l.id)).toEqual(['L1']);
     expect(book.customers.map((l) => l.id).sort()).toEqual(['L2', 'L3']);   // L3: KAM
-    expect(isCustomerLead({ client_name: 'beta foods' }, customers)).toBe(true);
+    // 28.09 §Sales ¶20: matching on NAME filed a brand-new lead as a customer the
+    // moment its company already appeared in the Customer Master, and left the Super
+    // Admin unable to un-convert one. The conversion is the Super Admin's to make and
+    // is recorded on the lead — that flag alone decides it now.
+    expect(isCustomerLead({ client_name: 'beta foods' }, customers)).toBe(false);
+    expect(isCustomerLead({ client_name: 'Beta Foods', converted_to_customer: true }, customers)).toBe(true);
+    expect(isCustomerLead({ client_name: 'Beta Foods', converted_to_customer: false }, customers)).toBe(false);
     expect(isCustomerLead({ client_name: 'Nobody' }, customers)).toBe(false);
   });
 

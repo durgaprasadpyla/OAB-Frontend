@@ -19,17 +19,20 @@ const ROLE_BAR = {
   qc: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'QC / Spec Entry', signOut: 'Sign Out' },
   purchase: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Purchase — Generate, Track & Close POs', signOut: 'Sign Out' },
   pm: { bg: '#ffffff', fg: '#123a6b', border: '1px solid #e2e6ee', brand: 'Bloomflex — Production', sub: 'Printing progress tracker', signOut: 'Sign Out',
-    links: [{ to: '/pm', label: 'Printing Progress' }, { to: '/production', label: '🏭 Production' }, { to: '/planner', label: '🗓 Planner' }, { to: '/reports', label: '📈 Reports' }] },
+    // 28.09 §PM: the PM and PPC logins are one workspace. Weekly planning is the
+    // Planner tab it already had; Dashboard and the daily board were the only two
+    // screens missing, and the board is labelled the way the floor asks for it.
+    links: [{ to: '/pm', label: 'Printing Progress' }, { to: '/ppc', label: '📊 Dashboard' }, { to: '/production', label: '🏭 Production' }, { to: '/planner', label: '🗓 Planner' }, { to: '/board', label: '📋 Today’s Plan' }, { to: '/reports', label: '📈 Reports' }] },
   scrap: { bg: 'linear-gradient(90deg,#5a3d1c,#8a6a2f)', brand: 'Bloomflex — Scrap', signOut: 'Logout' },
   sales: { bg: '#1a4fa0', brand: 'BLOOMFLEX', sub: 'Sales Rep', signOut: 'Sign Out' },
   quote: { bg: '#5e35b1', brand: 'BLOOMFLEX', sub: 'Quotation Desk', signOut: 'Sign Out' },
   planner: { bg: '#0a5aa0', brand: 'BLOOMFLEX', sub: 'Production Planner', signOut: 'Sign Out',
-    links: [{ to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Daily Board' }, { to: '/reports', label: '📈 Reports' }] },
+    links: [{ to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Today’s Plan' }, { to: '/reports', label: '📈 Reports' }] },
   stores: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Stores', signOut: 'Sign Out' },
   // Enhancements 2.0 planning-module logins — each is a single-screen (panel) role with
   // its own coloured brand bar and its own in-workspace navigation (NOT ops nav tabs).
   ppc: { bg: '#0a4d8c', brand: 'BLOOMFLEX', sub: 'Production Planning & Control', signOut: 'Sign Out',
-    links: [{ to: '/ppc', label: '📊 Dashboard' }, { to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Daily Board' }, { to: '/reports', label: '📈 Reports' }] },
+    links: [{ to: '/ppc', label: '📊 Dashboard' }, { to: '/planner', label: '🗓 Weekly' }, { to: '/board', label: '📋 Today’s Plan' }, { to: '/reports', label: '📈 Reports' }] },
   mis: { bg: '#0f766e', brand: 'BLOOMFLEX', sub: 'MIS — Status & Analytics', signOut: 'Sign Out',
     links: [{ to: '/mis', label: '📋 Status' }, { to: '/production', label: '🏭 Record Actuals' }, { to: '/reports', label: '📈 Reports' }] },
   plan: { bg: '#b45309', brand: 'BLOOMFLEX', sub: 'Planning — Ready to Plan', signOut: 'Sign Out',

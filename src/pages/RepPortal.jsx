@@ -704,7 +704,8 @@ function MyContacts({ leads, book, sales, save, repId }) {
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
       <div className="g3">
         <LeadCustomerPicker book={book} kind={form.kind} leadId={form.leadId}
-          onKind={(k) => setForm({ ...form, kind: k, leadId: '', categories: [] })} onLead={(id) => setForm({ ...form, leadId: id, categories: [] })} ariaPrefix="Contact" />
+          onKind={(k) => setForm((f) => ({ ...f, kind: k, leadId: '', categories: [] }))}
+          onLead={(id) => setForm((f) => ({ ...f, leadId: id, categories: [] }))} ariaPrefix="Contact" />
         <div className="fg"><label>Name *</label><input value={form.name} aria-label="Contact name" onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
         <div className="fg">
           <label>Designation</label>
@@ -931,10 +932,18 @@ function AddCustomer({ sales, save, repId, book, onDone }) {
             {ddPairs(sales).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </div>
-        <div className="fg"><label>Head Office</label><input value={form.headOffice} aria-label="Head Office" onChange={(e) => setForm({ ...form, headOffice: e.target.value })} /></div>
-        <div className="fg"><label>Delivery Location</label>
-          <input list="lead-city-list" value={form.deliveryLocation} aria-label="Delivery Location" onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })} />
-          <datalist id="lead-city-list">{cityList.map((c) => <option key={c} value={c} />)}</datalist>
+        {/* 28.09 §Sales ¶1-¶3: the label says what the field is — the office's ADDRESS,
+            and the delivery CITY — and the city can only be PICKED. A datalist looks like
+            a dropdown but still accepts anything typed into it, which is how leads ended
+            up with cities that match nothing downstream. */}
+        <div className="fg"><label>Head Office Address</label><input value={form.headOffice} aria-label="Head Office Address" onChange={(e) => setForm({ ...form, headOffice: e.target.value })} /></div>
+        <div className="fg"><label>Location (City)</label>
+          <select value={form.deliveryLocation} aria-label="Location (City)" onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })}>
+            <option value="">— Select —</option>
+            {/* a city already on the lead stays selectable even if it has since left the master */}
+            {form.deliveryLocation && !cityList.includes(form.deliveryLocation) && <option value={form.deliveryLocation}>{form.deliveryLocation}</option>}
+            {cityList.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
         <div className="fg"><label>GST Number</label><input value={form.gstin} aria-label="GST Number" onChange={(e) => setForm({ ...form, gstin: e.target.value })} /></div>
       </div>

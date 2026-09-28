@@ -83,8 +83,9 @@ export default function RawMaterialPanel() {
   function exportRequirement(rows, name) {
     if (!rows.length) return;
     exportAOA(
-      [['Item Code', 'Description', 'Material Type', 'UOM', 'Required'],
-        ...rows.map((m) => [m.itemCode, m.itemDescription || '', m.materialType || '', m.uom || '', Math.round(m.total * 100) / 100])],
+      [['Item Code', 'Description', 'Material Type', 'Sub-Group', 'Speciality', 'UOM', 'Required'],
+        ...rows.map((m) => [m.itemCode, m.itemDescription || '', m.materialType || '', m.subGroup || '',
+          m.specialty || '', m.uom || '', Math.round(m.total * 100) / 100])],
       name + '_' + today(),
     );
   }
@@ -263,12 +264,19 @@ function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
                 {g.department} <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— {g.items.length} item(s)</span>
               </div>
               <table style={{ width: '100%' }}>
-                <thead><tr><th style={{ textAlign: 'left' }}>Item Code</th><th style={{ textAlign: 'left' }}>Description</th><th style={{ textAlign: 'right' }}>Required</th></tr></thead>
+                {/* 28.09 §Super Admin: "only the description is not making sense so I would
+                    need the material type and subgroup and speciality also listed here." */}
+                <thead><tr><th style={{ textAlign: 'left' }}>Item Code</th><th style={{ textAlign: 'left' }}>Description</th>
+                  <th style={{ textAlign: 'left' }}>Material Type</th><th style={{ textAlign: 'left' }}>Sub-Group</th>
+                  <th style={{ textAlign: 'left' }}>Speciality</th><th style={{ textAlign: 'right' }}>Required</th></tr></thead>
                 <tbody>
                   {g.items.map((m, i) => (
                     <tr key={i}>
                       <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.itemCode}</td>
                       <td style={{ fontSize: 11 }}>{m.itemDescription}</td>
+                      <td style={{ fontSize: 11 }}>{m.materialType || '-'}</td>
+                      <td style={{ fontSize: 11 }}>{m.subGroup || '-'}</td>
+                      <td style={{ fontSize: 11 }}>{m.specialty || '-'}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(m.required, 2)} {m.uom || ''}</td>
                     </tr>
                   ))}
@@ -338,10 +346,11 @@ function RequirementTable({ title, rows, count, empty, onExport, soRows = [] }) 
       )}
       <div className="tw sy" style={{ maxHeight: 320 }}>
         <table>
-          <thead><tr><th>Item Code</th><th style={{ minWidth: 180 }}>Description</th><th>Type</th><th style={{ textAlign: 'right' }}>Total Required</th><th style={{ width: 60 }}></th></tr></thead>
+          <thead><tr><th>Item Code</th><th style={{ minWidth: 180 }}>Description</th><th>Material Type</th>
+            <th>Sub-Group</th><th>Speciality</th><th style={{ textAlign: 'right' }}>Total Required</th><th style={{ width: 60 }}></th></tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{empty}</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{empty}</td></tr>
             ) : (
               <>
                 {ordered.map((g) => (
@@ -350,14 +359,14 @@ function RequirementTable({ title, rows, count, empty, onExport, soRows = [] }) 
                       <FragmentRow key={m.itemCode} m={m} open={openItem === m.itemCode} onToggle={() => setOpenItem((v) => (v === m.itemCode ? null : m.itemCode))} />
                     ))}
                     <tr style={{ background: 'var(--bg)' }}>
-                      <td colSpan={3} style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>Subtotal — {g.mt}</td>
+                      <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>Subtotal — {g.mt}</td>
                       <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--g)', whiteSpace: 'nowrap' }}>{uomTotalText(g.subtotals)}</td>
                       <td />
                     </tr>
                   </Fragment>
                 ))}
                 <tr style={{ background: 'var(--g)', color: '#fff' }}>
-                  <td colSpan={3} style={{ textAlign: 'right', fontWeight: 800 }}>GRAND TOTAL</td>
+                  <td colSpan={5} style={{ textAlign: 'right', fontWeight: 800 }}>GRAND TOTAL</td>
                   <td style={{ textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap' }}>{uomTotalText(grand)}</td>
                   <td />
                 </tr>
@@ -377,13 +386,15 @@ function FragmentRow({ m, open, onToggle }) {
         <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.itemCode}</td>
         <td style={{ fontSize: 11 }}>{m.itemDescription || '-'}</td>
         <td style={{ fontSize: 11 }}>{m.materialType || '-'}</td>
+        <td style={{ fontSize: 11 }}>{m.subGroup || '-'}</td>
+        <td style={{ fontSize: 11 }}>{m.specialty || '-'}</td>
         <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{inr(m.total, 2)} {m.uom || ''}</td>
         <td style={{ textAlign: 'center' }}>
           <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 8px' }} onClick={onToggle} aria-label={`${open ? 'Hide' : 'Show'} orders driving ${m.itemCode}`}>{open ? '▾' : '▸'}</button>
         </td>
       </tr>
       {open && (
-        <tr><td colSpan={5} style={{ padding: '6px 20px', background: 'var(--bg)' }}>
+        <tr><td colSpan={7} style={{ padding: '6px 20px', background: 'var(--bg)' }}>
           <table style={{ width: '100%' }}>
             <thead><tr><th style={{ textAlign: 'left' }}>SO</th><th style={{ textAlign: 'left' }}>Customer</th><th style={{ textAlign: 'left' }}>Spec</th><th style={{ textAlign: 'right' }}>Qty</th></tr></thead>
             <tbody>

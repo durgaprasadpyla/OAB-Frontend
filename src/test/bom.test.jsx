@@ -45,8 +45,10 @@ describe('bomMaterialForSO — proportional scaling', () => {
   it('scales the recipe by soQty / baseQty', () => {
     // 2500 of a spec whose BOM is per 1000 -> factor 2.5
     expect(bomMaterialForSO(BOM, 'SP-A', 2500)).toEqual([
-      { itemCode: 'FILM-1', itemDescription: 'BOPP 20mic', materialType: undefined, subGroup: undefined, uom: 'Kg', required: 125 },
-      { itemCode: 'INK-1', itemDescription: 'Cyan', materialType: undefined, subGroup: undefined, uom: 'Kg', required: 5 },
+      // 28.09 §Super Admin: the line also carries its specialty and microns — a
+      // description alone reads "600 MM" and says nothing about the material.
+      { itemCode: 'FILM-1', itemDescription: 'BOPP 20mic', materialType: undefined, subGroup: undefined, specialty: '', microns: '', uom: 'Kg', required: 125 },
+      { itemCode: 'INK-1', itemDescription: 'Cyan', materialType: undefined, subGroup: undefined, specialty: '', microns: '', uom: 'Kg', required: 5 },
     ]);
   });
 

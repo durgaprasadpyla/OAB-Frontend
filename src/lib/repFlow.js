@@ -24,11 +24,15 @@ const lower = (v) => s(v).toLowerCase();
  * S Dashboard), or when the name is already in the Customer Master. "This
  * lead-to-customer change will only happen within the super admin login."
  */
-export function isCustomerLead(lead, customers) {
+export function isCustomerLead(lead, customers) {   // eslint-disable-line no-unused-vars
   if (!lead) return false;
-  if (lead.converted_to_customer) return true;
-  const name = lower(lead.client_name);
-  return !!name && arr(customers).some((c) => lower(c && c.customer) === name);
+  // 28.09 §Sales ¶20: "Zepto, which is added as a Lead, is now shown under Customer."
+  // This also matched on NAME against the Customer Master, so a new lead whose company
+  // already buys from us was filed as a customer the moment it was typed — and the
+  // Super Admin's own "un-convert" could never take effect, because the name still
+  // matched. The conversion is the Super Admin's to make and is recorded on the lead:
+  // that flag is now the only thing that decides it.
+  return lead.converted_to_customer === true;
 }
 
 /**

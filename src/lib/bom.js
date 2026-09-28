@@ -47,6 +47,10 @@ export function bomMaterialForSO(bom, spec, soQty) {
     itemDescription: r.itemDescription,
     materialType: r.materialType,
     subGroup: r.subGroup,
+    // 28.09 §Super Admin: a description on its own says "600 MM" and nothing else —
+    // the material, its sub-group and its specialty are what make a BOM line readable.
+    specialty: r.specialty || r.specialtyName || '',
+    microns: r.microns || '',
     uom: r.uom,
     required: factor * n(r.qtyPerBase),
   }));
@@ -94,7 +98,8 @@ export function bomMaterialForSOList(bom, list) {
       if (!agg[m.itemCode]) {
         agg[m.itemCode] = {
           itemCode: m.itemCode, itemDescription: m.itemDescription,
-          materialType: m.materialType, uom: m.uom, total: 0, bySO: [],
+          materialType: m.materialType, subGroup: m.subGroup || '',
+          specialty: m.specialty || '', uom: m.uom, total: 0, bySO: [],
         };
       }
       agg[m.itemCode].total += m.required;
@@ -157,6 +162,7 @@ export function bomSaveSpec(bom, spec, draft, { jssRow = {}, user = '' } = {}) {
     .filter((r) => r.itemCode && n(r.qtyPerBase) > 0)
     .map((r) => ({
       itemCode: r.itemCode, materialType: r.materialType || '', subGroup: r.subGroup || '',
+      specialty: r.specialty || r.specialtyName || '',
       itemDescription: r.itemDescription || '', microns: r.microns || '',
       uom: r.uom || '', qtyPerBase: n(r.qtyPerBase),
     }));
@@ -196,7 +202,8 @@ export function plannedBomMap(list) {
       baseQty: b.baseQty, baseUOM: b.baseUom, savedBy: b.savedBy, savedAt: b.savedAt,
       items: (b.items || []).map((it) => ({
         itemCode: it.itemCode, itemDescription: it.itemName, materialType: it.materialType || '',
-        subGroup: it.subGroup || '', microns: it.microns || '', uom: it.uom || '',
+        subGroup: it.subGroup || '', specialty: it.specialtyName || '',
+        microns: it.microns || '', uom: it.uom || '',
         qtyPerBase: it.qtyPerBase, departmentName: it.departmentName || '',
       })),
     };

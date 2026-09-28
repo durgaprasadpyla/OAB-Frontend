@@ -101,7 +101,10 @@ export function canAccess(role, path) {
   if (p === '/reports') return ['planner', 'ppc', 'mis', 'plan', 'superadmin', 'pm', 'plant'].includes(role);
   // Enhancements 2.0 planning-module landings — each strictly for its own login
   // (Super Admin keeps a break-glass view to oversee planning from one place).
-  if (p === '/ppc') return role === 'ppc' || role === 'superadmin';
+  // 28.09 §PM: "Include the PPC login dashboard in the PM login and also include the
+  // daily board in the PM login." The two logins plan the same machines off the same
+  // data — the Plant Manager was simply missing the two screens.
+  if (p === '/ppc') return ['ppc', 'superadmin', 'pm'].includes(role);
   if (p === '/mis') return role === 'mis' || role === 'superadmin';
   if (p === '/plan') return role === 'plan' || role === 'superadmin';
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching
