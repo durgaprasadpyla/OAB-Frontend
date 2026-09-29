@@ -3,7 +3,7 @@ import { useData } from '../data.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { salesToday } from '../lib/sales.js';
 import { poValue } from '../lib/repPortal.js';
-import { repBook, despatchLocationsFor, acceptedSkusForPo, acceptedSkusWithoutJss, acceptedPriceForQty, buildPoLines } from '../lib/repFlow.js';
+import { repBook, despatchLocationRowsFor, acceptedSkusForPo, acceptedSkusWithoutJss, acceptedPriceForQty, buildPoLines } from '../lib/repFlow.js';
 
 // 🧾 Enter PO — Sales Login §61-§70.
 //
@@ -30,7 +30,10 @@ export default function RepPoTab({ leads, sales, save, repId }) {
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 6000); };
 
   const lead = book.customers.find((l) => l.id === form.leadId) || null;
-  const locations = useMemo(() => despatchLocationsFor(lead, customers), [lead, customers]);
+  // 28.09 §Superstar ¶1: the row, not just the town — one customer can take delivery
+  // at the same place through two warehouses, and Enter OAB has always shown which.
+  const locations = useMemo(() => despatchLocationRowsFor(lead, customers), [lead, customers]);
+  const locRow = useMemo(() => locations.find((l) => l.key === form.location) || null, [locations, form.location]);
   const ready = useMemo(() => (lead ? acceptedSkusForPo(sales, lead.id) : []), [sales, lead]);
   const waiting = useMemo(() => (lead ? acceptedSkusWithoutJss(sales, lead.id) : []), [sales, lead]);
   const allLeads = sales.leads || [];
@@ -57,8 +60,12 @@ export default function RepPoTab({ leads, sales, save, repId }) {
   async function savePo() {
     let rows;
     try {
-      rows = buildPoLines({ leadId: form.leadId, customer: lead ? lead.client_name : '', despatchLocation: form.location, poNumber: form.poNumber, poDate: form.date, lines }, sales, repId);
       if (!form.location) throw new Error('Pick the despatch location.');
+      rows = buildPoLines({
+        leadId: form.leadId, customer: lead ? lead.client_name : '',
+        despatchLocation: locRow ? locRow.location : '', warehouseName: locRow ? locRow.warehouse : '',
+        poNumber: form.poNumber, poDate: form.date, lines,
+      }, sales, repId);
     } catch (e) { flash('r', e.message); return; }
     setBusy(true);
     try {
@@ -92,7 +99,7 @@ export default function RepPoTab({ leads, sales, save, repId }) {
           <div className="fg"><label>Despatch location *</label>
             <select value={form.location} aria-label="PO despatch location" onChange={(e) => set({ location: e.target.value })} disabled={!lead}>
               <option value="">-- Select --</option>
-              {locations.map((l) => <option key={l} value={l}>{l}</option>)}
+              {locations.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
             </select>
           </div>
           <div className="fg"><label>PO Number *</label>

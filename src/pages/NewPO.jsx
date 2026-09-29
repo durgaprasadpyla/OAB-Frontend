@@ -63,7 +63,17 @@ export default function NewPO() {
     setGroup(master ? (master.group || '') : '');
     setCustomer(repPo.customer || '');
     setLoc(repPo.loc || '');
-    setLocKey('');
+    // 28.09 §Superstar ¶1: the rep's PO now names the WAREHOUSE as well as the town, so
+    // the picker can land on the right Customer Master row instead of leaving the
+    // Superstar to guess between two deliveries to the same place.
+    const wantLoc = String(repPo.loc || '').trim();
+    const wantWh = String(repPo.warehouse || '').trim();
+    const match = (mods.customers || []).find((c) => (
+      String(c.customer || '').trim().toLowerCase() === String(repPo.customer || '').trim().toLowerCase()
+      && String(c.dispatchLoc || '').trim() === wantLoc
+      && (!wantWh || String(c.warehouseName || '').trim() === wantWh)
+    ));
+    setLocKey(match ? locRowKey(match) : '');
     setSkus([]); setStep(1);
   }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
   const customers = useMemo(() => (

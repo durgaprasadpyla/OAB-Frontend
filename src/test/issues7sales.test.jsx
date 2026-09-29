@@ -25,7 +25,12 @@ const salesModule = (over = {}) => ({
   sales_users: [{ id: REP, username: 'rep1', display_name: 'Rep One', status: 'Active' }],
   targets: [], substrate_options: [], nego_msgs: [], dropdowns: { despatch: ['Roll', 'Pouch', 'Bulk Bags'] }, ...over,
 });
-const openRep = (sales, extra = {}) => renderApp(<RepPortal />, { modules: { sales, customers, ...extra }, role: 'sales', repId: REP });
+/** The two films the substrate pickers offer, so a structure can be built. */
+const MASTER_ITEMS = [
+  { code: 'BLM100', name: '600 MM', materialType: 'FILM', subGroup: 'PET', microns: '12', widthMm: 600, active: true },
+  { code: 'BLM101', name: '600 MM', materialType: 'FILM', subGroup: 'LDPE', microns: '60', widthMm: 600, active: true },
+];
+const openRep = (sales, extra = {}) => renderApp(<RepPortal />, { modules: { sales, customers, masterItems: MASTER_ITEMS, ...extra }, role: 'sales', repId: REP });
 const tab = async (label) => userEvent.click(await screen.findByText(label));
 const lastSales = (saved) => saved.filter((s) => s.key === 'sales').pop().data;
 
@@ -36,12 +41,20 @@ describe('Rep — SKUs and the CSA requisition', () => {
     await userEvent.click(screen.getByLabelText('SKU pick Customer'));
     await userEvent.selectOptions(screen.getByLabelText('SKU Customer'), 'L2');
     await userEvent.type(screen.getByLabelText('SKU Name'), '1kg Oil Pouch');
-    await userEvent.type(screen.getByLabelText('Structure'), 'PET 12 / LDPE 60');
+    // ¶24: the structure is picked from the Item Master, not typed
+    await userEvent.selectOptions(await screen.findByLabelText('Primary Substrate'), 'PET');
+    await userEvent.selectOptions(screen.getByLabelText('Primary Micron'), '12');
+    await userEvent.selectOptions(screen.getByLabelText('Primary Film width'), '600');
+    await userEvent.selectOptions(screen.getByLabelText('Secondary Substrate'), 'LDPE');
+    await userEvent.selectOptions(screen.getByLabelText('Secondary Micron'), '60');
     await userEvent.selectOptions(screen.getByLabelText('Category'), 'Oil');
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
     await userEvent.click(screen.getByText('✓ Add SKU'));
     await waitFor(() => expect(lastSales(saved).skus).toHaveLength(1));
-    expect(lastSales(saved).skus[0]).toMatchObject({ sku_name: '1kg Oil Pouch', structure: 'PET 12 / LDPE 60', lead_id: 'L2' });
+    expect(lastSales(saved).skus[0]).toMatchObject({
+      sku_name: '1kg Oil Pouch', lead_id: 'L2',
+      structure: 'PET · 12 mic · 600 mm  +  LDPE · 60 mic',
+    });
 
     // pick it (radio), say the sample is received, fill the requisition, send to QC
     await userEvent.click(await screen.findByLabelText('Edit 1kg Oil Pouch'));

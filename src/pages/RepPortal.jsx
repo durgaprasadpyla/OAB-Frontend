@@ -65,9 +65,14 @@ const TABS = [
   { k: 'visit', label: '📋 Log Visit' },
   { k: 'po', label: '🧾 Enter PO' },
   { k: 'targets', label: '🎯 My Targets' },
+  // 28.09 §Sales ¶15-¶16: "Add Lead and My Leads can be merged into one tab … where
+  // the list will be below the Add New Lead. Editing a lead also can happen by
+  // selecting the radio button prior to the lead name." And: "In the place of My Leads
+  // we can have My Customers, where all of that particular sales rep's leads that are
+  // converted as customers can be listed."
   { k: 'customers', label: '📈 My Leads' },
+  { k: 'mycust', label: '🏆 My Customers' },
   { k: 'contacts', label: '📇 My Contacts' },
-  { k: 'add', label: '➕ Add Lead' },
   { k: 'sku', label: '📦 SKUs' },
   { k: 'quotes', label: '💬 Quotations' },
   { k: 'send', label: '📤 Send Quote' },
@@ -114,9 +119,9 @@ export default function RepPortal() {
       {tab === 'visit' && <RepVisitTab leads={myLeads} sales={sales} save={save} repId={repId} />}
       {tab === 'po' && <RepPoTab leads={myLeads} sales={sales} save={save} repId={repId} />}
       {tab === 'targets' && <RepTargetsTab sales={sales} repId={repId} />}
-      {tab === 'customers' && <MyCustomers leads={myLeads} sales={sales} save={save} repId={repId} />}
+      {tab === 'customers' && <LeadsWorkspace book={book} sales={sales} save={save} repId={repId} />}
+      {tab === 'mycust' && <MyCustomersTab book={book} sales={sales} save={save} repId={repId} />}
       {tab === 'contacts' && <MyContacts leads={myLeads} book={book} sales={sales} save={save} repId={repId} />}
-      {tab === 'add' && <AddCustomer sales={sales} save={save} repId={repId} book={book} onDone={() => setTab('customers')} />}
       {tab === 'sku' && <RepSkusTab leads={myLeads} sales={sales} save={save} repId={repId} />}
       {tab === 'quotes' && <RepQuotationsTab sales={sales} save={save} repId={repId} />}
       {tab === 'send' && <RepSendQuoteTab sales={sales} save={save} repId={repId} />}
@@ -409,7 +414,42 @@ function LogTouch({ lead, sales, save, repId, onMsg }) {
 }
 
 /* ─────────────────────────── My Customers ─────────────────────────── */
-function MyCustomers({ leads, sales, save, repId }) {
+/**
+ * 28.09 §Sales ¶15: the Add-Lead form with its list underneath, the way the Item
+ * Master and the Customer Master work. The radio beside a name opens that lead in the
+ * form above.
+ */
+function LeadsWorkspace({ book, sales, save, repId }) {
+  const [pick, setPick] = useState(null);
+  return (
+    <>
+      <AddCustomer sales={sales} save={save} repId={repId} book={book}
+        pickId={pick} onPicked={setPick} onDone={() => setPick(null)} />
+      <MyCustomers leads={book.leads} sales={sales} save={save} repId={repId}
+        title="My Leads" selId={pick} onSelect={setPick}
+        empty="No leads yet — add one in the form above." />
+    </>
+  );
+}
+
+/**
+ * ¶16: "In the place of My Leads we can have My Customers, where all of that
+ * particular sales rep's leads that are converted as customers can be listed."
+ */
+function MyCustomersTab({ book, sales, save, repId }) {
+  const [pick, setPick] = useState(null);
+  return (
+    <>
+      <AddCustomer sales={sales} save={save} repId={repId} book={book}
+        pickId={pick} onPicked={setPick} onDone={() => setPick(null)} />
+      <MyCustomers leads={book.customers} sales={sales} save={save} repId={repId}
+        title="My Customers" selId={pick} onSelect={setPick}
+        empty="None of your leads has been converted into a customer yet — the Super Admin converts them." />
+    </>
+  );
+}
+
+function MyCustomers({ leads, sales, save, repId, title = 'My Leads', selId = null, onSelect = null, empty = '' }) {
   const [q, setQ] = useState('');
   const [stage, setStage] = useState('');
   const [openId, setOpenId] = useState(null);
@@ -438,7 +478,7 @@ function MyCustomers({ leads, sales, save, repId }) {
   return (
     <div className="card">
       <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>My Leads <span className="tag tgr">{rows.length}</span></div>
+        <div className="ctitle" style={{ margin: 0 }}>{title} <span className="tag tgr">{rows.length}</span></div>
         <input placeholder="Search customer / group / city…" value={q} aria-label="Search customers" onChange={(e) => setQ(e.target.value)} />
         <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Filter by stage">
           <option value="">All stages</option>
@@ -449,12 +489,13 @@ function MyCustomers({ leads, sales, save, repId }) {
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
         <table>
           <thead><tr>
+            {onSelect && <th style={{ width: 34, textAlign: 'center' }}>Edit</th>}
             <th style={{ minWidth: 180 }}>Lead / Customer</th><th>Group</th><th>My categories</th>
             <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th style={{ width: 150 }}>Stage</th><th style={{ width: 120 }}>Next ping</th><th style={{ width: 70 }}></th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No leads allocated to you yet — add one under Add Lead.</td></tr>
+              <tr><td colSpan={onSelect ? 8 : 7} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>{empty || 'No leads allocated to you yet.'}</td></tr>
             ) : rows.map((l) => {
               const due = nextFollowUp(l, sales.interactions);
               const st = followUpState(due);
@@ -462,7 +503,13 @@ function MyCustomers({ leads, sales, save, repId }) {
               return (
                 <FragmentRow key={l.id} open={open}>
                   <tr>
-                    <td style={{ fontWeight: 600 }}>{l.client_name}{l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}</td>
+                    {onSelect && (
+                      <td style={{ textAlign: 'center', verticalAlign: 'top' }}>
+                        <input type="radio" name="lead-edit-sel" checked={selId === l.id}
+                          aria-label={`Edit ${l.client_name}`} onChange={() => onSelect(l.id)} />
+                      </td>
+                    )}
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{l.client_name}{l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}</td>
                     <td style={{ fontSize: 11 }}>{l.group || '—'}</td>
                     <td style={{ fontSize: 11 }}>{repCategoriesOf(l, repId).join(', ') || '—'}</td>
                     <td style={{ textAlign: 'center' }}>
@@ -479,7 +526,7 @@ function MyCustomers({ leads, sales, save, repId }) {
                     </td>
                   </tr>
                   {open && (
-                    <tr><td colSpan={7} style={{ background: 'var(--bg)', padding: 14 }}>
+                    <tr><td colSpan={onSelect ? 8 : 7} style={{ background: 'var(--bg)', padding: 14 }}>
                       <LeadDetail lead={l} sales={sales} repId={repId} />
                     </td></tr>
                   )}
@@ -802,12 +849,16 @@ function MyContacts({ leads, book, sales, save, repId }) {
               : rows.map((c) => (
                 <tr key={c.id} className={editing === c.id ? 'hi' : undefined}>
                   {/* §7: the radio button brings the line into the form above to edit */}
-                  <td style={{ textAlign: 'center' }}><input type="radio" name="contact-edit" checked={editing === c.id} aria-label={`Edit ${c.name}`} onChange={() => editContact(c)} /></td>
-                  <td style={{ fontWeight: 700 }}>{custOfContact(c, allLeads) || '—'}</td>
+                  {/* 28.09 §Sales ¶21: "the lead or customer name, the contact person name,
+                      and designation … should be on one line. The radio button selection can
+                      move one line to the top." Long names were wrapping and pushing the three
+                      apart; they no longer wrap, and the radio aligns to the top of the row. */}
+                  <td style={{ textAlign: 'center', verticalAlign: 'top' }}><input type="radio" name="contact-edit" checked={editing === c.id} aria-label={`Edit ${c.name}`} onChange={() => editContact(c)} /></td>
+                  <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{custOfContact(c, allLeads) || '—'}</td>
                   <td>{(() => { const pk = payOfContact(c, allLeads); return pk ? <span style={{ ...pill(PAY_STYLE[pk] || {}), fontSize: 10 }}>{payLabel(pk)}</span> : '—'; })()}</td>
                   <td>{contactCats(c).map((cat) => <span key={cat} className="tag tb" style={{ marginRight: 3, fontSize: 10 }}>{cat}</span>) || '—'}</td>
-                  <td style={{ fontWeight: 600 }}>{c.name}{c.priority == 1 ? <span style={{ color: '#c9a100' }} title="Primary"> ⭐</span> : null}</td>
-                  <td style={{ fontSize: 11 }}>{c.designation || '—'}</td>
+                  <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{c.name}{c.priority == 1 ? <span style={{ color: '#c9a100' }} title="Primary"> ⭐</span> : null}</td>
+                  <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{c.designation || '—'}</td>
                   <td style={{ fontSize: 11 }}>{c.location || '—'}</td>
                   <td>
                     <select value={c.priority != null && c.priority !== '' ? String(c.priority) : ''} aria-label={`Rank for ${c.name}`} onChange={(e) => setRank(c, e.target.value)} style={{ height: 26, fontSize: 11 }}>
@@ -834,7 +885,7 @@ function MyContacts({ leads, book, sales, save, repId }) {
 // leads the Super Admin allocated to the rep and the ones the rep added — pick one
 // to add or edit its categories, or Add New Lead. Check the list before adding, so
 // the same lead is not entered twice.
-function AddCustomer({ sales, save, repId, book, onDone }) {
+function AddCustomer({ sales, save, repId, book, onDone, pickId = null, onPicked = null }) {
   const allLeads = sales.leads || [];
   const [form, setForm] = useState({
     leadSel: '__new__', custNew: '',
@@ -856,6 +907,10 @@ function AddCustomer({ sales, save, repId, book, onDone }) {
     ...f,
     categories: f.categories.includes(c) ? f.categories.filter((x) => x !== c) : [...f.categories, c],
   }));
+
+  // The list below the form drives the same selection the dropdown does, so the
+  // radio beside a lead name opens it here for editing.
+  useEffect(() => { if (pickId != null) pickLead(pickId); }, [pickId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function pickLead(v) {
     const l = mine.find((x) => x.id === v) || null;
@@ -914,7 +969,7 @@ function AddCustomer({ sales, save, repId, book, onDone }) {
       <div className="g3">
         <div className="fg">
           <label>Lead *</label>
-          <select value={form.leadSel} aria-label="Lead" onChange={(e) => pickLead(e.target.value)}>
+          <select value={form.leadSel} aria-label="Lead" onChange={(e) => { pickLead(e.target.value); if (onPicked) onPicked(e.target.value); }}>
             <option value="__new__">➕ Add New Lead…</option>
             {mine.map((l) => <option key={l.id} value={l.id}>{l.client_name}{book.customers.some((c) => c.id === l.id) ? ' (customer)' : ''}</option>)}
           </select>

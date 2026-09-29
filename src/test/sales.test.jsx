@@ -218,20 +218,25 @@ const repTab = async (label) => {
   await userEvent.click(hit);
 };
 
+/** A name as it appears in a LIST row, not as an <option> in a picker above it. */
+const inList = (text) => screen.getAllByText(text).find((el) => el.closest('td')) || null;
+
 describe('Rep Portal — allocation', () => {
   it('shows a rep only their own customers', async () => {
     await openRep('R1');
     await repTab('My Leads');
-    await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
-    expect(screen.getByText('Gamma Foods')).toBeInTheDocument();
+    // 28.09 ¶15: the Add-Lead form sits above the list now, so each name is also an
+    // <option> in its picker — these assertions are about the LIST.
+    await waitFor(() => expect(inList('Acme Dairy')).toBeTruthy());
+    expect(inList('Gamma Foods')).toBeTruthy();
     expect(screen.queryByText('Beta Snacks')).not.toBeInTheDocument();   // R2's lead
   });
 
   it('shows a shared customer to the other rep with THEIR category only', async () => {
     await openRep('R2');
     await repTab('My Leads');
-    await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
-    const row = screen.getByText('Acme Dairy').closest('tr');
+    await waitFor(() => expect(inList('Acme Dairy')).toBeTruthy());
+    const row = inList('Acme Dairy').closest('tr');
     expect(within(row).getByText('Ice Creams')).toBeInTheDocument();
     expect(within(row).queryByText('Dairy')).not.toBeInTheDocument();
     expect(screen.queryByText('Gamma Foods')).not.toBeInTheDocument();   // R1's lead
@@ -274,7 +279,7 @@ describe('Rep Portal — follow-ups', () => {
 describe('Rep Portal — add customer', () => {
   it('saves a lead allocated to the signed-in rep', async () => {
     const { saved } = await openRep('R1');
-    await repTab('Add Lead');
+    await repTab('My Leads');
     // Sales Login §1-2: no Group here at all, and the field is the Lead
     expect(screen.queryByLabelText('Group')).toBeNull();
     await userEvent.type(screen.getByLabelText('Lead name'), 'New Client Ltd');
@@ -291,7 +296,7 @@ describe('Rep Portal — add customer', () => {
 
   it('refuses to save without a category, and does not write', async () => {
     const { saved } = await openRep('R1');
-    await repTab('Add Lead');
+    await repTab('My Leads');
     await userEvent.type(screen.getByLabelText('Lead name'), 'No Category Ltd');
     await userEvent.click(screen.getByText(/Save New Lead/));
     expect(screen.getByText(/at least one category/i)).toBeInTheDocument();
@@ -326,7 +331,7 @@ describe('Rep Portal — stage changes', () => {
   it('writes a stage change back to the blob', async () => {
     const { saved } = await openRep('R1');
     await repTab('My Leads');
-    await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
+    await waitFor(() => expect(inList('Acme Dairy')).toBeTruthy());
 
     await userEvent.selectOptions(screen.getByLabelText('Stage for Acme Dairy'), 'Converted');
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
@@ -337,7 +342,7 @@ describe('Rep Portal — stage changes', () => {
   it('offers every canonical stage', async () => {
     await openRep('R1');
     await repTab('My Leads');
-    await waitFor(() => expect(screen.getByText('Acme Dairy')).toBeInTheDocument());
+    await waitFor(() => expect(inList('Acme Dairy')).toBeTruthy());
     const opts = [...screen.getByLabelText('Stage for Acme Dairy').options].map((o) => o.value);
     expect(opts).toEqual(REP_STATUSES);
   });

@@ -63,13 +63,40 @@ export function pickerList(book, kind) {
  * wrote down. The Super Admin's Locations list is offered behind both.
  */
 export function despatchLocationsFor(lead, customers, extra = []) {
+  return despatchLocationRowsFor(lead, customers, extra).map((r) => r.location);
+}
+
+/**
+ * The same delivery points, but each with the WAREHOUSE that stands behind it.
+ *
+ * 28.09 §Superstar ¶1: "the despatch locations should be as per the despatch
+ * locations that are populating in the Enter OAB. But here the warehouse name is not
+ * visible." One customer can take delivery at the same town through two different
+ * warehouses — Enter OAB has always shown "Dharapuram (Unit II)" and keyed the row by
+ * both, while the rep's PO offered the bare town twice over with no way to tell them
+ * apart. The warehouse now travels with the choice and onto the PO, so the Superstar
+ * enters the order against the right one.
+ *
+ * Returns [{ location, warehouse, label, key }] — `key` identifies the ROW, the way
+ * Enter OAB keys it, so two same-named towns stay two choices.
+ */
+export function despatchLocationRowsFor(lead, customers, extra = []) {
   const out = [];
+  const seen = new Set();
+  const push = (location, warehouse) => {
+    const loc = s(location);
+    if (!loc) return;
+    const wh = s(warehouse);
+    const key = loc + '||' + wh;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ location: loc, warehouse: wh, key, label: wh ? loc + ' (' + wh + ')' : loc });
+  };
   if (lead) {
-    getCustLocations(customers, lead.client_name).forEach((l) => { const v = s(l && l.dispatchLoc); if (v && !out.includes(v)) out.push(v); });
-    const own = s(lead.delivery_location);
-    if (own && !out.includes(own)) out.push(own);
+    getCustLocations(customers, lead.client_name).forEach((l) => push(l && l.dispatchLoc, l && l.warehouseName));
+    push(lead.delivery_location, '');
   }
-  arr(extra).forEach((v) => { const t = s(v); if (t && !out.includes(t)) out.push(t); });
+  arr(extra).forEach((v) => push(v, ''));
   return out;
 }
 
@@ -328,7 +355,7 @@ export function acceptedPriceForQty(sku, qty) {
  * PO reference. Each line must carry a quantity, and its price may not fall below
  * the accepted slab for that quantity.
  */
-export function buildPoLines({ leadId, customer, despatchLocation, poNumber, poDate, lines }, sales, repId, { now = new Date(), uid = salesUid } = {}) {
+export function buildPoLines({ leadId, customer, despatchLocation, warehouseName, poNumber, poDate, lines }, sales, repId, { now = new Date(), uid = salesUid } = {}) {
   if (!leadId) throw new Error('Select the customer.');
   if (!s(poNumber)) throw new Error('Enter the PO number.');
   if (!s(poDate)) throw new Error('Pick the PO date.');
@@ -351,6 +378,9 @@ export function buildPoLines({ leadId, customer, despatchLocation, poNumber, poD
     if (min != null && p < min - 1e-9) throw new Error(`${sku.sku_name}: ₹${p} is below the accepted ₹${min} for ${q}.`);
     return {
       id: uid('po'), po_ref: ref, lead_id: leadId, customer: s(customer), despatch_location: s(despatchLocation),
+      // ¶1: the warehouse behind that town, so the Superstar enters the order against
+      // the right one when a customer takes delivery at two warehouses in one place.
+      warehouse_name: s(warehouseName),
       sku_id: sku.id, sku_name: sku.sku_name, jss_spec: s(sku.jss_spec), qty: q, price: p,
       po_number: s(poNumber), date: s(poDate) || salesToday(now),
       category: sku.category, dispatch_form: sku.dispatch_form || sku.dispatch_type,
@@ -394,15 +424,41 @@ export function markPosPushed(pos, ids, { so = '', by = '', now = new Date() } =
  * the interactions, split by what the lead is today.
  */
 export function costIncurred(sales, customers) {
+  const lines = costLines(sales, customers);
+  const convert = lines.filter((l) => l.kind === 'convert').reduce((t, l) => t + l.cost, 0);
+  const retain = lines.filter((l) => l.kind === 'retain').reduce((t, l) => t + l.cost, 0);
+  return { convert, retain, total: convert + retain };
+}
+
+/**
+ * 28.09 §Sales ¶27: "Where are these listed? There should be a particular tab where
+ * costs incurred for sales." The two totals on the Sales Admin dashboard were the only
+ * place this money appeared, with no way to see what made them up.
+ *
+ * One row per logged visit or meeting that cost something, newest first:
+ * who spent it, on whom, when, what kind of call it was, and whether it counts as
+ * winning a customer (`convert`) or keeping one (`retain`).
+ */
+export function costLines(sales, customers) {
   const byId = new Map(arr(sales && sales.leads).map((l) => [l.id, l]));
-  let convert = 0, retain = 0;
+  const out = [];
   arr(sales && sales.interactions).forEach((i) => {
     const cost = n(i && i.expense);
     if (!cost) return;
-    const lead = byId.get(i.lead_id);
-    if (lead && isCustomerLead(lead, customers)) retain += cost; else convert += cost;
+    const lead = byId.get(i && i.lead_id) || null;
+    out.push({
+      id: s(i.id) || String(out.length),
+      date: s(i.date) || s(i.created_at).slice(0, 10),
+      party: lead ? s(lead.client_name) : '—',
+      group: lead ? s(lead.group) : '',
+      kind: lead && isCustomerLead(lead, customers) ? 'retain' : 'convert',
+      mode: s(i.mode) || s(i.type) || '—',
+      rep: s(i.created_by) || s(i.rep) || '—',
+      note: s(i.remarks) || s(i.note),
+      cost,
+    });
   });
-  return { convert, retain, total: convert + retain };
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
 /** Categories on a lead, editable by the rep for the leads they hold (Add Lead §3). */

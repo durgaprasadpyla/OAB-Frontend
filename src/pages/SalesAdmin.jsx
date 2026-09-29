@@ -6,8 +6,9 @@ import { today as todayIso } from '../lib/format.js';
 import { ddList } from '../lib/dropdowns.js';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import SalesDailyTab from '../components/SalesDailyTab.jsx';
-import { costIncurred } from '../lib/repFlow.js';
+import { costIncurred, costLines } from '../lib/repFlow.js';
 import SalesCsaTab from '../components/SalesCsaTab.jsx';
+import SalesCostsTab from '../components/SalesCostsTab.jsx';
 import SalesPosTab from '../components/SalesPosTab.jsx';
 import SalesContactsTab from '../components/SalesContactsTab.jsx';
 import SalesManageTab from '../components/SalesManageTab.jsx';
@@ -34,6 +35,8 @@ const TABS = [
   { k: 'overview', label: '📊 Overview' },
   { k: 'daily', label: '📋 Daily Updates' },
   { k: 'costs', label: '🧪 CSA & Quote' },
+  // 28.09 §Sales ¶27: the two cost tiles on the Overview had nothing behind them.
+  { k: 'spend', label: '💸 Sales Costs' },
   { k: 'pos', label: '📦 All POs' },
   { k: 'targets', label: '🎯 Targets' },
   { k: 'leads', label: '📈 Leads' },
@@ -81,6 +84,7 @@ export default function SalesAdmin() {
       {tab === 'overview' && <Overview sales={sales} />}
       {tab === 'daily' && <SalesDailyTab sales={sales} />}
       {tab === 'costs' && <SalesCsaTab sales={sales} save={save} />}
+      {tab === 'spend' && <SalesCostsTab sales={sales} />}
       {tab === 'pos' && <SalesPosTab sales={sales} />}
       {tab === 'targets' && <SalesTargetsTab sales={sales} patch={patch} />}
       {tab === 'leads' && <AllCustomers sales={sales} patch={patch} />}

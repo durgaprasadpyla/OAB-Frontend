@@ -22,7 +22,7 @@ export default function PoToSo() {
   const pending = useMemo(() => pendingRepPos(sales), [sales]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return t ? pending.filter((p) => [p.po_number, p.customer, p.despatch_location].some((v) => String(v || '').toLowerCase().includes(t))) : pending;
+    return t ? pending.filter((p) => [p.po_number, p.customer, p.despatch_location, p.warehouse_name].some((v) => String(v || '').toLowerCase().includes(t))) : pending;
   }, [pending, q]);
   const picked = pending.find((p) => p.key === pick) || null;
 
@@ -31,7 +31,8 @@ export default function PoToSo() {
     nav('/po', {
       state: {
         repPo: {
-          key: picked.key, poNum: picked.po_number, poDate: picked.date, customer: picked.customer, loc: picked.despatch_location,
+          key: picked.key, poNum: picked.po_number, poDate: picked.date, customer: picked.customer,
+          loc: picked.despatch_location, warehouse: picked.warehouse_name || '',
           lineIds: picked.lines.map((l) => l.id),
           lines: picked.lines.map((l) => ({ spec: l.jss_spec, sku: l.sku_name, qty: l.qty, price: l.price })),
         },
@@ -71,7 +72,12 @@ export default function PoToSo() {
                       <td style={{ fontWeight: 700 }}>{p.po_number || '—'}</td>
                       <td style={{ fontSize: 11 }}>{p.date ? fmtDate(p.date) : '—'}</td>
                       <td style={{ fontWeight: 600 }}>{p.customer || '—'}</td>
-                      <td style={{ fontSize: 11 }}>{p.despatch_location || '—'}</td>
+                      {/* 28.09 §Superstar ¶1: the warehouse behind the town — without it two
+                          deliveries to the same place read identically here. */}
+                      <td style={{ fontSize: 11 }}>
+                        {p.despatch_location || '—'}
+                        {p.warehouse_name ? <div style={{ fontSize: 10, color: 'var(--i3)' }}>{p.warehouse_name}</div> : null}
+                      </td>
                       <td style={{ fontSize: 11 }}>{repName(sales.sales_users, p.created_by)}</td>
                       <td style={{ fontSize: 11 }}>
                         {p.lines.map((l) => {

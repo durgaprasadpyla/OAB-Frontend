@@ -13,6 +13,7 @@ import {
   buildCsaRequest, sendSkuForCsa, quoteStatusOf,
 } from '../lib/repFlow.js';
 import LeadCustomerPicker from './LeadCustomerPicker.jsx';
+import SubstrateLayers, { blankSubLayers, structureFromSubLayers, subLayersFromStructure } from './SubstrateLayers.jsx';
 
 // 📦 SKUs — Sales Login §10-§29.
 //
@@ -25,7 +26,7 @@ import LeadCustomerPicker from './LeadCustomerPicker.jsx';
 // CSA received is QC's alone.
 
 const blankTier = () => ({ qty: '', price: '' });
-const blankForm = () => ({ kind: 'lead', leadId: '', name: '', category: '', dispatchForm: '', structure: '', sampleReceived: 'No' });
+const blankForm = () => ({ kind: 'lead', leadId: '', name: '', category: '', dispatchForm: '', structure: '', structureLayers: blankSubLayers(), sampleReceived: 'No' });
 const blankCsa = () => ({ despatch_location: '', tentative_qty: '', tentative_date: '', target_price: '' });
 
 /** An on/off pill. `csa_received` renders locked — only QC can set it. */
@@ -105,6 +106,8 @@ export default function RepSkusTab({ leads, sales, save, repId }) {
     setForm({
       kind: isCust ? 'customer' : 'lead', leadId: lead ? lead.id : '', name: sku.sku_name || '', category: sku.category || '',
       dispatchForm: sku.dispatch_form || sku.dispatch_type || '', structure: sku.structure || '',
+      structureLayers: Array.isArray(sku.structure_layers) && sku.structure_layers.length
+        ? sku.structure_layers : subLayersFromStructure(sku.structure),
       sampleReceived: sku.csa_requested || sku.sample_received === 'Yes' || sku.sample_received === true ? 'Yes' : 'No',
     });
     const r = sku.csa_request || {};
@@ -124,13 +127,13 @@ export default function RepSkusTab({ leads, sales, save, repId }) {
         await save('sales', (prev) => ({
           ...(prev || {}),
           skus: ((prev && prev.skus) || []).map((sk) => (sk.id === editing
-            ? { ...sk, lead_id: form.leadId, sku_name: form.name.trim(), category: form.category, dispatch_form: form.dispatchForm, structure: String(form.structure || '').trim() }
+            ? { ...sk, lead_id: form.leadId, sku_name: form.name.trim(), category: form.category, dispatch_form: form.dispatchForm, structure: String(form.structure || '').trim(), structure_layers: form.structureLayers }
             : sk)),
         }));
         flash('g', '✓ SKU updated.');
         cancelEdit();
       } else {
-        const sku = { ...buildSku(form, repId), structure: String(form.structure || '').trim() };
+        const sku = { ...buildSku(form, repId), structure: String(form.structure || '').trim(), structure_layers: form.structureLayers };
         await save('sales', (prev) => ({ ...(prev || {}), skus: [...((prev && prev.skus) || []), sku] }));
         setForm(blankForm()); setCsa(blankCsa());
         setDraft(null);
@@ -151,7 +154,7 @@ export default function RepSkusTab({ leads, sales, save, repId }) {
       await save('sales', (prev) => ({
         ...(prev || {}),
         skus: sendSkuForCsa(((prev && prev.skus) || []).map((sk) => (sk.id === sku.id
-          ? { ...sk, lead_id: form.leadId || sk.lead_id, sku_name: form.name.trim() || sk.sku_name, category: form.category || sk.category, dispatch_form: form.dispatchForm || sk.dispatch_form, structure: String(form.structure || '').trim() }
+          ? { ...sk, lead_id: form.leadId || sk.lead_id, sku_name: form.name.trim() || sk.sku_name, category: form.category || sk.category, dispatch_form: form.dispatchForm || sk.dispatch_form, structure: String(form.structure || '').trim(), structure_layers: form.structureLayers }
           : sk)), sku.id, request),
       }));
       flash('g', `✓ ${sku.sku_name} sent to QC for the CSA report — it is now on QC's "Samples pending analysis" list.`);
@@ -226,7 +229,9 @@ export default function RepSkusTab({ leads, sales, save, repId }) {
             <input value={form.name} aria-label="SKU Name" placeholder="e.g. 200g Turmeric Pouch" onChange={(e) => set({ name: e.target.value })} />
           </div>
           <div className="fg"><label>Structure</label>
-            <input value={form.structure} aria-label="Structure" placeholder="e.g. PET 12 / MET PET 12 / LDPE 50" onChange={(e) => set({ structure: e.target.value })} />
+            <input value={form.structure} aria-label="Structure" readOnly
+              placeholder="Built from the substrates below"
+              style={{ background: 'var(--bg)' }} />
           </div>
           <div className="fg"><label>Category *</label>
             <select value={form.category} aria-label="Category" onChange={(e) => set({ category: e.target.value, dispatchForm: '' })}>
@@ -248,6 +253,8 @@ export default function RepSkusTab({ leads, sales, save, repId }) {
               ))}
             </div>
           </div>
+          <SubstrateLayers layers={form.structureLayers}
+            onChange={(ls) => set({ structureLayers: ls, structure: structureFromSubLayers(ls) })} />
         </div>
         <div className="act">
           <button className="btn btn-g" onClick={saveSku} disabled={busy}>{editing ? '✓ Save SKU' : '✓ Add SKU'}</button>
