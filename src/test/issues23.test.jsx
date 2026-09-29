@@ -59,10 +59,13 @@ describe('Issues 2.3 §6 — the Super Admin can see and edit leads', () => {
     // this one is NOT in the customer master, so it can be promoted
     expect(within(carls).getByLabelText('Convert Carlsberg to customer')).toBeInTheDocument();
 
-    // Ansh Agronomy IS in the master, so it reads as a customer and can be demoted
+    // 29.09 ¶23: Ansh Agronomy is in the Customer Master, but nobody ever recorded
+    // the conversion. This screen used to call that "✓ Customer" — so the Super Admin
+    // saw nothing to do while every sales rep still listed it as a lead. It is now
+    // called out as outstanding, with the button that puts it right.
     const ansh = screen.getByText('Ansh Agronomy').closest('tr');
-    expect(within(ansh).getByText('✓ Customer')).toBeInTheDocument();
-    expect(within(ansh).getByLabelText('Revert Ansh Agronomy to lead')).toBeInTheDocument();
+    expect(within(ansh).getByText('⚠ Not converted')).toBeInTheDocument();
+    expect(within(ansh).getByLabelText('Convert Ansh Agronomy to customer')).toBeInTheDocument();
   });
 
   it('edits a lead through the top form and writes only the lead rows back', async () => {

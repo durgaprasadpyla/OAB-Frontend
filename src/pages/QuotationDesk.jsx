@@ -336,12 +336,15 @@ function NewQuotation({ prefill, onIssued }) {
           <div className="tw sy" style={{ maxHeight: 'calc(100vh - 460px)' }}>
             <table>
               <thead><tr>
-                <th style={{ width: 34 }}></th><th style={{ minWidth: 160 }}>SKU</th><th style={{ width: 120 }}>Item code</th>
+                <th style={{ width: 34 }}></th><th style={{ minWidth: 160 }}>SKU</th>
+                {/* ¶26: the rep's target price is the desk's to see — and only the desk's. */}
+                <th style={{ width: 100, textAlign: 'right' }}>Target ₹</th>
+                <th style={{ width: 120 }}>Item code</th>
                 <th style={{ width: 90 }}>Anti-fog</th><th style={{ width: 90 }}>MOQ</th><th style={{ width: 80 }}>GST %</th><th>Specs / Price slabs / Plates</th>
               </tr></thead>
               <tbody>
                 {leadSkus.length === 0 ? (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No SKUs recorded for this customer.</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No SKUs recorded for this customer.</td></tr>
                 ) : leadSkus.map((sku) => {
                   const cfg = picked[sku.id];
                   return (
@@ -350,6 +353,11 @@ function NewQuotation({ prefill, onIssued }) {
                         <input type="checkbox" checked={!!cfg} aria-label={`Quote ${sku.sku_name || sku.name}`} onChange={() => toggleSku(sku.id)} />
                       </td>
                       <td style={{ fontWeight: 600 }}>{sku.sku_name || sku.name || sku.id}</td>
+                      <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {Number((sku.csa_request || {}).target_price || sku.target_price || 0) > 0
+                          ? '₹' + Number((sku.csa_request || {}).target_price || sku.target_price).toLocaleString('en-IN')
+                          : <span style={{ color: 'var(--i3)' }}>—</span>}
+                      </td>
                       {cfg ? (
                         <>
                           <td><input value={cfg.item_code} aria-label={`Item code ${sku.id}`} onChange={(e) => setField(sku.id, 'item_code', e.target.value)} /></td>

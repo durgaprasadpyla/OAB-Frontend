@@ -45,8 +45,13 @@ const th = { padding: '5px 5px', fontSize: 9.5 };
 const addrHead = { background: '#1a3a6b', color: '#fff', textAlign: 'center', fontSize: 9.5, fontWeight: 800, padding: 3, margin: '-6px -10px 5px', letterSpacing: '0.05em' };
 
 /** The document itself — laid out at a fixed A4-ish width so the PDF is stable. */
+/** True when the supplier is on "no limit" — the PO then shows nothing at all. */
+const isNoLimit = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ') === 'no limit';
+
 export function PurchaseOrderDoc({ po, asl, innerRef }) {
   const { items, gstPct, subTotal, grandTotal, supplier } = poTotals(po, asl);
+  const rawTerms = String((po && po.paymentTerms) || supplier.paymentTerms || '').trim();
+  const payTerms = isNoLimit(rawTerms) ? '' : rawTerms;
   return (
     <div ref={innerRef} style={{ width: 794, background: '#fff', color: '#111', fontFamily: 'Arial, sans-serif' }}>
       <div style={{ border: '2px solid #1a3a6b', minHeight: 1100, display: 'flex', flexDirection: 'column' }}>
@@ -120,7 +125,15 @@ export function PurchaseOrderDoc({ po, asl, innerRef }) {
           <div style={{ background: '#1a3a6b', color: '#fff', textAlign: 'center', fontSize: 10, fontWeight: 800, padding: 4, letterSpacing: '0.06em', textDecoration: 'underline' }}>TERMS &amp; CONDITIONS</div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9.5 }}>
             <tbody>
-              <tr><td style={{ ...tcLabel, width: '20%' }}>EXPECTED DELIVERY</td><td style={tcVal} colSpan={3}>{poDate(po?.expectedDelivery)}</td></tr>
+              {/* 29.09 §Super Admin: "The payment terms should also be a part of the PO at
+                  the time of purchase order generation. When, for a particular supplier, no
+                  limit is selected, then on the purchase order page under payment terms there
+                  should be a blank and it should not show 'no limit'." A supplier we are not
+                  holding to a due date is one the PO simply says nothing about. */}
+              <tr>
+                <td style={{ ...tcLabel, width: '20%' }}>EXPECTED DELIVERY</td><td style={tcVal}>{poDate(po?.expectedDelivery)}</td>
+                <td style={tcLabel}>PAYMENT TERMS</td><td style={tcVal}>{payTerms}</td>
+              </tr>
               <tr>
                 <td style={tcLabel}>PACKING</td><td style={tcVal}>Price is inclusive of packing</td>
                 <td style={tcLabel}>TEST REPORTS</td><td style={tcVal}>TDS, MSDS &amp; Food grade certificates to be furnished along with the material</td>

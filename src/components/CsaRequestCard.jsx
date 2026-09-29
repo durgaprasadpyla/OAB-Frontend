@@ -10,7 +10,7 @@ LABELS.totalGusset = 'Total gusset (mm)';
 LABELS.totalHeight = 'Finished pouch height (mm)';
 LABELS.totalWidth = 'Finished pouch width (mm)';
 
-export default function CsaRequestCard({ sku, compact = false }) {
+export default function CsaRequestCard({ sku, compact = false, showTarget = false }) {
   const r = sku && sku.csa_request;
   if (!r) return null;
   const details = Object.entries(r.details || {}).filter(([, v]) => v !== '' && v != null);
@@ -24,7 +24,10 @@ export default function CsaRequestCard({ sku, compact = false }) {
         <span>Despatch location: <b>{r.despatch_location || '—'}</b></span>
         <span>Tentative quantity: <b>{Number(r.tentative_qty || 0).toLocaleString('en-IN')}</b></span>
         <span>Tentative despatch: <b>{r.tentative_date ? fmtDate(r.tentative_date) : '—'}</b></span>
-        <span>Target price: <b>₹{Number(r.target_price || 0).toLocaleString('en-IN')}</b></span>
+        {/* 29.09 ¶26: "Target price (This shall only be visible in quote login)." The
+            rep records it for the desk that prices the job; QC works from the sample and
+            the structure, and seeing a target anchors them to it. */}
+        {showTarget && <span>Target price: <b>₹{Number(r.target_price || 0).toLocaleString('en-IN')}</b></span>}
         <span>Despatch form: <b>{r.despatch_form || '—'}</b></span>
         {sku.structure && <span>Structure: <b>{sku.structure}</b></span>}
       </div>

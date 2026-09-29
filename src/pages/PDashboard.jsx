@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../data.jsx';
-import { masterApi } from '../api.js';
+import { useAuth } from '../auth.jsx';
+import { masterApi, purchaseApi } from '../api.js';
 import { UOM_DEFAULTS } from '../lib/dropdowns.js';
 import { ITEM_IDENTITY, identityByCode, applyIdentity, fillGaps, identityConflicts } from '../lib/itemIdentity.js';
 import { parseWidthMm, widthFromName, itemWidthMm } from '../lib/itemWidth.js';
@@ -54,6 +55,17 @@ function tagClass(status, overdue) {
   if (status === 'Partial') return 'tb';
   return 'ty';
 }
+/**
+ * 29.09 §Super Admin: "the payment terms should be a dropdown selection with the
+ * following options: Advance, 15 days, 30 days, 45 days, 60 days, no limit."
+ * Free text produced "30 Days", "30days" and "Net 30" for the same term and the due
+ * date could not be worked out from any of them.
+ */
+const PAYMENT_TERMS = ['Advance', '15 days', '30 days', '45 days', '60 days', 'No limit'];
+
+/** ¶18: "no limit" means there is no due date — a PO shows nothing, not the words. */
+const NO_LIMIT = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ') === 'no limit';
+
 function paymentTermsText(po, asl) { // (purchPaymentTermsText 7116)
   const row = (asl || []).find((r) => r.company === po.supplier && r.paymentTerms);
   return row ? row.paymentTerms : '';
@@ -65,11 +77,15 @@ function addDaysISO(baseISO, days) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 function dueDate(po, asl) { // (purchDueDate 7121) — counts from actual receipt, else PO date
+  // ¶18: a supplier on "no limit" has no due date at all, so nothing is ever overdue.
+  if (NO_LIMIT(paymentTermsText(po, asl))) return '';
   const days = parsePaymentDays(paymentTermsText(po, asl));
   return addDaysISO(po.actualReceiptDate || po.poDate || today(), days);
 }
 function dueInDays(po, asl) { // (purchDueInDays 7129) — negative = overdue
-  const d = new Date(dueDate(po, asl) + 'T00:00:00');
+  const due = dueDate(po, asl);
+  if (!due) return '';
+  const d = new Date(due + 'T00:00:00');
   const t = new Date(today() + 'T00:00:00');
   return Math.round((d - t) / 86400000);
 }
@@ -181,6 +197,31 @@ function POTracking() {
   const [stat, setStat] = useState('');
   const [q, setQ] = useState('');
   const [docPo, setDocPo] = useState(null);   // PO previewed as a printable document
+  // 29.09 §Purchase: "There should be a provision in the PAdmin where the PAdmin
+  // should be able to cancel the purchase orders that the purchase login has created."
+  const { reloadModule } = useData();
+  const { role } = useAuth() || {};
+  const canCancel = role === 'padmin' || role === 'superadmin';
+  const [busyPo, setBusyPo] = useState('');
+  const [poMsg, setPoMsg] = useState(null);
+
+  async function cancelPo(po) {
+    const reason = window.prompt(`Cancel purchase order ${po.poNum}?
+
+`
+      + 'It keeps its number and history but leaves the open list, the stores’ expected receipts and payables. '
+      + 'Say why:', '');
+    if (reason === null) return;
+    setBusyPo(po.poNum);
+    setPoMsg(null);
+    try {
+      await purchaseApi.cancelPO(po.poNum, reason);
+      await reloadModule('purchase');
+      setPoMsg({ t: 'g', text: `✓ ${po.poNum} cancelled.` });
+    } catch (e) {
+      setPoMsg({ t: 'r', text: e.message || String(e) });
+    } finally { setBusyPo(''); }
+  }
 
   const suppliers = useMemo(() => [...new Set(pos.map((p) => p.supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [pos]);
 
@@ -249,9 +290,10 @@ function POTracking() {
               <th>PO #</th><th>Date</th><th>Supplier</th><th>Item</th>
               <th style={rt}>Rate</th><th style={rt}>Amount</th><th style={rt}>PO Qty</th><th style={rt}>Qty Recd</th>
               <th>Expected</th><th>Actual Receipt</th><th>GRN Ref</th><th>Stage</th><th style={rt}>Delay</th><th style={{ textAlign: 'center' }}>PDF</th>
+              {canCancel && <th style={{ textAlign: 'center' }}>Cancel</th>}
             </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={14} style={emptyTd}>No purchase orders found</td></tr> : rows.map((po, pi) => {
+              {rows.length === 0 ? <tr><td colSpan={canCancel ? 15 : 14} style={emptyTd}>No purchase orders found</td></tr> : rows.map((po, pi) => {
                 const st = statusOf(po);
                 const overdue = !isClosed(po) && !!po.expectedDelivery && delayDays(po) > 0;
                 const dd = po.expectedDelivery ? delayDays(po) : null;
@@ -277,6 +319,17 @@ function POTracking() {
                       <td>{first ? <span className={'tag ' + tagClass(st, overdue)}>{stageLabel(po)}</span> : ''}</td>
                       <td style={{ ...rt, fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{first ? (dd == null ? '-' : (dd > 0 ? '+' + dd : dd)) : ''}</td>
                       <td style={{ textAlign: 'center' }}>{first ? <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>🖨</button> : ''}</td>
+                      {canCancel && (
+                        <td style={{ textAlign: 'center' }}>
+                          {first && (po.status === 'Cancelled'
+                            ? <span className="tag tr" style={{ fontSize: 9 }} title={po.cancelReason || ''}>Cancelled</span>
+                            : num(po.items && po.items.reduce((t, x) => t + num(x.receivedQty), 0)) > 0
+                              ? <span style={{ fontSize: 10, color: 'var(--i3)' }} title="Goods already received — close it or raise a return">received</span>
+                              : <button className="btn btn-s" disabled={busyPo === po.poNum}
+                                  style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)', borderColor: '#F5A8A0' }}
+                                  aria-label={`Cancel ${po.poNum}`} onClick={() => cancelPo(po)} title="Cancel this purchase order">✕</button>)}
+                        </td>
+                      )}
                     </tr>
                   );
                 });
@@ -299,14 +352,14 @@ const ASL_DETAIL_FIELDS = [
   { k: 'company', label: 'Company Name' }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' }, { k: 'email', label: 'Email' },
   { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' }, { k: 'gstn', label: 'GSTN' },
-  { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'speciality', label: 'Speciality' },
+  { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] }, { k: 'paymentTerms', label: 'Payment Terms', select: PAYMENT_TERMS }, { k: 'speciality', label: 'Speciality' },
 ];
 // Add-new-supplier form fields. (renderASLEdit new form 11838)
 const ASL_NEW_FIELDS = [
   { k: 'company', label: 'Company Name *', span: 2 }, { k: 'contact', label: 'Primary Contact' }, { k: 'phone', label: 'Primary Phone' },
   { k: 'email', label: 'Primary Email' }, { k: 'contact2', label: 'Secondary Contact' }, { k: 'phone2', label: 'Secondary Phone' },
   { k: 'gstn', label: 'GSTN' }, { k: 'address', label: 'Address', span: 2 }, { k: 'pincode', label: 'Pincode' },
-  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms' }, { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] },
+  { k: 'speciality', label: 'Speciality' }, { k: 'paymentTerms', label: 'Payment Terms', select: PAYMENT_TERMS }, { k: 'transportCharges', label: 'Transport Costs', select: ['Vendor', 'Bloomflex'] },
 ];
 // Item-level fields — one row per material within a supplier group.
 const ASL_ITEM_COLS = [

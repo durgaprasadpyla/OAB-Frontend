@@ -99,14 +99,21 @@ export default function SpecFields({
   // particular customer and group selection there are any sub-brands, they will be
   // available for the QC to select in the dropdown." They live on the specs already
   // written for that customer / group.
+  //
+  // 29.09 ¶19: "The options in sub-brand should be populated only after I select the
+  // group and customer, and not before that." With nothing chosen this used to offer
+  // EVERY sub-brand in the spec master, so a QC could put one customer's sub-brand on
+  // another customer's job. The list stays empty until the party is named.
   const subBrands = useMemo(() => {
+    if (!form.customer) return [];
     const out = new Set();
     (jss || []).forEach((j) => {
       const sb = String((j && j.subBrand) || '').trim();
       if (!sb) return;
-      const sameCust = form.customer && String(j.customer || '').trim() === form.customer;
-      const sameGroup = form.group && String(j.group || '').trim() === form.group;
-      if (sameCust || sameGroup || (!form.customer && !form.group)) out.add(sb);
+      if (String(j.customer || '').trim() !== form.customer) return;
+      // when a group is named too, the sub-brand has to belong under it
+      if (form.group && String(j.group || '').trim() !== form.group) return;
+      out.add(sb);
     });
     return [...out].sort((a, b) => a.localeCompare(b));
   }, [jss, form.customer, form.group]);
@@ -138,8 +145,9 @@ export default function SpecFields({
           onChange={(e) => set({ customer: val(e), subBrand: '' })}
           hint={custOptions.length ? '' : 'No customers under this group — the Super Admin adds them in the Customer Master.'} />
         <Pick label="Sub Brand" value={form.subBrand} options={subBrands}
-          placeholder={subBrands.length ? '— none —' : '— none on file for this customer —'}
-          disabled={!canAddNew && subBrands.length === 0}
+          placeholder={!form.customer ? '— pick the customer first —'
+            : subBrands.length ? '— none —' : '— none on file for this customer —'}
+          disabled={!form.customer || (!canAddNew && subBrands.length === 0)}
           hint={canAddNew ? '' : 'Set by the Super Admin; QC picks from the sub-brands this customer already has.'}
           onChange={(e) => set({ subBrand: val(e) })} />
       </div>

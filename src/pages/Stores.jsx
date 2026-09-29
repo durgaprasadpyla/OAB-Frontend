@@ -47,7 +47,24 @@ const qty = (v) => (v == null || v === '' ? '—' : Number(v).toLocaleString('en
 export default function Stores() {
   const [tab, setTab] = useState('onhand');
   const [msg, setMsg] = useState(null);
-  const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 4000); };
+  /**
+   * 29.09: "roll number was supposed to be displayed while making the GRN but now it
+   * is again showing as auto."
+   *
+   * This was a NEW FUNCTION on every render, handed to Grn / IssuesReturns / the
+   * purchase tab as a prop. Each of them builds its loader with `useCallback([flash])`
+   * and runs it from `useEffect([load])` — so every render produced a new `flash`, a
+   * new `load`, and another round of fetches, which set state and rendered again. The
+   * sticker preview reads the codes that loop keeps refetching; when one of those
+   * calls lost the race the list went empty and the box fell back to "auto".
+   *
+   * OnHand already guarded itself against this (it wraps the prop in a ref); the fix
+   * belongs here, where the instability starts.
+   */
+  const flash = useCallback((t, text) => {
+    setMsg({ t, text });
+    if (t === 'g') setTimeout(() => setMsg(null), 4000);
+  }, []);
 
   return (
     <div id="app">
@@ -579,7 +596,7 @@ function UnitTraceModal({ unit, onClose, flash }) {
 
 /* ─────────────────────────── Purchase Orders + ETA ──────────────────────── */
 
-function PurchaseOrders({ flash }) {
+export function PurchaseOrders({ flash }) {
   const { mods } = useData();
   const pos = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.pos) ? mods.purchase.pos : []), [mods.purchase]);
   const [etas, setEtas] = useState([]);
@@ -1575,6 +1592,29 @@ function IssuesReturns({ flash }) {
       setForm((f) => ({ ...f, department: '' }));
     }
   }, [soChosen, ctxReady, routeDepts, form.department]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * 29.09 §Stores: "first I selected printing in the department and then ink and
+   * solvent … were populated here. Now I go back and change the department to
+   * slitting. The previous selections are still present in material type and
+   * subgroup whereas they should be auto-refreshed upon changing the department."
+   *
+   * The department decides which BOM lines are on offer, so the three material
+   * pickers below it describe the OLD department until they are cleared. Printing's
+   * ink left standing over Slitting matched nothing and the item list came back
+   * empty, which read as "there is no material" rather than "this filter is stale".
+   */
+  const lastDept = useRef(form.department);
+  useEffect(() => {
+    if (lastDept.current === form.department) return;
+    lastDept.current = form.department;
+    // Only the three FILTERS. The chosen roll is not cleared here: picking an issue
+    // line to return against fills the department from that line, and clearing the
+    // roll at the same moment emptied the form the line had just populated. An item
+    // that no longer belongs under the new department still drops out below, where
+    // narrowing already takes care of it.
+    setFMat(''); setFSub(''); setFSpec('');
+  }, [form.department]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── the material: type → sub-group → speciality → item code ── */
 

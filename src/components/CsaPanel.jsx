@@ -5,11 +5,22 @@ import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
 import { ddList } from '../lib/dropdowns.js';
-import { materialOptions, specialtyOptions } from '../lib/jssSpec.js';
+import { materialOptions, specialtyOptions, micronOptions } from '../lib/jssSpec.js';
 import { useApi } from '../lib/useApi.js';
 
 /** ¶6: Substrate 1 / 2 / 3 read as what they are. */
 const SUBSTRATE_LABELS = ['Primary', 'Secondary', 'Third'];
+
+/**
+ * ¶22: what counts as "any changes are made at all" on a CSA. Identity, the three
+ * substrates with their speciality and micron, and the measurements — the things the
+ * plant reviews. Timestamps and ids are not compared.
+ */
+const CSA_COMPARED = [
+  'party_kind', 'company_name', 'product_desc', 'dispatch_type',
+  ...[1, 2, 3].flatMap((n) => [`substrate${n}`, `substrate${n}_specialty`, `substrate${n}_val`]),
+  'ink_gsm', 'adhesive_gsm', 'plate_cost', 'cylinder_cost', 'remarks', 'plant_comment_req',
+];
 import CsaRequestCard from './CsaRequestCard.jsx';
 import {
   CSA_BLANK, DISPATCH_TYPES, YES_NO,
@@ -45,6 +56,7 @@ function QcCsa() {
 
   const [draft, setDraft] = useState(null);   // { skuId, form } — skuId '' = direct
   const [viewing, setViewing] = useState(null);   // a report shown read-only
+  const [reapprove, setReapprove] = useState(null);   // ¶22: the edit waiting for its note
   const [q, setQ] = useState('');               // history search
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -81,24 +93,38 @@ function QcCsa() {
 
   // Re-approve: QC edited the report after the plant answered — flag it for
   // re-review so it re-enters the plant's pending queue. (legacy qcResubmit)
-  async function reapprove(r) {
-    const why = window.prompt('What did you change in the CSA report? It will go to the plant for re-review.', '');
-    if (why === null) return;
-    setBusy(true);
+  /** ¶21: a report picked with the radio comes back into the form above, filled in. */
+  function editReport(r) {
+    const form = { ...CSA_BLANK };
+    Object.keys(form).forEach((k) => { if (r[k] != null) form[k] = r[k]; });
+    setDraft({ skuId: r.sku_id || '', form, editId: r.id });
+    setReapprove(null);
     setMsg(null);
-    try {
-      await patch({
-        qc_reports: (sales.qc_reports || []).map((x) => (x.id === r.id
-          ? { ...x, needs_pm_review: true, status: 'Pending Plant', qc_reapprove_note: String(why || ''), qc_reapproved_at: new Date().toISOString() }
-          : x)),
-      });
-      setMsg({ t: 'g', text: '✅ Sent to the plant for re-review.' });
-    } catch (e) {
-      setMsg({ t: 'r', text: e.message || String(e) });
-    } finally { setBusy(false); }
   }
 
+  /**
+   * 29.09 ¶21-¶22: a CSA picked with the radio comes back into this form, and saving
+   * an edited one asks what changed and sends it to the plant again.
+   *
+   * "Upon editing a particular CSA report, if any changes are made at all, on saving,
+   * the reapprove pop-up should populate. The comments will be given by the QC as to
+   * what changes he has made in the CSA. And again the CSA will be sent to the plant
+   * for plant comments."
+   */
   async function submit() {
+    // Editing an existing report: nothing to save unless something actually moved.
+    if (draft.editId) {
+      const before = (sales.qc_reports || []).find((x) => x.id === draft.editId) || {};
+      const after = buildCsaReport(draft.form, { sales, skuId: draft.skuId, user });
+      const changed = CSA_COMPARED.filter((k) => String(before[k] ?? '') !== String(after[k] ?? ''));
+      if (!changed.length) {
+        setDraft(null);
+        setMsg({ t: 'y', text: 'Nothing changed — the report is as it was.' });
+        return;
+      }
+      setReapprove({ id: draft.editId, form: draft.form, skuId: draft.skuId, changed, note: '' });
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
@@ -112,6 +138,56 @@ function QcCsa() {
     } catch (e) {
       setMsg({ t: 'r', text: e.message || String(e) });
     } finally { setBusy(false); }
+  }
+
+  /** Write the edit, with the QC's note, and put it back in front of the plant. */
+  async function saveReapproval() {
+    if (!reapprove) return;
+    if (!String(reapprove.note || '').trim()) {
+      setMsg({ t: 'r', text: 'Say what you changed — the plant reviews this note.' });
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const rebuilt = buildCsaReport(reapprove.form, { sales, skuId: reapprove.skuId, user });
+      await patch({
+        qc_reports: (sales.qc_reports || []).map((x) => (x.id === reapprove.id ? {
+          ...x, ...rebuilt, id: x.id, created_at: x.created_at,
+          needs_pm_review: true, status: 'Pending Plant', plant_comments: '',
+          qc_reapprove_note: String(reapprove.note).trim(), qc_reapproved_at: new Date().toISOString(),
+        } : x)),
+      });
+      setReapprove(null);
+      setDraft(null);
+      setMsg({ t: 'g', text: '✅ CSA updated and sent to the plant for re-review.' });
+    } catch (e) {
+      setMsg({ t: 'r', text: e.message || String(e) });
+    } finally { setBusy(false); }
+  }
+
+  if (reapprove) {
+    // ¶22: the note the plant will read, before the edit is written.
+    return (
+      <div className="card" aria-label="Re-approve the CSA report">
+        <div className="ctitle">✎ Re-approve — what did you change?</div>
+        <div className="pg-sub" style={{ marginTop: 0 }}>
+          {reapprove.changed.length} field(s) changed. The report goes back to the plant for fresh comments,
+          and the plant’s previous answer is cleared.
+        </div>
+        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        <div className="fg">
+          <label>Your comments for the plant *</label>
+          <textarea rows={3} value={reapprove.note} aria-label="Re-approve comments"
+            placeholder="e.g. changed the primary substrate to CC PET 12 mic after the trial"
+            onChange={(e) => setReapprove((v) => ({ ...v, note: e.target.value }))} />
+        </div>
+        <div className="act">
+          <button className="btn btn-g" onClick={saveReapproval} disabled={busy}>✓ Save and send to the plant</button>
+          <button className="btn btn-s" onClick={() => { setReapprove(null); setMsg(null); }} disabled={busy}>Cancel</button>
+        </div>
+      </div>
+    );
   }
 
   if (draft) {
@@ -190,15 +266,22 @@ function QcCsa() {
         </div>
         <div className="tw sy" style={{ maxHeight: 340 }}>
           <table>
-            <thead><tr><th style={{ minWidth: 150 }}>Customer or lead</th><th>Job name</th><th>Structure</th><th>Source</th><th>Raised</th><th>Status</th><th>Plant comments</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+            {/* 29.09 ¶21: "there shall be a radio button selection. Once a radio button is
+                selected against a line item, then on the top page the CSA report generation
+                page should be auto-filled with the data that was already added for editing." */}
+            <thead><tr><th style={{ width: 34, textAlign: 'center' }}>Edit</th><th style={{ minWidth: 150 }}>Customer or lead</th><th>Job name</th><th>Structure</th><th>Source</th><th>Raised</th><th>Status</th><th>Plant comments</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
-              {reports.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{q ? 'No matching reports' : 'No reports yet'}</td></tr>
+              {reports.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>{q ? 'No matching reports' : 'No reports yet'}</td></tr>
                 : reports.map((r) => {
                   const ci = csaCompanyItem(sales, r);
                   const direct = r.source === 'direct';
                   return (
                     <tr key={r.id}>
-                      <td style={{ fontWeight: 600 }}>{ci.company}</td>
+                      <td style={{ textAlign: 'center', verticalAlign: 'top' }}>
+                        <input type="radio" name="csa-edit-sel" checked={!!draft && draft.editId === r.id}
+                          aria-label={`Edit CSA for ${ci.item}`} onChange={() => editReport(r)} />
+                      </td>
+                      <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{ci.company}</td>
                       <td style={{ fontSize: 11 }}>{ci.item}</td>
                       <td style={{ fontSize: 11 }}>{csaStructure(r)}</td>
                       <td><span className={'tag ' + (direct ? 'ty' : 'tb')} style={{ fontSize: 9 }}>{direct ? 'Direct / Walk-in' : 'Sales OS'}</span></td>
@@ -207,7 +290,7 @@ function QcCsa() {
                       <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.plant_comments || <span style={{ color: 'var(--i3)' }}>awaiting plant</span>}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`View CSA for ${ci.item}`} onClick={() => setViewing(r)}>View</button>{' '}
-                        <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px', color: '#8a6d00', borderColor: '#f2dfa0' }} aria-label={`Re-approve CSA for ${ci.item}`} onClick={() => reapprove(r)} disabled={busy}>✎ Re-approve</button>
+                        <span style={{ fontSize: 10, color: 'var(--i3)' }} title="Pick the radio on the left to edit this report">edit ←</span>
                       </td>
                     </tr>
                   );
@@ -337,13 +420,15 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
         const label = SUBSTRATE_LABELS[n - 1];
         const chosen = f[`substrate${n}`];
         const specialties = specialtyOptions(items, chosen);
+        /** ¶20: the microns the Item Master records for this substrate, narrowed by the speciality chosen. */
+        const micronsFor = (k) => micronOptions(items, f[`substrate${k}`], f[`substrate${k}_specialty`]);
         const unit = fromMaster.length ? 'Micron' : substrateUnit(sales, chosen);
         return (
           <div className="g4" key={n}>
             <div className="fg">
               <label>{label} Substrate</label>
               <select value={chosen} aria-label={`${label} Substrate`}
-                onChange={(e) => { set(`substrate${n}`, e.target.value); set(`substrate${n}_specialty`, ''); }}>
+                onChange={(e) => { set(`substrate${n}`, e.target.value); set(`substrate${n}_specialty`, ''); set(`substrate${n}_val`, ''); }}>
                 <option value="">—</option>
                 {subs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
                 {chosen && !subs.some((x) => x.name === chosen) && <option value={chosen}>{chosen}</option>}
@@ -353,12 +438,31 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
               <label>{label} Speciality</label>
               <select value={f[`substrate${n}_specialty`] || ''} aria-label={`${label} Speciality`}
                 disabled={!chosen || specialties.length === 0}
-                onChange={(e) => set(`substrate${n}_specialty`, e.target.value)}>
+                onChange={(e) => { set(`substrate${n}_specialty`, e.target.value); set(`substrate${n}_val`, ''); }}>
                 <option value="">{chosen && specialties.length === 0 ? '— none recorded —' : '—'}</option>
                 {specialties.map((x) => <option key={x} value={x}>{x}</option>)}
               </select>
             </div>
-            <N label={unit} v={f[`substrate${n}_val`]} on={(v) => set(`substrate${n}_val`, v)} aria={`${label} Substrate ${unit}`} />
+            {/* 29.09 ¶20: "the microns also should be a dropdown selection based on the
+                item under specialty selected from the item master." Typed microns did not
+                have to match anything the Item Master holds, so a CSA could specify a film
+                nobody stocks. */}
+            <div className="fg">
+              <label>{unit}</label>
+              {micronsFor(n).length ? (
+                <select value={f[`substrate${n}_val`] ?? ''} aria-label={`${label} Substrate ${unit}`}
+                  disabled={!chosen}
+                  onChange={(e) => set(`substrate${n}_val`, e.target.value)}>
+                  <option value="">{chosen ? '— select —' : '—'}</option>
+                  {/* a value recorded before the master changed stays selectable */}
+                  {f[`substrate${n}_val`] && !micronsFor(n).includes(String(f[`substrate${n}_val`]))
+                    && <option value={f[`substrate${n}_val`]}>{f[`substrate${n}_val`]}</option>}
+                  {micronsFor(n).map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              ) : (
+                <N label="" v={f[`substrate${n}_val`]} on={(v) => set(`substrate${n}_val`, v)} aria={`${label} Substrate ${unit}`} />
+              )}
+            </div>
             <div />
           </div>
         );

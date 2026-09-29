@@ -24,12 +24,14 @@ const masterItems = [
 describe('Purchase — Generate PO flow', () => {
   it('raises a PO into module 6 with a price-history entry and bumped counter', async () => {
     const user = userEvent.setup();
-    const purchase = { asl: [{ company: 'Sup1', specificMaterial: 'BOPP Film', uom: 'Kg', basicPrice: 100, paymentTerms: '30 days', status: 'Active' }], pos: [], priceHistory: [], counter: 0, itemsExtra: [] };
+    const purchase = { asl: [{ company: 'Sup1', itemCode: 'BLM001', specificMaterial: 'BOPP Film', materialType: 'FILM', subGroup: 'AF BOPP', uom: 'Kg', basicPrice: 100, paymentTerms: '30 days', status: 'Active' }], pos: [], priceHistory: [], counter: 0, itemsExtra: [] };
     const { saved } = renderApp(<Purchase />, { modules: { purchase }, role: 'purchase', user: 'purchase' });
     await screen.findByText(/Generate Purchase Order/);
 
     await user.selectOptions(fieldByLabel('Supplier'), 'Sup1');
-    await user.type(screen.getByPlaceholderText('Item / material'), 'BOPP Film'); // auto-fills unit + rate 100
+    // 29.09: the item is PICKED by code; description, material, UOM and the
+     // supplier's price are read back from the master rather than typed.
+    await user.selectOptions(screen.getByLabelText('Item code line 1'), 'BLM001');
     const nums = screen.getAllByRole('spinbutton'); // [GST%, qty, rate]
     await user.type(nums[1], '50');
     await user.click(screen.getByRole('button', { name: /Create PO/ }));

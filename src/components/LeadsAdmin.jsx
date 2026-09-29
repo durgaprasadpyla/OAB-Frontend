@@ -3,6 +3,7 @@ import { useData } from '../data.jsx';
 import { exportAOA } from '../lib/xlsx.js';
 import { custGroups } from '../lib/master.js';
 import { today } from '../lib/format.js';
+import { isCustomerLead } from '../lib/repFlow.js';
 
 // Leads, in the Super Admin dashboard next to Customers.
 //
@@ -45,7 +46,25 @@ export default function LeadsAdmin() {
   const groups = useMemo(() => custGroups(customers), [customers]);
 
   const inMaster = (name) => customers.some((c) => lower(c.customer) === lower(name));
-  const isCustomer = (l) => l.converted_to_customer || inMaster(l.client_name);
+  /**
+   * 29.09: "I have marked these customers from whom we have received POs as customers
+   * … but whereas in the sales rep login they are still under leads converted."
+   *
+   * This screen used to call a lead a customer when its NAME merely appeared in the
+   * Customer Master — which every lead we have taken a PO from does. So it showed
+   * "✓ Customer", the Super Admin saw nothing left to do, and the conversion was never
+   * actually recorded on the lead. Every other screen reads the recorded flag, so the
+   * rep's login went on listing them as leads and the two disagreed.
+   *
+   * One rule now, shared with the rep portal: the Super Admin's conversion is what
+   * makes a customer. A lead already in the Customer Master but never converted is
+   * called out below rather than quietly counted as done.
+   */
+  const isCustomer = (l) => isCustomerLead(l, customers);
+  /** Marked converted, or already bought from — but the conversion was never recorded. */
+  const needsConversion = (l) => !isCustomer(l)
+    && (inMaster(l.client_name) || lower(l.stage) === 'converted');
+  const pendingConversion = useMemo(() => leads.filter(needsConversion), [leads, customers]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -94,6 +113,38 @@ export default function LeadsAdmin() {
     catch (e) { flash('r', 'Delete failed: ' + (e.message || e)); } finally { setBusy(false); }
   }
 
+  /**
+   * Record the conversion on every lead that was already being treated as a customer.
+   * These are the ones this screen used to call "✓ Customer" without ever writing it
+   * down — the backlog that left the rep's login disagreeing.
+   */
+  async function convertPending() {
+    const list = pendingConversion;
+    if (!list.length) return;
+    if (!window.confirm(`Convert ${list.length} lead(s) into customers?
+
+`
+      + 'These are already in the Customer Master, or marked Converted, but the conversion was never recorded. '
+      + 'Each one joins the Customer Master if it is not there, and moves to the customer side in every sales rep’s login.')) return;
+    setBusy(true);
+    try {
+      const add = [];
+      list.forEach((l) => {
+        const name = norm(l.client_name);
+        if (!name || inMaster(name) || add.some((c) => lower(c.customer) === lower(name))) return;
+        add.push({
+          group: l.group || '', customer: name, dispatchLoc: l.delivery_location || '', warehouseName: '',
+          billingAddr: '', shippingAddr: '', gstin: l.gstin || '', state: '',
+          contactPerson: '', contactPhone: '', contactEmail: '', remarks: l.remarks || '',
+        });
+      });
+      if (add.length) await save('customers', [...customers, ...add]);
+      const ids = new Set(list.map((l) => l.id));
+      await patchLeads(leads.map((x) => (ids.has(x.id) ? { ...x, converted_to_customer: true } : x)));
+      flash('g', `${list.length} lead(s) converted${add.length ? `, ${add.length} added to the Customer Master` : ''}.`);
+    } catch (e) { flash('r', e.message || String(e)); } finally { setBusy(false); }
+  }
+
   /** Promote: the name joins the Customer Master, so sale orders can use it. */
   async function toCustomer(l) {
     const name = norm(l.client_name);
@@ -137,6 +188,19 @@ export default function LeadsAdmin() {
       <div className="card">
         <div className="ctitle">{editId ? '✏ Edit Lead — ' + norm(form.client_name) : '＋ Add Lead'}</div>
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        {pendingConversion.length > 0 && (
+          <div className="al al-y" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ flex: 1, minWidth: 280 }}>
+              ⚠ <b>{pendingConversion.length} lead(s) are being treated as customers but were never converted here.</b>{' '}
+              They are already in the Customer Master, or marked Converted, so every sales rep still sees them on the
+              <b> lead</b> side. Converting records it once and moves them across.
+            </span>
+            <button className="btn btn-s" disabled={busy} onClick={convertPending}
+              aria-label="Convert every lead that is already a customer">
+              Convert all {pendingConversion.length}
+            </button>
+          </div>
+        )}
         <datalist id="lead-groups-dl">{groups.map((g) => <option key={g} value={g} />)}</datalist>
         <div className="g4">
           {COLS.map(([k, label]) => (
@@ -197,6 +261,12 @@ export default function LeadsAdmin() {
                         <span className="tag tg" style={{ fontSize: 9 }}>✓ Customer</span>{' '}
                         <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} disabled={busy}
                           aria-label={`Revert ${norm(l.client_name)} to lead`} onClick={() => toLead(l)}>↩ Lead</button>
+                      </>
+                    ) : needsConversion(l) ? (
+                      <>
+                        <span className="tag ty" style={{ fontSize: 9 }} title="Already in the Customer Master, or marked Converted — but not converted here yet">⚠ Not converted</span>{' '}
+                        <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px' }} disabled={busy}
+                          aria-label={`Convert ${norm(l.client_name)} to customer`} onClick={() => toCustomer(l)}>→ Customer</button>
                       </>
                     ) : (
                       <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 7px' }} disabled={busy}

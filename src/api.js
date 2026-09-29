@@ -90,6 +90,8 @@ export const purchaseApi = {
   receiveGRN: (body) => api('/api/purchase-orders/grn', { method: 'POST', body }),
   close: (poNum) => api('/api/purchase-orders/close', { method: 'POST', body: { poNum } }),
   reopen: (poNum) => api('/api/purchase-orders/reopen', { method: 'POST', body: { poNum } }),
+  // 29.09: the Padmin withdraws a PO the purchase login raised (never one already received).
+  cancelPO: (poNum, reason) => api('/api/purchase-orders/cancel', { method: 'POST', body: { poNum, reason } }),
   pay: (poNum) => api('/api/purchase-orders/pay', { method: 'POST', body: { poNum } }),
   unpay: (poNum) => api('/api/purchase-orders/unpay', { method: 'POST', body: { poNum } }),
 };

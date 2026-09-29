@@ -1,6 +1,6 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
-import { purchaseApi } from '../api.js';
+import { purchaseApi, masterApi, storesApi } from '../api.js';
 import { parsePaymentDays, num, purchComputeStatus } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
@@ -32,7 +32,10 @@ function stageOf(po) {
   return overdue ? { label: '⚠ Overdue', color: 'var(--red)' } : { label: '⏳ Open', color: '#856404' };
 }
 
-const EMPTY_ROW = { item: '', unit: '', qty: '', rate: '' };
+const EMPTY_ROW = {
+  itemCode: '', item: '', materialType: '', subGroup: '', specialty: '',
+  microns: '', widthMm: '', unit: '', qty: '', rate: '',
+};
 const textareaStyle = {
   minHeight: 54, border: '1px solid var(--bd)', borderRadius: 7, padding: '8px 10px',
   fontSize: 13, color: 'var(--ink)', background: 'var(--wh)', fontFamily: 'inherit', resize: 'vertical',
@@ -95,13 +98,80 @@ export default function Purchase() {
   );
   // A PO goes to ONE supplier; suggest that supplier's approved items (legacy pvUseSupplierItem).
   const supplierRows = useMemo(
-    () => asl.filter((r) => r.company === supplier && (r.specificMaterial || '').trim()),
+    () => asl.filter((r) => r.company === supplier && (r.itemCode || r.specificMaterial || '').toString().trim()),
     [asl, supplier],
   );
-  const supplierItemNames = useMemo(
-    () => [...new Set(supplierRows.map((r) => (r.specificMaterial || '').trim()))],
-    [supplierRows],
+
+  // The Item Master is the identity source for a purchase line (29.09 §Purchase).
+  const [master, setMaster] = useState([]);
+  useEffect(() => {
+    let live = true;
+    masterApi.listItems()
+      .then((r) => { if (live && Array.isArray(r)) setMaster(r.filter((x) => x.active !== false)); })
+      .catch(() => { /* the supplier row's own copy carries it when the master is unreachable */ });
+    return () => { live = false; };
+  }, []);
+  const masterByCode = useMemo(
+    () => new Map(master.map((it) => [String(it.code || '').trim().toUpperCase(), it])),
+    [master],
   );
+
+  /**
+   * 29.09 §Purchase: "The GRN number should not be manually entered in the tool,
+   * whereas it should be a drop-down selection based on the GRNs that are entered by
+   * the store's login for this particular purchase order … If there is only one GRN
+   * for this PO, then that should be auto-selected."
+   *
+   * The receipts the stores desk actually booked, keyed by the PO they were booked
+   * against — so the two halves of the same delivery carry the same number instead of
+   * the buyer typing one from memory.
+   */
+  const [storeGrns, setStoreGrns] = useState([]);
+  useEffect(() => {
+    let live = true;
+    storesApi.grns()
+      .then((r) => { if (live && Array.isArray(r)) setStoreGrns(r); })
+      .catch(() => { /* stores not reachable — the box stays typeable below */ });
+    return () => { live = false; };
+  }, []);
+  const grnsForPo = useCallback((poNum) => {
+    const want = String(poNum || '').trim().toLowerCase();
+    if (!want) return [];
+    return storeGrns
+      .filter((g) => String(g.poNum || g.po_num || '').trim().toLowerCase() === want)
+      .map((g) => String(g.grnNo || g.grn_no || '').trim())
+      .filter(Boolean);
+  }, [storeGrns]);
+  /**
+   * 29.09 §Purchase: "only the item is visible. I need subgroup, specialty, item
+   * description, microns (if applicable), Width (if applicable) and UOM also to be
+   * pulled from the item master."
+   *
+   * The line was a free-text box over the supplier's DESCRIPTION, so a PO read
+   * "280 MM" and named nothing — the same complaint as the BOM lines. The item is
+   * chosen by CODE now and the rest is read back from the Item Master, never typed.
+   */
+  const supplierItems = useMemo(() => {
+    const byCode = new Map();
+    supplierRows.forEach((r) => {
+      const code = String(r.itemCode || '').trim();
+      if (!code || byCode.has(code)) return;
+      const master = masterByCode.get(code.toUpperCase()) || {};
+      byCode.set(code, {
+        code,
+        description: String(master.name || r.specificMaterial || '').trim(),
+        materialType: String(master.materialType || r.materialType || '').trim(),
+        subGroup: String(master.subGroup || r.subGroup || '').trim(),
+        specialty: String(master.specialtyName || r.specialty || r.speciality || '').trim(),
+        microns: String(master.microns || r.microns || '').trim(),
+        widthMm: master.widthMm != null && master.widthMm !== '' ? String(master.widthMm) : '',
+        uom: String(master.uom || r.uom || '').trim(),
+        basicPrice: r.basicPrice,
+      });
+    });
+    return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
+  }, [supplierRows, masterByCode]);
+  const itemByCode = useMemo(() => new Map(supplierItems.map((r) => [r.code, r])), [supplierItems]);
 
   // ── Persistence: call the granular server endpoint, then reload module 6 ──
   // The server assigns the PO number, records price history, and keeps GRN/status
@@ -143,15 +213,24 @@ export default function Purchase() {
   const removeRow = (i) => setItems((xs) => (xs.length > 1 ? xs.filter((_, j) => j !== i) : xs));
 
   // Typing/selecting a known item auto-fills its unit + supplier's basic price (only when blank).
-  function onItemChange(i, val) {
-    const hit = supplierRows.find((r) => (r.specificMaterial || '').trim().toLowerCase() === val.trim().toLowerCase());
+  function onItemChange(i, code) {
+    const hit = itemByCode.get(String(code).trim()) || null;
     setItems((xs) => xs.map((it, j) => {
       if (j !== i) return it;
-      const row = { ...it, item: val };
-      if (hit) {
-        if (!it.unit && hit.uom) row.unit = hit.uom;
-        if (!it.rate && hit.basicPrice !== '' && hit.basicPrice != null) row.rate = String(hit.basicPrice);
-      }
+      // The item's identity travels with the line so the PO document, the stores
+      // desk and the GRN all describe the same thing.
+      const row = {
+        ...it,
+        itemCode: String(code).trim(),
+        item: hit ? hit.description : '',
+        materialType: hit ? hit.materialType : '',
+        subGroup: hit ? hit.subGroup : '',
+        specialty: hit ? hit.specialty : '',
+        microns: hit ? hit.microns : '',
+        widthMm: hit ? hit.widthMm : '',
+        unit: hit ? hit.uom : '',
+      };
+      if (hit && !it.rate && hit.basicPrice !== '' && hit.basicPrice != null) row.rate = String(hit.basicPrice);
       return row;
     }));
   }
@@ -186,7 +265,13 @@ export default function Purchase() {
     const r = await runPurchase(async () => {
       const resp = await purchaseApi.createPO({
         supplier, poDate: poDate || today(), expectedDelivery: expected || '', gstPercent: num(gst), notes: (notes || '').trim(),
-        items: valid.map((it) => ({ item: it.item.trim(), unit: (it.unit || '').trim(), qty: num(it.qty), rate: num(it.rate) })),
+        items: valid.map((it) => ({
+          itemCode: (it.itemCode || '').trim(), item: it.item.trim(),
+          materialType: (it.materialType || '').trim(), subGroup: (it.subGroup || '').trim(),
+          specialty: (it.specialty || '').trim(), microns: (it.microns || '').trim(),
+          widthMm: (it.widthMm || '').trim(),
+          unit: (it.unit || '').trim(), qty: num(it.qty), rate: num(it.rate),
+        })),
       });
       made = resp && resp.poNum;
     });
@@ -201,6 +286,9 @@ export default function Purchase() {
 
   // ── Section 2: GRN / receiving ──
   function openGRN(po) {
+    // One receipt for this PO is the answer; the desk should not have to pick it.
+    const only = grnsForPo(po.poNum);
+    if (!po.grnRef && only.length === 1) setTimeout(() => setGrnRef(only[0]), 0);
     setGrnFor(po.poNum);
     setGrnRef(po.grnRef || '');
     setGrnDate(today());
@@ -358,22 +446,44 @@ export default function Purchase() {
           <div className="tw">
             <table>
               <thead>
+                {/* 29.09 §Purchase: the item's identity comes from the Item Master, the
+                    unit is called UOM the way it is everywhere else, and the numeric
+                    headers sit over boxes that fill their column so the two line up. */}
                 <tr>
-                  <th>Item</th>
-                  <th style={{ width: 120 }}>Unit</th>
+                  <th style={{ width: 110 }}>Item Code</th>
+                  <th style={{ minWidth: 150 }}>Description</th>
+                  <th style={{ width: 110 }}>Material</th>
+                  <th style={{ width: 110 }}>Sub-Group</th>
+                  <th style={{ width: 110 }}>Speciality</th>
+                  <th style={{ width: 80, textAlign: 'right' }}>Microns</th>
+                  <th style={{ width: 90, textAlign: 'right' }}>Width (mm)</th>
+                  <th style={{ width: 90 }}>UOM</th>
                   <th style={{ width: 110, textAlign: 'right' }}>Qty</th>
-                  <th style={{ width: 130, textAlign: 'right' }}>Rate</th>
-                  <th style={{ width: 150, textAlign: 'right' }}>Amount</th>
+                  <th style={{ width: 120, textAlign: 'right' }}>Rate</th>
+                  <th style={{ width: 130, textAlign: 'right' }}>Amount</th>
                   <th style={{ width: 44 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((it, i) => (
                   <tr key={i}>
-                    <td><input list="pv-items-dl" value={it.item} onChange={(e) => onItemChange(i, e.target.value)} placeholder="Item / material" /></td>
-                    <td><input value={it.unit} onChange={(e) => setItem(i, { unit: e.target.value })} placeholder="Kg / Nos" /></td>
-                    <td><input type="number" min="0" step="0.01" value={it.qty} onChange={(e) => setItem(i, { qty: e.target.value })} style={{ textAlign: 'right' }} /></td>
-                    <td><input type="number" min="0" step="0.01" value={it.rate} onChange={(e) => setItem(i, { rate: e.target.value })} style={{ textAlign: 'right' }} /></td>
+                    <td>
+                      <select value={it.itemCode} aria-label={`Item code line ${i + 1}`} disabled={!supplier}
+                        onChange={(e) => onItemChange(i, e.target.value)} style={{ width: '100%' }}>
+                        <option value="">{supplier ? '— select —' : '— pick a supplier —'}</option>
+                        {it.itemCode && !itemByCode.has(it.itemCode) && <option value={it.itemCode}>{it.itemCode}</option>}
+                        {supplierItems.map((r) => <option key={r.code} value={r.code}>{r.code}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ fontSize: 11 }}>{it.item || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{it.materialType || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{it.subGroup || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{it.specialty || '—'}</td>
+                    <td style={{ fontSize: 11, textAlign: 'right' }}>{it.microns || '—'}</td>
+                    <td style={{ fontSize: 11, textAlign: 'right' }}>{it.widthMm || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{it.unit || '—'}</td>
+                    <td><input type="number" min="0" step="0.01" value={it.qty} aria-label={`Qty line ${i + 1}`} onChange={(e) => setItem(i, { qty: e.target.value })} style={{ textAlign: 'right', width: '100%' }} /></td>
+                    <td><input type="number" min="0" step="0.01" value={it.rate} aria-label={`Rate line ${i + 1}`} onChange={(e) => setItem(i, { rate: e.target.value })} style={{ textAlign: 'right', width: '100%' }} /></td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(num(it.qty) * num(it.rate))}</td>
                     <td style={{ textAlign: 'center' }}>
                       <button className="btn btn-s" style={{ height: 27, padding: '0 9px' }} onClick={() => removeRow(i)} disabled={items.length <= 1} title="Remove row">✕</button>
@@ -383,7 +493,6 @@ export default function Purchase() {
               </tbody>
             </table>
           </div>
-          <datalist id="pv-items-dl">{supplierItemNames.map((n) => <option key={n} value={n} />)}</datalist>
 
           <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <button className="btn btn-s" onClick={addRow}>+ Add Row</button>
@@ -512,7 +621,29 @@ export default function Purchase() {
                                   </table>
                                 </div>
                                 <div className="g3" style={{ marginTop: 10 }}>
-                                  <div className="fg"><label>GRN Reference</label><input value={grnRef} onChange={(e) => setGrnRef(e.target.value)} placeholder="GRN / DC number" /></div>
+                                  <div className="fg">
+                                    <label>GRN Reference</label>
+                                    {/* ¶2: the receipts the stores desk booked against THIS PO. */}
+                                    {grnsForPo(po.poNum).length ? (
+                                      <>
+                                        <select value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)}>
+                                          <option value="">— select the stores GRN —</option>
+                                          {grnRef && !grnsForPo(po.poNum).includes(grnRef) && <option value={grnRef}>{grnRef}</option>}
+                                          {grnsForPo(po.poNum).map((g) => <option key={g} value={g}>{g}</option>)}
+                                        </select>
+                                        <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>
+                                          From the stores login’s receipts against {po.poNum}.
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <input value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)} placeholder="GRN / DC number" />
+                                        <div style={{ fontSize: 10, color: '#9a5a06', marginTop: 3 }}>
+                                          The stores desk has not booked a receipt against {po.poNum} yet — type the number, or ask them to receive it first.
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
                                   <div className="fg"><label>Receipt Date</label><input type="date" value={grnDate} readOnly title="Recorded as today's date" /></div>
                                   <div className="fg">
                                     <label>Receipt Photo (optional)</label>

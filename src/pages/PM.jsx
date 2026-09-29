@@ -9,6 +9,7 @@ import PpcDashboard from './PpcDashboard.jsx';
 import DailyBoard from './DailyBoard.jsx';
 import { custGroupOf } from '../lib/master.js';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
+import { PurchaseOrders } from './Stores.jsx';
 import { OnHand } from './Stores.jsx';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -192,6 +193,17 @@ export default function PM() {
     );
   }
 
+  if (tab === 'pos') {
+    return (
+      <div id="app">
+        <div className="pg-ttl">Production</div>
+        <PmTabs tab={tab} setTab={setTab} />
+        {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+        <PurchaseOrders flash={(t, text) => flash(text, t)} />
+      </div>
+    );
+  }
+
   if (tab === 'material') {
     return (
       <div id="app">
@@ -314,6 +326,10 @@ const PM_TABS = [
   { k: 'csa', label: '🔬 CSA — plant comments' },
   { k: 'material', label: '🧱 Raw Material' },
   { k: 'onhand', label: '📦 Raw Material on Hand' },
+  // 29.09 §Purchase: "The purchase orders that are created here shall be seen in the
+  // stores login and in the PM login under appropriate tabs." The plant plans against
+  // material that is on its way, not only what is already in the racks.
+  { k: 'pos', label: '🧾 Purchase Orders' },
 ];
 
 function PmTabs({ tab, setTab }) {

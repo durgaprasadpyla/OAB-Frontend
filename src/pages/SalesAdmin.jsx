@@ -6,7 +6,7 @@ import { today as todayIso } from '../lib/format.js';
 import { ddList } from '../lib/dropdowns.js';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import SalesDailyTab from '../components/SalesDailyTab.jsx';
-import { costIncurred, costLines } from '../lib/repFlow.js';
+import { costIncurred, costLines, isCustomerLead } from '../lib/repFlow.js';
 import SalesCsaTab from '../components/SalesCsaTab.jsx';
 import SalesCostsTab from '../components/SalesCostsTab.jsx';
 import SalesPosTab from '../components/SalesPosTab.jsx';
@@ -341,7 +341,12 @@ function AllCustomers({ sales, patch }) {
                     </td>
                     <td><span style={pill(FOLLOW_UP_STYLE[st.kind])}>{st.kind === 'later' ? fmtDate(st.label) : st.label}</span></td>
                     <td style={{ textAlign: 'center' }}>
-                      {(l.converted_to_customer || inMaster(l.client_name)) ? (
+                      {/* 29.09: one rule everywhere — the Super Admin's recorded conversion
+                          makes a customer. Calling a lead a customer because its NAME is in
+                          the Customer Master left this screen saying "✓ Customer" while every
+                          rep still saw a lead, and hid the → Customer button that would have
+                          put it right. */}
+                      {isCustomerLead(l, mods.customers || []) ? (
                         <span style={{ whiteSpace: 'nowrap' }}>
                           <span className="tag tg" title="In the Customer Master">✓ Customer</span>
                           {' '}
@@ -351,9 +356,12 @@ function AllCustomers({ sales, patch }) {
                             onClick={() => revertToLead(l)}>↩ Lead</button>
                         </span>
                       ) : (
-                        <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
-                          aria-label={`Convert ${l.client_name} to customer`}
-                          onClick={() => convertLead(l)}>→ Customer</button>
+                        <span style={{ whiteSpace: 'nowrap' }}>
+                          {inMaster(l.client_name) && <><span className="tag ty" style={{ fontSize: 9 }} title="Already in the Customer Master, but the conversion was never recorded">⚠ Not converted</span>{' '}</>}
+                          <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
+                            aria-label={`Convert ${l.client_name} to customer`}
+                            onClick={() => convertLead(l)}>→ Customer</button>
+                        </span>
                       )}
                     </td>
                   </tr>

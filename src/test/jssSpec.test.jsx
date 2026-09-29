@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { screen, cleanup, within } from '@testing-library/react';
+import { screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from './harness.jsx';
 import QC from '../pages/QC.jsx';
@@ -138,8 +138,12 @@ describe('QC — the spec form types nothing but the job name', () => {
     expect([...mat.options].map((o) => o.value)).toEqual(['', 'CC PET', 'KRAFT', 'LDPE - NATURAL']);
     expect(screen.queryByLabelText('New customer name')).toBeNull();
     expect(screen.queryByLabelText('New material')).toBeNull();
-    // the sub-brand is the customer's own, and QC only picks from it
-    expect([...screen.getByLabelText('Sub Brand').options].map((o) => o.value)).toEqual(['', 'Just Coco']);
+    // 29.09 ¶19: "The options in sub-brand should be populated only after I select the
+    // group and customer, and not before that." Empty until the customer is named —
+    // otherwise one customer's sub-brand could be put on another customer's job.
+    expect([...screen.getByLabelText('Sub Brand').options].map((o) => o.value)).toEqual(['']);
+    fireEvent.change(cust, { target: { value: 'Just Coco' } });
+    await waitFor(() => expect([...screen.getByLabelText('Sub Brand').options].map((o) => o.value)).toEqual(['', 'Just Coco']));
   });
 
   it('shows the second and third layer only for a laminate job type', async () => {

@@ -10,10 +10,17 @@ export default function LeadCustomerPicker({ book, kind, leadId, onKind, onLead,
   const pre = ariaPrefix ? ariaPrefix + ' ' : '';
   return (
     <div className="fg">
-      <label>{label}{required ? ' *' : ''}</label>
-      <div style={{ display: 'flex', gap: 14, fontSize: 12, marginBottom: 4 }} role="radiogroup" aria-label={pre + 'Lead or customer'}>
+      {/* 29.09 ¶24: "The lead or customer radio button selection can move to one level
+          up so that the customer name, the contact person name, and designation, all of
+          them will be in one row." The radios used to sit on their OWN line between the
+          label and the dropdown, so this column stood one line taller than Name and
+          Designation beside it and the three boxes never lined up. They ride on the
+          label line now, and every field in the row starts at the same height. */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span>{label}{required ? ' *' : ''}</span>
+        <span style={{ display: 'flex', gap: 12, fontWeight: 400 }} role="radiogroup" aria-label={pre + 'Lead or customer'}>
         {[['lead', 'Lead'], ['customer', 'Customer']].map(([v, l]) => (
-          <label key={v} className="cb" style={{ opacity: lockKind && lockKind !== v ? 0.5 : 1 }}>
+          <span key={v} className="cb" style={{ opacity: lockKind && lockKind !== v ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <input type="radio" name={(ariaPrefix || 'lc') + '-kind'} value={v} checked={kind === v} disabled={!!lockKind && lockKind !== v}
               aria-label={pre + "pick " + l}
               /* 28.09 §Sales ¶19: "The radio button is there but I am not able to select
@@ -25,9 +32,10 @@ export default function LeadCustomerPicker({ book, kind, leadId, onKind, onLead,
                  reaches over and does it again. */
               onChange={() => onKind(v)} />
             <span>{l} <span style={{ color: 'var(--i3)' }}>({(v === 'lead' ? book.leads : book.customers).length})</span></span>
-          </label>
+          </span>
         ))}
-      </div>
+        </span>
+      </label>
       <select value={leadId || ''} aria-label={pre + (kind === 'customer' ? 'Customer' : 'Lead')} onChange={(e) => onLead(e.target.value)}>
         <option value="">{kind === 'customer' ? '— Select your customer —' : '— Select your lead —'}</option>
         {list.map((l) => <option key={l.id} value={l.id}>{l.client_name}{l.group && l.group !== l.client_name ? ` (${l.group})` : ''}</option>)}
