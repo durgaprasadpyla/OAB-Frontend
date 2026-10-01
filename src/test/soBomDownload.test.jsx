@@ -204,6 +204,6 @@ describe('nested tables never stick their header', () => {
     const path = await import('node:path');
     // vitest serves this file over http, so import.meta.url is not a file URL here.
     const css = fs.readFileSync(path.resolve(process.cwd(), 'src', 'index.css'), 'utf8');
-    expect(css).toMatch(/\.tw td table thead tr th,\s*table\.nested-tbl thead tr th\s*\{\s*position:\s*static;\s*z-index:\s*auto;\s*\}/);
+    expect(css).toMatch(/\.tw td > table thead tr th,\s*table\.nested-tbl thead tr th\s*\{\s*position:\s*static;\s*z-index:\s*auto;\s*\}/);
   });
 });

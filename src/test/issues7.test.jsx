@@ -69,7 +69,9 @@ describe('Sales Login — leads and customers', () => {
   });
 
   it('renames the old Negotiations module to the three quotation tabs', () => {
-    expect(repModulesOf({ modules: ['visit', 'nego'] }).sort()).toEqual(['accepted', 'quotes', 'send', 'visit']);
+    // 30.09 §SL2: an allocation stored before My Customers existed gets it too
+    expect(repModulesOf({ modules: ['visit', 'nego'] }).sort()).toEqual(['accepted', 'mycust', 'quotes', 'send', 'visit']);
+    expect(repModulesOf({ modules: ['visit', 'nego'], modules_rev: 2 }).sort()).toEqual(['accepted', 'quotes', 'send', 'visit']);
     expect(repModulesOf({})).toContain('accepted');
   });
 });

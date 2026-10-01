@@ -201,7 +201,7 @@ export default function SalesManageTab({ sales, save }) {
                 categories are picked. All unticked = every form allowed. */}
             {cats.length > 0 && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--i2)', marginBottom: 6 }}>📮 Dispatch forms allowed per category</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--i2)', marginBottom: 6 }}>📮 Despatch forms allowed per category</div>
                 {cats.map((cat) => (
                   <div key={cat} style={{ marginBottom: 8, padding: '8px 10px', background: '#f9fafc', border: '1px solid #eceff3', borderRadius: 7 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--blu)', marginBottom: 5 }}>{cat}</div>
@@ -216,7 +216,7 @@ export default function SalesManageTab({ sales, save }) {
                         </label>
                       ))}
                     </div>
-                    <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Leave all unticked to allow every dispatch form for this category.</div>
+                    <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Leave all unticked to allow every despatch form for this category.</div>
                   </div>
                 ))}
               </div>

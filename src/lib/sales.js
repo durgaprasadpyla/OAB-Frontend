@@ -146,6 +146,20 @@ export function leadsForRep(leads, repId) {
   });
 }
 
+/**
+ * Every rep who holds a lead — exactly the reps whose book leadsForRep puts it in:
+ * the owner of each category, or, for a lead with no per-category map, the lead-level
+ * owner. 30.09 §SL6: the S Dashboard read owners off the categories alone, so a lead
+ * with no categories said "Unassigned" while it sat in Manasa's book.
+ */
+export function leadOwnerIds(lead) {
+  if (!lead) return [];
+  const owners = new Set(leadCategories(lead).map((c) => s(categoryRep(lead, c))).filter(Boolean));
+  const map = lead.category_assignments || {};
+  if (Object.keys(map).length === 0 && s(lead.assigned_to)) owners.add(s(lead.assigned_to));
+  return [...owners];
+}
+
 /** Active reps only. (sdashActiveReps 9195) */
 export function activeReps(salesUsers) {
   return arr(salesUsers).filter((r) => (r.status || (r.disabled ? 'Inactive' : 'Active')) === 'Active');
@@ -495,8 +509,11 @@ export const REP_MODULES = [
   { k: 'po', label: 'Enter PO' },
   { k: 'targets', label: 'My Targets' },
   { k: 'customers', label: 'My Leads' },
+  // 30.09 §SL2: the My Customers tab was on the portal but never in this list, so the
+  // allocation filter hid it from every rep. (Add Lead was merged into My Leads on
+  // 28.09 and has no tab of its own any more.)
+  { k: 'mycust', label: 'My Customers' },
   { k: 'contacts', label: 'My Contacts' },
-  { k: 'add', label: 'Add Lead' },
   { k: 'sku', label: 'SKUs' },
   // Sales Login §36-§60: Negotiations became Quotations, with Send Quote and Quote
   // Accepted beside it. A rep allocated the old 'nego' module gets all three.
@@ -505,12 +522,22 @@ export const REP_MODULES = [
   { k: 'accepted', label: 'Quote Accepted' },
 ];
 
+/**
+ * Stamped on an allocation saved from a list that already offered My Customers, so
+ * an older allocation — made before the tab could be granted — is told apart from a
+ * Super Admin deliberately leaving it unticked.
+ */
+export const REP_MODULES_REV = 2;
+
 /** The module keys a rep may use (no allocation stored = every module). */
 export function repModulesOf(rep) {
   if (!(Array.isArray(rep?.modules) && rep.modules.length)) return REP_MODULES.map((m) => m.k);
   const out = new Set(rep.modules);
   if (out.has('nego') || out.has('quotes')) { out.delete('nego'); out.add('quotes'); out.add('send'); out.add('accepted'); }
-  return [...out];
+  // 30.09 §SL2: an allocation stored before My Customers existed never had the chance
+  // to grant it — every rep gets it until the Super Admin saves their modules again.
+  if (!(Number(rep.modules_rev) >= REP_MODULES_REV)) out.add('mycust');
+  return REP_MODULES.map((m) => m.k).filter((k) => out.has(k));
 }
 
 /**
@@ -539,7 +566,7 @@ export function addRep(salesUsers, { name, username, password, phone, status, mo
     phone: s(phone),
     status: REP_ACCOUNT_STATUSES.includes(status) ? status : 'Active',
     // §36: module-wise allocation (empty/absent = all modules).
-    ...(Array.isArray(modules) && modules.length ? { modules } : {}),
+    ...(Array.isArray(modules) && modules.length ? { modules, modules_rev: REP_MODULES_REV } : {}),
   }];
 }
 

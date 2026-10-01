@@ -571,4 +571,13 @@ td select { min-width: max-content; }
  *   The sticky thead rules above also matched the inner table, so inside a
  *   scrolling .tw box the first nested header pinned itself at top:0 and painted
  *   over the outer table's header — reading as a misaligned "top table". — */
-.tw td table thead tr th, table.nested-tbl thead tr th { position: static; z-index: auto; }
+.tw td > table thead tr th, table.nested-tbl thead tr th { position: static; z-index: auto; }
+
+/* — Issues 30.09 §SL1 / §SL3 (sales logins). The edit radio of a list row sits on the
+ *   row's middle line, level with the name beside it (it used to ride at the top of
+ *   the cell, 10px above the name); a radio alone in a cell drops the browser's own
+ *   3px margin, which pushed it off that line by itself. The Lead / Customer choice is
+ *   a row of its own across the whole form grid, above the fields it governs. — */
+td.rowsel { text-align: center; vertical-align: middle; width: 34px; }
+td.rowsel > input[type=radio], tbody td > input[type=radio]:only-child { margin: 0; vertical-align: middle; }
+.lc-kind { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; }

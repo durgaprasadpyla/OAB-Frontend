@@ -1,12 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import { fmtDate, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { today as todayIso } from '../lib/format.js';
 import { ddList } from '../lib/dropdowns.js';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import SalesDailyTab from '../components/SalesDailyTab.jsx';
-import { costIncurred, costLines, isCustomerLead } from '../lib/repFlow.js';
+import {
+  costIncurred, costLines, isCustomerLead, isConvertedStage, conversionPending, conversionQueue, convertLeads, revertLead,
+  customerRowsToAdd, inCustomerMaster, sameCustomerName, saveErrorText,
+} from '../lib/repFlow.js';
+import ConversionQueue from '../components/ConversionQueue.jsx';
 import SalesCsaTab from '../components/SalesCsaTab.jsx';
 import SalesCostsTab from '../components/SalesCostsTab.jsx';
 import SalesPosTab from '../components/SalesPosTab.jsx';
@@ -18,7 +23,7 @@ import {
   STAGE_STYLE, PAY_STYLE, FOLLOW_UP_STYLE, UNASSIGNED,
   salesOverview, repWorkload, nudgeList, nextFollowUp, followUpState,
   leadLineItems, allCategories, assignLine, bulkAssignLines, filterLineItems,
-  activeReps, repName, leadCategories, repCategoriesOf,
+  activeReps, repName, leadCategories, repCategoriesOf, leadOwnerIds, categoryRep,
   salesToday,
 } from '../lib/sales.js';
 
@@ -68,8 +73,13 @@ function exportWorkbook(sheets, filename) {
 
 export default function SalesAdmin() {
   const [tab, setTab] = useState('overview');
-  const { mods, save } = useData();
+  const { mods } = useData();
   const sales = mods.sales || {};
+
+  // 30.09 §SL5: a rep's "Converted" request has to reach this screen without a fresh
+  // sign-in — and a blob re-read before each tab means fewer saves lost to a 409.
+  // Saves go through the same hook, so a re-read never undoes one (useFreshModule).
+  const { save } = useFreshModule('sales', tab);
   const patch = (p) => save('sales', (prev) => ({ ...(prev || {}), ...p }));
 
   return (
@@ -87,7 +97,7 @@ export default function SalesAdmin() {
       {tab === 'spend' && <SalesCostsTab sales={sales} />}
       {tab === 'pos' && <SalesPosTab sales={sales} />}
       {tab === 'targets' && <SalesTargetsTab sales={sales} patch={patch} />}
-      {tab === 'leads' && <AllCustomers sales={sales} patch={patch} />}
+      {tab === 'leads' && <AllCustomers sales={sales} save={save} />}
       {tab === 'contacts' && <SalesContactsTab sales={sales} save={save} />}
       {tab === 'alloc' && <Allocation sales={sales} patch={patch} />}
       {/* §36: sales-user management is the SHARED panel also mounted in the Super
@@ -186,15 +196,19 @@ function Overview({ sales }) {
 }
 
 /* ─────────────────────────── Leads ─────────────────────────── */
+/** The stage filter's extra choice: every lead marked Converted that is not converted yet. */
+const AWAITING = '__awaiting__';
+
 // Category / rep filters, an inline status dropdown the admin can edit (the same
 // field the rep edits on their own dashboard — sdashSetLeadStatus 9492) and an
-// Excel extract of whatever the filters currently show.
-function AllCustomers({ sales, patch }) {
+// Excel extract of whatever the filters currently show. 30.09: the leads marked
+// Converted wait in a queue above the table, and the Status Converted converts.
+function AllCustomers({ sales, save }) {
   // Issues 2.0: everything a rep enters is a LEAD. Only here — under the sadmin
   // login — can a lead be converted into a customer; conversion writes it into
   // the Customer Master (module 4), which is the ONLY source the sale-order
   // screens read. Un-converted leads never reach SO creation.
-  const { mods, save } = useData();
+  const { mods } = useData();
   const [q, setQ] = useState('');
   const [stage, setStage] = useState('');
   const [cat, setCat] = useState('');
@@ -202,58 +216,100 @@ function AllCustomers({ sales, patch }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const leads = sales.leads || [];
+  const customers = mods.customers || [];
   const cats = useMemo(() => allCategories(leads), [leads]);
   const reps = activeReps(sales.sales_users);
+  // 30.09 §SL5: what the reps (and this screen's own Status dropdown) marked Converted
+  const queue = useMemo(() => conversionQueue(leads), [leads]);
 
-  const ownerOf = (l, c) => (l.category_assignments || {})[c] || l.assigned_to || '';
+  // 30.09 §SL6: a lead with no categories is still held by its lead-level owner —
+  // the same rule that puts it in that rep's book — so it is not "Unassigned".
+  const ownerNames = (l) => leadOwnerIds(l).map((id) => repName(sales.sales_users, id)).filter((n) => n && n !== '—');
+  const unassigned = (l) => !leadOwnerIds(l).length || leadCategories(l).some((c) => !categoryRep(l, c));
 
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
     return leads.filter((l) => {
-      if (stage && l.stage !== stage) return false;
+      if (stage === AWAITING) { if (!conversionPending(l)) return false; }
+      else if (stage && l.stage !== stage) return false;
       const lc = leadCategories(l);
       if (cat && !lc.includes(cat)) return false;
-      if (rep === UNASSIGNED) { if (!lc.some((c) => !ownerOf(l, c))) return false; }
-      else if (rep) { if (!lc.some((c) => String(ownerOf(l, c)) === String(rep))) return false; }
+      if (rep === UNASSIGNED) { if (!unassigned(l)) return false; }
+      else if (rep) { if (!leadOwnerIds(l).includes(String(rep))) return false; }
       if (!t) return true;
       return [l.client_name, l.group, l.city].some((v) => String(v || '').toLowerCase().includes(t));
     });
-  }, [leads, q, stage, cat, rep]);
+  }, [leads, q, stage, cat, rep]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function setStatus(lead, status) {
-    if (!status || status === lead.stage) return;
+  const inMaster = (name) => inCustomerMaster(name, customers);
+  /** Who asked for a lead to be converted, in words. */
+  const markedBy = (l) => {
+    if (l.conversion_requested && l.conversion_requested_by) return repName(sales.sales_users, l.conversion_requested_by);
+    if (l.stage_updated_by === 'super_admin') return 'you (Status)';
+    if (l.stage_updated_by) return repName(sales.sales_users, l.stage_updated_by);
+    return ownerNames(l).join(', ') || '—';
+  };
+
+  /**
+   * Convert leads into customers: the Customer Master gains any name it does not have
+   * yet, then the leads carry the conversion every screen reads. Both writes are built
+   * over the server's copy, so a save that crosses a rep's never undoes it.
+   */
+  async function convert(ids, done) {
     setBusy(true);
     try {
-      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, stage: status, stage_updated_at: new Date().toISOString(), stage_updated_by: 'super_admin' } : l)) });
-      setMsg({ t: 'g', text: `✅ ${lead.client_name} → ${status}.` });
-    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+      if (customerRowsToAdd(leads, ids, customers).length) {
+        await save('customers', (prev) => [...(prev || []), ...customerRowsToAdd(leads, ids, prev || [])], { retry: true });
+      }
+      await save('sales', (prev) => ({ ...(prev || {}), leads: convertLeads((prev && prev.leads) || [], ids, { by: 'super_admin' }) }), { retry: true });
+      setMsg({ t: 'g', text: done });
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e, 'Convert') }); }
     finally { setBusy(false); }
   }
 
-  const normName = (v) => String(v || '').trim().toLowerCase();
-  const inMaster = (name) => (mods.customers || []).some((c) => normName(c.customer) === normName(name));
+  async function setStatus(lead, status) {
+    if (!status || status === lead.stage) return;
+    const name = String(lead.client_name || '').trim();
+    // 30.09 §SL6: "I have marked these customers as customers from lead, whereas in the
+    // sales rep login they are still under leads." The Super Admin's own Converted
+    // here IS the conversion — it used to change the stage and nothing else.
+    if (isConvertedStage(status) && !isCustomerLead(lead)) {
+      if (!window.confirm('Convert "' + name + '" into a CUSTOMER?\n\nSetting the status to Converted converts the lead: '
+        + (inMaster(name) ? 'it is already in the Customer Master, ' : 'it is added to the Customer Master, ')
+        + 'and it moves to the customer side in the sales rep’s login.')) return;
+      await convert([lead.id], `✅ "${name}" converted to a customer.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const at = new Date().toISOString();
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        leads: ((prev && prev.leads) || []).map((l) => (l.id === lead.id
+          // any other status answers a rep's request with a no
+          ? { ...l, stage: status, stage_updated_at: at, stage_updated_by: 'super_admin', conversion_requested: false }
+          : l)),
+      }), { retry: true });
+      setMsg({ t: 'g', text: `✅ ${name} → ${status}.` });
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
+    finally { setBusy(false); }
+  }
 
   async function convertLead(lead) {
     const name = String(lead.client_name || '').trim();
     if (!name) return;
-    if (inMaster(name)) {
-      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: true } : l)) });
-      setMsg({ t: 'g', text: `"${name}" is already in the Customer Master — marked converted.` });
-      return;
-    }
-    if (!window.confirm('Convert lead "' + name + '" to a CUSTOMER?\n\nIt is added to the Customer Master and will appear in sale-order creation from now on.')) return;
-    setBusy(true);
-    try {
-      const row = {
-        group: lead.group || '', customer: name, dispatchLoc: lead.delivery_location || lead.deliveryLocation || '',
-        warehouseName: '', billingAddr: '', shippingAddr: '', gstin: lead.gstin || '', state: '',
-        contactPerson: '', contactPhone: '', contactEmail: '',
-      };
-      await save('customers', [...(mods.customers || []), row]);
-      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: true } : l)) });
-      setMsg({ t: 'g', text: `✅ Lead "${name}" converted to a customer.` });
-    } catch (e) { setMsg({ t: 'r', text: 'Convert failed: ' + (e.message || e) }); }
-    finally { setBusy(false); }
+    if (!inMaster(name) && !window.confirm('Convert lead "' + name + '" to a CUSTOMER?\n\nIt is added to the Customer Master and will appear in sale-order creation from now on.')) return;
+    await convert([lead.id], inMaster(name)
+      ? `"${name}" is already in the Customer Master — marked converted.`
+      : `✅ Lead "${name}" converted to a customer.`);
+  }
+
+  async function convertAll() {
+    const ids = queue.map((l) => l.id);
+    if (!ids.length) return;
+    if (!window.confirm(`Convert ${ids.length} lead(s) marked Converted into customers?\n\n`
+      + 'Each one joins the Customer Master if it is not there yet, and moves to the customer side in every sales rep’s login.')) return;
+    await convert(ids, `✅ ${ids.length} lead(s) converted to customers.`);
   }
 
   // The reverse move: demote a customer back to a plain lead. Removes the name
@@ -261,16 +317,17 @@ function AllCustomers({ sales, patch }) {
   async function revertToLead(lead) {
     const name = String(lead.client_name || '').trim();
     if (!name) return;
-    const inCm = (mods.customers || []).filter((c) => normName(c.customer) === normName(name)).length;
+    const inCm = customers.filter((c) => sameCustomerName(c.customer, name)).length;
     if (!window.confirm('Move "' + name + '" back to a LEAD?\n\n' + (inCm
       ? 'Its ' + inCm + ' Customer Master row(s) are removed, so it disappears from sale-order creation. JSS specs and existing orders are not touched.'
       : 'It is not in the Customer Master; only the converted mark is cleared.'))) return;
     setBusy(true);
     try {
-      if (inCm) await save('customers', (mods.customers || []).filter((c) => normName(c.customer) !== normName(name)));
-      await patch({ leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, converted_to_customer: false } : l)) });
+      if (inCm) await save('customers', (prev) => (prev || []).filter((c) => !sameCustomerName(c.customer, name)), { retry: true });
+      // 30.09: the stage leaves "Converted" too, so it does not land straight back in the queue
+      await save('sales', (prev) => ({ ...(prev || {}), leads: revertLead((prev && prev.leads) || [], lead.id, { by: 'super_admin' }) }), { retry: true });
       setMsg({ t: 'g', text: `↩ "${name}" is a lead again.` });
-    } catch (e) { setMsg({ t: 'r', text: 'Could not revert: ' + (e.message || e) }); }
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e, 'Revert') }); }
     finally { setBusy(false); }
   }
 
@@ -278,9 +335,8 @@ function AllCustomers({ sales, patch }) {
     const header = ['Lead', 'Group', 'Categories', 'Status', 'Payment', 'Owners', 'Head Office', 'Delivery', 'GSTIN', 'Next follow-up'];
     const body = rows.map((l) => {
       const lc = leadCategories(l);
-      const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))].filter((n) => n && n !== '—');
       return [l.client_name, l.group || '', lc.join(', '), l.stage || '', l.payment_type || '',
-        owners.join(', ') || 'Unassigned', l.head_office || l.city || '', l.delivery_location || '',
+        ownerNames(l).join(', ') || 'Unassigned', l.head_office || l.city || '', l.delivery_location || '',
         l.gstin || '', nextFollowUp(l, sales.interactions) || ''];
     });
     exportAOA([header, ...body], 'Leads_' + todayIso());
@@ -302,12 +358,15 @@ function AllCustomers({ sales, patch }) {
         </select>
         <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Filter all by stage">
           <option value="">All stages</option>
+          <option value={AWAITING}>⏳ Awaiting conversion</option>
           {ddList(sales, 'statuses').map((st) => <option key={st} value={st}>{st}</option>)}
         </select>
         <span style={{ flex: 1 }} />
         <button className="btn btn-s" onClick={exportRows} disabled={!rows.length}>⬇ Export</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <ConversionQueue queue={queue} busy={busy} markedBy={markedBy} owners={ownerNames}
+        onConvert={convertLead} onConvertAll={convertAll} />
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
         <table>
           <thead><tr>
@@ -319,8 +378,7 @@ function AllCustomers({ sales, patch }) {
             {rows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No leads match</td></tr>
               : rows.map((l) => {
                 const lc = leadCategories(l);
-                const owners = [...new Set(lc.map((c) => repName(sales.sales_users, ownerOf(l, c))))]
-                  .filter((n) => n && n !== '—');
+                const owners = ownerNames(l);
                 const st = followUpState(nextFollowUp(l, sales.interactions));
                 return (
                   <tr key={l.id}>
@@ -346,9 +404,9 @@ function AllCustomers({ sales, patch }) {
                           the Customer Master left this screen saying "✓ Customer" while every
                           rep still saw a lead, and hid the → Customer button that would have
                           put it right. */}
-                      {isCustomerLead(l, mods.customers || []) ? (
+                      {isCustomerLead(l, customers) ? (
                         <span style={{ whiteSpace: 'nowrap' }}>
-                          <span className="tag tg" title="In the Customer Master">✓ Customer</span>
+                          <span className="tag tg" title="Converted by the Super Admin">✓ Customer</span>
                           {' '}
                           <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} disabled={busy}
                             title="Move back to a lead (removes it from the Customer Master)"
@@ -357,7 +415,8 @@ function AllCustomers({ sales, patch }) {
                         </span>
                       ) : (
                         <span style={{ whiteSpace: 'nowrap' }}>
-                          {inMaster(l.client_name) && <><span className="tag ty" style={{ fontSize: 9 }} title="Already in the Customer Master, but the conversion was never recorded">⚠ Not converted</span>{' '}</>}
+                          {conversionPending(l) && <><span className="tag ty" style={{ fontSize: 9 }} title="Marked Converted — waiting for you to convert it">⏳ Requested by {markedBy(l)}</span>{' '}</>}
+                          {!conversionPending(l) && inMaster(l.client_name) && <><span className="tag ty" style={{ fontSize: 9 }} title="Already in the Customer Master, but the conversion was never recorded">⚠ Not converted</span>{' '}</>}
                           <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} disabled={busy}
                             aria-label={`Convert ${l.client_name} to customer`}
                             onClick={() => convertLead(l)}>→ Customer</button>
@@ -523,7 +582,7 @@ function ExportData({ sales }) {
         skuName(p.sku_id), Number(p.qty) || 0, Number(p.price) || 0, (Number(p.qty) || 0) * (Number(p.price) || 0),
         repName(sales.sales_users, p.created_by)])];
 
-    const targetsSheet = [['Rep', 'Month', 'Category', 'Dispatch Type', 'Amount'],
+    const targetsSheet = [['Rep', 'Month', 'Category', 'Despatch Type', 'Amount'],
       ...(sales.targets || []).map((t) => [repName(sales.sales_users, t.rep_id), t.month || '', t.category || '',
         t.dispatch_type || '', Number(t.amount) || 0])];
 

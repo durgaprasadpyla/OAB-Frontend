@@ -43,7 +43,7 @@ function DimTable({ dim, label, options, sales, repId, ptype, pkey, onAdd, onDel
       <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--blu)', margin: '14px 0 6px' }}>{label}</div>
       <div className="fbar">
         <select value={key} aria-label={`New ${label}`} onChange={(e) => setKey(e.target.value)}>
-          <option value="">-- Select {dim === 'category' ? 'category' : 'dispatch form'} --</option>
+          <option value="">-- Select {dim === 'category' ? 'category' : 'despatch form'} --</option>
           {options.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
         <input
@@ -131,8 +131,8 @@ export default function SalesTargetsTab({ sales, patch }) {
       <div className="card">
         <div className="ctitle" style={{ marginBottom: 4 }}>🎯 Targets</div>
         <div className="pg-sub" style={{ marginTop: 0 }}>
-          Pick a rep to set monthly / quarterly / half-yearly / annual targets by category and by dispatch form.
-          A sale deducts from both its category and dispatch-form targets.
+          Pick a rep to set monthly / quarterly / half-yearly / annual targets by category and by despatch form.
+          A sale deducts from both its category and despatch-form targets.
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {reps.length === 0 ? <span className="pg-sub" style={{ margin: 0 }}>No active reps</span> : reps.map((r) => (
@@ -183,8 +183,8 @@ export default function SalesTargetsTab({ sales, patch }) {
             </select>
           </div>
           <div className="pg-sub" style={{ marginTop: 0 }}>
-            Set targets by category and by dispatch form independently. A sale booked on an SKU counts toward both
-            its category target and its dispatch-form target.
+            Set targets by category and by despatch form independently. A sale booked on an SKU counts toward both
+            its category target and its despatch-form target.
           </div>
           <DimTable
             dim="category" label="Category Targets" options={targetCategories()}
@@ -192,7 +192,7 @@ export default function SalesTargetsTab({ sales, patch }) {
             onAdd={addTarget} onDelete={removeTarget} busy={busy}
           />
           <DimTable
-            dim="despatch" label="Dispatch-Form Targets" options={targetDespatchForms()}
+            dim="despatch" label="Despatch-Form Targets" options={targetDespatchForms()}
             sales={sales} repId={repId} ptype={ptype} pkey={pkey}
             onAdd={addTarget} onDelete={removeTarget} busy={busy}
           />

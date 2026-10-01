@@ -406,6 +406,7 @@ describe('Sales Admin — Targets tab', () => {
     await goTab('Targets');
     await userEvent.click(await screen.findByRole('button', { name: /Rep One/ }));
     expect(screen.getByLabelText('New Category Targets')).toBeInTheDocument();
-    expect(screen.getByLabelText('New Dispatch-Form Targets')).toBeInTheDocument();
+    // 30.09 §PE2: "Despatch" is the sales logins' spelling
+    expect(screen.getByLabelText('New Despatch-Form Targets')).toBeInTheDocument();
   });
 });

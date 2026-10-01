@@ -51,7 +51,7 @@ describe('a lead is a customer only when the conversion is recorded', () => {
   });
 });
 
-/* ── §Sales ¶24: the radio sits on the label line ───────────────────────── */
+/* ── §Sales ¶24 / 30.09 §SL3: the radios sit one level up, on their own row ── */
 
 const BOOK = { leads: [{ id: 'L1', client_name: 'Zepto' }], customers: [{ id: 'L2', client_name: 'Beta' }] };
 
@@ -68,16 +68,38 @@ function Host() {
 }
 
 describe('the lead / customer picker', () => {
-  it('keeps the radios inside the label, so the row below lines up', () => {
+  it('puts the radios on a row of their own above the field, so the dropdown lines up with the fields beside it', () => {
     // "The lead or customer radio button selection can move to one level up so that
     //  the customer name, the contact person name, and designation … in one row."
+    // 30.09: the 29.09 version tucked the radios into the field's own label, where the
+    // .fg input styling squeezed them to nothing.
     const { container } = render(<Host />);
     const radio = screen.getByLabelText('Contact pick Customer');
-    expect(radio.closest('label')).toBeTruthy();
-    // exactly one direct child of the field group before the <select>
+    const row = screen.getByRole('radiogroup', { name: 'Contact Lead or customer' });
+    expect(row.closest('.fg')).toBeNull();                       // not inside the field group
+    expect(row.style.gridColumn).toBe('1 / -1');                  // spans the whole form grid
+    expect(row.contains(radio)).toBe(true);
+    // the field group holds only its label and the dropdown
     const fg = container.querySelector('.fg');
-    const kids = [...fg.children].map((el) => el.tagName);
-    expect(kids).toEqual(['LABEL', 'SELECT']);
+    expect([...fg.children].map((el) => el.tagName)).toEqual(['LABEL', 'SELECT']);
+    expect(fg.querySelector('input[type=radio]')).toBeNull();
+    expect(fg.querySelector('label').textContent).toBe('Lead *');
+  });
+
+  it('gives each option its own label.cb, so a caption selects its own side', () => {
+    render(<Host />);
+    const lead = screen.getByLabelText('Contact pick Lead');
+    const cust = screen.getByLabelText('Contact pick Customer');
+    // one radio per label — the 29.09 single label sent every caption click to Lead
+    expect(cust.closest('label')).not.toBe(lead.closest('label'));
+    expect(cust.closest('label').querySelectorAll('input').length).toBe(1);
+    expect(cust.closest('label').className).toBe('cb');
+    // never wrapped in a span.cb, which carries the 14x14 box rule
+    expect(cust.closest('span.cb')).toBeNull();
+    // clicking the caption text selects Customer
+    fireEvent.click(cust.closest('label').querySelector('span'));
+    expect(screen.getByLabelText('Contact pick Customer')).toBeChecked();
+    expect(screen.getByLabelText('Contact Customer')).toBeTruthy();
   });
 
   it('still switches sides on one click', () => {

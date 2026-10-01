@@ -336,7 +336,11 @@ describe('Rep Portal — stage changes', () => {
     await userEvent.selectOptions(screen.getByLabelText('Stage for Acme Dairy'), 'Converted');
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const blob = saved.filter((s) => s.key === 'sales').pop().data;
-    expect(blob.leads.find((l) => l.id === 'L1').stage).toBe('Converted');
+    const lead = blob.leads.find((l) => l.id === 'L1');
+    expect(lead.stage).toBe('Converted');
+    // 30.09 §SL5: a rep's Converted asks the Super Admin to convert — it does not convert
+    expect(lead).toMatchObject({ conversion_requested: true, conversion_requested_by: 'R1', stage_updated_by: 'R1' });
+    expect(lead.converted_to_customer).not.toBe(true);
   });
 
   it('offers every canonical stage', async () => {
