@@ -2347,8 +2347,9 @@ function IssuesReturns({ flash }) {
             what the allocation was for. */}
         {mode === 'issue' && soChosen && matReady && (
           <div className="al al-b" style={{ margin: '4px 0 6px' }} aria-label={`Material allocated to ${form.so}`}>
+            {/* one child: .al lays its children out as a flex row */}
             {soAlloc.length > 0 ? (
-              <>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <b>{soAlloc.length} roll(s) are allocated to {form.so} — issue these first.</b>{' '}
                 <span style={{ fontSize: 11 }}><b>Put on slip</b> takes the roll onto the slip below, for the department it is allocated for.</span>
                 <div className="tw" style={{ marginTop: 4 }}><table>
@@ -2386,7 +2387,7 @@ function IssuesReturns({ flash }) {
                     })}
                   </tbody>
                 </table></div>
-              </>
+              </div>
             ) : (
               <span style={{ fontSize: 12 }}>
                 Nothing is allocated to {form.so} yet. To hold a roll for this order without issuing it, pick it below and
@@ -2479,30 +2480,31 @@ function IssuesReturns({ flash }) {
             {chosenLine && (
               <div className={'al ' + (lineDone ? 'al-r' : 'al-b')} style={{ margin: '2px 0 4px', fontSize: 12 }}
                 aria-label={`BOM line for ${chosenLine.itemCode}`} role={lineDone ? 'alert' : undefined}>
+                {/* one child: .al lays its children out as a flex row */}
                 {lineDone ? (
-                  <>
+                  <div>
                     <b>The BOM line for {chosenLine.itemCode} on {form.so} is complete — no more can be allocated or issued.</b>{' '}
                     Needs {qty(chosenLine.required)} {chosenLine.uom || ''}; allocated {qty(chosenLine.allocated)}, issued {qty(chosenLine.netIssued)}
                     {slipAdds > 0 ? `, on this slip ${qty(slipAdds)}` : ''}.
                     {ownLeft > 0 ? ' The roll allocated to this order can still go out.' : ''}
-                  </>
+                  </div>
                 ) : hasCap(chosenLine) ? (
-                  <>
+                  <div>
                     BOM needs <b>{qty(chosenLine.required)} {chosenLine.uom || ''}</b> of {chosenLine.itemCode}
                     {' · '}allocated {qty(chosenLine.allocated)} · issued {qty(chosenLine.netIssued)} · on this slip {qty(slipAdds)}
                     {' · '}still open <b>{qty(openOf(chosenLine, slipAdds))}</b> — one more roll may take it past the need; after that the line is closed.
-                  </>
+                  </div>
                 ) : (
-                  <>
+                  <div>
                     {chosenLine.itemCode}: allocated {qty(chosenLine.allocated)} · issued {qty(chosenLine.netIssued)} —{' '}
                     {chosenLine.onBom === false ? 'not on the BOM of ' + form.so : 'the BOM gives no quantity for it in this unit'}, so nothing caps it.
-                  </>
+                  </div>
                 )}
               </div>
             )}
             {waitingAlloc && selectedUnit && !isMine(selectedUnit) && (
               <div className="al al-y" style={{ margin: '2px 0 4px', fontSize: 12 }} role="note">
-                ★ <b>{waitingAlloc.internalCode}</b> is allocated to {form.so} for this item — issue it first (it heads the Roll list).
+                <span>★ <b>{waitingAlloc.internalCode}</b> is allocated to {form.so} for this item — issue it first (it heads the Roll list).</span>
               </div>
             )}
             <div className="act" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
