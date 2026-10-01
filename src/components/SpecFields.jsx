@@ -3,7 +3,7 @@ import { useApi } from '../lib/useApi.js';
 import { custsInGroup } from '../lib/master.js';
 import {
   blankLayer, filmWidthOptions, isLaminateJobType, layerCountFor, materialOptions,
-  micronOptions, specialtyOptions, structureFromLayers, gussetParts, gussetJoin,
+  micronChoices, micronChoiceHint, specialtyOptions, structureFromLayers, gussetParts, gussetJoin,
   isStayFreshJobType,
 } from '../lib/jssSpec.js';
 
@@ -182,7 +182,11 @@ export default function SpecFields({
       {[0, 1, 2].slice(0, layerN).map((i) => {
         const l = layers[i];
         const specialties = specialtyOptions(items, l.material);
-        const microns = micronOptions(items, l.material, l.specialty);
+        // 30.09 §QC: the same never-empty micron list as the CSA form — a speciality
+        // whose items record no micron used to leave '— none recorded —' and nothing
+        // to pick, so a spec could not be given its thickness at all.
+        const mc = micronChoices(items, l.material, l.specialty);
+        const microns = mc.options;
         return (
           <div className="g4" key={i}>
             <Pick label={`${layerLabel[i]} Material`} value={l.material} options={materials} required={i === 0}
@@ -194,7 +198,8 @@ export default function SpecFields({
               onChange={(e) => setLayer(i, { specialty: val(e), microns: '' })} />
             <Pick label={`${layerLabel[i]} Micron`} value={l.microns} options={microns}
               ariaLabel={`${layerLabel[i]} Micron`} disabled={!l.material}
-              placeholder={l.material && microns.length === 0 ? '— none recorded —' : '— select —'}
+              placeholder={l.material && microns.length === 0 ? '— no micron in the Item Master —' : '— select —'}
+              hint={l.material && mc.basis !== 'item' ? micronChoiceHint(mc.basis, l.material, l.specialty) : ''}
               onChange={(e) => setLayer(i, { microns: val(e) })} />
             <div className="fg" />
           </div>

@@ -5,7 +5,7 @@ import { useAuth } from '../auth.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { platesTotal } from '../lib/sales.js';
 import { ddList } from '../lib/dropdowns.js';
-import { materialOptions, specialtyOptions, micronOptions } from '../lib/jssSpec.js';
+import { materialOptions, specialtyOptions, micronChoices, micronChoiceHint } from '../lib/jssSpec.js';
 import { useApi } from '../lib/useApi.js';
 
 /** ¶6: Substrate 1 / 2 / 3 read as what they are. */
@@ -421,7 +421,10 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
         const chosen = f[`substrate${n}`];
         const specialties = specialtyOptions(items, chosen);
         /** ¶20: the microns the Item Master records for this substrate, narrowed by the speciality chosen. */
-        const micronsFor = (k) => micronOptions(items, f[`substrate${k}`], f[`substrate${k}_specialty`]);
+        const mc = micronChoices(items, chosen, f[`substrate${n}_specialty`]);
+        // a saved report holds 0 for "no micron" — an empty choice, not an option called 0
+        const rawMic = f[`substrate${n}_val`];
+        const micron = rawMic == null || rawMic === 0 ? '' : String(rawMic);
         const unit = fromMaster.length ? 'Micron' : substrateUnit(sales, chosen);
         return (
           <div className="g4" key={n}>
@@ -447,20 +450,35 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
                 item under specialty selected from the item master." Typed microns did not
                 have to match anything the Item Master holds, so a CSA could specify a film
                 nobody stocks. */}
+            {/* 30.09 §QC (RED): it still came up as a number spinner, because the
+                dropdown appeared only when the Item Master recorded a micron for that
+                exact substrate + speciality — and the client's LDPE - NATURAL / GUSSET
+                items record none. Whenever the substrates come from the Item Master the
+                micron is now ALWAYS a dropdown: the exact list, else the substrate's
+                microns, else every film / paper micron — with a line saying which. The
+                typed number survives only for a site with no film in the Item Master. */}
             <div className="fg">
               <label>{unit}</label>
-              {micronsFor(n).length ? (
-                <select value={f[`substrate${n}_val`] ?? ''} aria-label={`${label} Substrate ${unit}`}
-                  disabled={!chosen}
-                  onChange={(e) => set(`substrate${n}_val`, e.target.value)}>
-                  <option value="">{chosen ? '— select —' : '—'}</option>
-                  {/* a value recorded before the master changed stays selectable */}
-                  {f[`substrate${n}_val`] && !micronsFor(n).includes(String(f[`substrate${n}_val`]))
-                    && <option value={f[`substrate${n}_val`]}>{f[`substrate${n}_val`]}</option>}
-                  {micronsFor(n).map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+              {fromMaster.length ? (
+                <>
+                  <select value={micron} aria-label={`${label} Substrate ${unit}`}
+                    disabled={!chosen || (!mc.options.length && !micron)}
+                    onChange={(e) => set(`substrate${n}_val`, e.target.value)}>
+                    <option value="">{!chosen ? '—' : mc.options.length ? '— select —' : '— no micron in the Item Master —'}</option>
+                    {/* a value recorded before the master changed stays selectable */}
+                    {micron !== '' && !mc.options.includes(micron)
+                      && <option value={micron}>{micron}</option>}
+                    {mc.options.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  {chosen && mc.basis !== 'item' && (
+                    <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }} aria-label={`${label} micron note`}>
+                      {micronChoiceHint(mc.basis, chosen, f[`substrate${n}_specialty`])}
+                    </div>
+                  )}
+                </>
               ) : (
-                <N label="" v={f[`substrate${n}_val`]} on={(v) => set(`substrate${n}_val`, v)} aria={`${label} Substrate ${unit}`} />
+                <input type="number" step="0.1" value={micron} aria-label={`${label} Substrate ${unit}`}
+                  onChange={(e) => set(`substrate${n}_val`, e.target.value)} />
               )}
             </div>
             <div />

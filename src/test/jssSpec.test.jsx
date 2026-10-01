@@ -7,6 +7,7 @@ import {
   isStayFreshJobType, sheetForJobType, isLaminateJobType, layerCountFor, JOB_TYPE_DEFAULTS,
   materialOptions, specialtyOptions, micronOptions, filmWidthOptions, materialFromLayers,
   layerFields, layersOfSpec, gussetParts, gussetJoin, specItems,
+  micronValue, micronFromName, micronChoices, micronChoiceHint, itemsForLayer, widthsForLayer,
 } from '../lib/jssSpec.js';
 import { segmentOf } from '../lib/salesHistory.js';
 
@@ -119,6 +120,77 @@ describe('the material comes from the Item Master, and each pick narrows the nex
     expect(gussetJoin('20', '20')).toBe('20+20');
     expect(gussetJoin('40', '')).toBe('40');
     expect(gussetJoin('', '')).toBe('');
+  });
+});
+
+// 30.09 §QC (RED): the micron dropdown dead-ended — the client's GUSSET / AF BOPP
+// items record no micron (or record "35 MIC"), so the exact list was empty.
+describe('microns — normalised, read from the name, and never an empty list', () => {
+  const MIC_ITEMS = [
+    { code: 'L1', name: '450 MM', materialType: 'FILM', subGroup: 'LDPE - NATURAL', specialtyName: 'GUSSET', microns: '', widthMm: 450 },
+    { code: 'L2', name: '600 MM', materialType: 'FILM', subGroup: 'LDPE - NATURAL', specialtyName: 'PLAIN', microns: '50', widthMm: 600 },
+    { code: 'A1', name: '700 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: '', microns: '35 MIC', widthMm: 700 },
+    { code: 'A2', name: '500 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: '', microns: ' 51 ', widthMm: 500 },
+    { code: 'C1', name: '320 MM X 12 MIC', materialType: 'FILM', subGroup: 'CC PET', specialtyName: '', microns: '', widthMm: 320 },
+    { code: 'K1', name: 'KRAFT 450', materialType: 'PAPER', subGroup: 'KRAFT', specialtyName: '', microns: '', widthMm: 450 },
+  ];
+
+  it('micronValue keeps the number and drops the unit', () => {
+    expect(micronValue('35 MIC')).toBe('35');
+    expect(micronValue('35mic')).toBe('35');
+    expect(micronValue(' 35 ')).toBe('35');
+    expect(micronValue('12.5')).toBe('12.5');
+    expect(micronValue(40)).toBe('40');
+    expect(micronValue('NA')).toBe('');
+    expect(micronValue('')).toBe('');
+  });
+
+  it('micronFromName reads "320 MM X 35 MIC" as 35, and nothing from a width alone', () => {
+    expect(micronFromName('320 MM X 35 MIC')).toBe('35');
+    expect(micronFromName('BOPP 20 micron film')).toBe('20');
+    expect(micronFromName('12µ PET')).toBe('12');
+    expect(micronFromName('700 MM')).toBe('');
+    expect(micronFromName('')).toBe('');
+  });
+
+  it('specItems carries the normalised micron, falling back to the name', () => {
+    const byCode = Object.fromEntries(specItems(MIC_ITEMS).map((i) => [i.code, i.microns]));
+    expect(byCode).toEqual({ L1: '', L2: '50', A1: '35', A2: '51', C1: '12', K1: '' });
+  });
+
+  it('micronChoices widens one step at a time and says how far', () => {
+    expect(micronChoices(MIC_ITEMS, 'LDPE - NATURAL', 'PLAIN')).toEqual({ options: ['50'], basis: 'item' });
+    expect(micronChoices(MIC_ITEMS, 'LDPE - NATURAL', 'GUSSET')).toEqual({ options: ['50'], basis: 'material' });
+    expect(micronChoices(MIC_ITEMS, 'AF BOPP', '')).toEqual({ options: ['35', '51'], basis: 'item' });
+    expect(micronChoices(MIC_ITEMS, 'KRAFT', '')).toEqual({ options: ['12', '35', '50', '51'], basis: 'all' });
+    expect(micronChoices(MIC_ITEMS.map((i) => ({ ...i, microns: '', name: 'X' })), 'KRAFT', '')).toEqual({ options: [], basis: 'none' });
+    expect(micronChoices(MIC_ITEMS, '', '')).toEqual({ options: [], basis: 'none' });
+    expect(micronChoiceHint('material', 'LDPE - NATURAL', 'GUSSET')).toMatch(/No micron is recorded on LDPE - NATURAL · GUSSET items — showing every LDPE - NATURAL micron/);
+    expect(micronChoiceHint('item', 'LDPE - NATURAL', 'PLAIN')).toBe('');
+  });
+
+  it('a widened micron never empties the film widths of its layer', () => {
+    // 50 is an LDPE - NATURAL micron, but no GUSSET item carries it
+    expect(widthsForLayer(MIC_ITEMS, { material: 'LDPE - NATURAL', specialty: 'GUSSET', microns: '50' })).toEqual([450]);
+    // an exact micron still narrows
+    expect(widthsForLayer(MIC_ITEMS, { material: 'AF BOPP', specialty: '', microns: '35' })).toEqual([700]);
+    expect(widthsForLayer(MIC_ITEMS, { material: 'AF BOPP', specialty: '', microns: '35 MIC' })).toEqual([700]);
+    expect(itemsForLayer(MIC_ITEMS, { material: 'KRAFT', microns: '12' }).map((i) => i.code)).toEqual(['K1']);
+  });
+
+  it('the QC spec form offers the widened list under a note instead of "none recorded"', async () => {
+    const user = userEvent.setup();
+    renderApp(<QC />, { modules: { jss, customers, masterItems: MIC_ITEMS }, role: 'qc' });
+    await screen.findByText(/Add New Spec/);
+    await user.selectOptions(await screen.findByLabelText('Primary Material'), 'LDPE - NATURAL');
+    await user.selectOptions(screen.getByLabelText('Primary Speciality'), 'GUSSET');
+    const mic = screen.getByLabelText('Primary Micron');
+    expect(mic).not.toBeDisabled();
+    expect([...mic.options].map((o) => o.value)).toEqual(['', '50']);
+    expect(screen.getByText(/showing every LDPE - NATURAL micron/)).toBeInTheDocument();
+    await user.selectOptions(mic, '50');
+    // the width list is not emptied by a micron no GUSSET item carries
+    expect([...screen.getByLabelText('Film Width (mm)').options].map((o) => o.value)).toContain('450');
   });
 });
 

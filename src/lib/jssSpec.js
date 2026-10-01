@@ -80,10 +80,32 @@ export function isSpecMaterial(item) {
 }
 
 /**
+ * A micron as one comparable value: the first number in the text. The Item Master's
+ * Microns box is free text, so the same film arrives as "35", "35 MIC", "35mic" or
+ * " 35 " — four options in a dropdown, and none of them equal to the "35" a spec
+ * saved. Text with no number in it is not a micron at all and reads as ''.
+ */
+export function micronValue(v) {
+  const m = /\d+(?:\.\d+)?/.exec(s(v));
+  return m ? String(Number(m[0])) : '';
+}
+
+/**
+ * The micron written into an item's DESCRIPTION — "320 MM X 35 MIC" → '35' — for an
+ * item whose Microns box was never filled (the same fallback the width takes from
+ * "320 MM"). '' when the name carries none.
+ */
+export function micronFromName(name) {
+  const m = /(\d+(?:\.\d+)?)\s*(?:MICRONS?|MIC|µM?|μM?)(?![A-Z])/i.exec(s(name));
+  return m ? String(Number(m[1])) : '';
+}
+
+/**
  * The item master rows a JSS may be built from, in one shape:
  *   { code, name, material, specialty, microns, widthMm, uom }
  * where `material` is the item's SUB-GROUP — "CC PET", "LDPE - NATURAL" — which is
- * what the business calls a material when it specifies a job.
+ * what the business calls a material when it specifies a job. `microns` is
+ * normalised (micronValue), and read off the description when the box is blank.
  */
 export function specItems(items) {
   return (Array.isArray(items) ? items : [])
@@ -94,7 +116,7 @@ export function specItems(items) {
       materialType: s(it.materialType),
       material: s(it.subGroup),
       specialty: s(it.specialtyName || it.specialty),
-      microns: s(it.microns),
+      microns: micronValue(it.microns) || micronFromName(it.name),
       widthMm: n(it.widthMm),
       uom: s(it.uom),
     }));
@@ -125,6 +147,42 @@ export function micronOptions(items, material, specialty) {
     .map((it) => it.microns), true);
 }
 
+/**
+ * The micron DROPDOWN for one layer, which never dead-ends empty while the Item
+ * Master records a micron anywhere. 30.09 §QC (RED): "Micron must be a dropdown
+ * based on the item under the specialty selected from the Item Master" — and the
+ * client's LDPE - NATURAL / GUSSET items carry no micron, so the exact list was empty
+ * and the form fell back to a number spinner. The list widens one step at a time,
+ * and `basis` says how far, so the screen can tell the user why:
+ *   'item'     — the microns of that material + speciality (the rule itself)
+ *   'material' — none on that speciality: every micron of the material
+ *   'all'      — none on the material either: every micron on any film / paper
+ *   'none'     — the Item Master records no micron at all
+ *
+ * Returns { options, basis }.
+ */
+export function micronChoices(items, material, specialty) {
+  if (!key(material)) return { options: [], basis: 'none' };
+  const exact = micronOptions(items, material, specialty);
+  if (exact.length) return { options: exact, basis: 'item' };
+  if (key(specialty)) {
+    const ofMaterial = micronOptions(items, material, '');
+    if (ofMaterial.length) return { options: ofMaterial, basis: 'material' };
+  }
+  const every = uniqSorted(specItems(items).map((it) => it.microns), true);
+  return every.length ? { options: every, basis: 'all' } : { options: [], basis: 'none' };
+}
+
+/** The sentence under a widened micron list — '' while the list is the rule itself. */
+export function micronChoiceHint(basis, material, specialty) {
+  const m = s(material), sp = s(specialty);
+  if (!m) return '';
+  if (basis === 'material') return `No micron is recorded on ${m} · ${sp} items — showing every ${m} micron.`;
+  if (basis === 'all') return `No micron is recorded on any ${m} item — showing every micron in the Item Master. The Padmin can fill Microns on the Item Master.`;
+  if (basis === 'none') return 'No item in the Item Master records a micron yet — the Padmin fills Microns on the Item Master.';
+  return '';
+}
+
 /** One layer of a spec, as the form holds it. */
 export const blankLayer = () => ({ material: '', specialty: '', microns: '' });
 
@@ -133,15 +191,20 @@ export function filledLayers(layers) {
   return (layers || []).filter((l) => l && s(l.material));
 }
 
-/** The item master rows that match one layer (material + speciality + micron, as far as each is given). */
+/**
+ * The item master rows that match one layer (material + speciality + micron, as far
+ * as each is given). A micron no item of that material carries — one picked from a
+ * widened micronChoices list — narrows nothing, so it can never empty the film widths.
+ */
 export function itemsForLayer(items, layer) {
   const m = key(layer && layer.material);
   if (!m) return [];
   const sp = key(layer && layer.specialty);
-  const mic = key(layer && layer.microns);
-  return specItems(items).filter((it) => key(it.material) === m
-    && (!sp || key(it.specialty) === sp)
-    && (!mic || key(it.microns) === mic));
+  const mic = micronValue(layer && layer.microns);
+  const base = specItems(items).filter((it) => key(it.material) === m && (!sp || key(it.specialty) === sp));
+  if (!mic) return base;
+  const exact = base.filter((it) => it.microns === mic);
+  return exact.length ? exact : base;
 }
 
 /** The film widths stocked for one layer. */
