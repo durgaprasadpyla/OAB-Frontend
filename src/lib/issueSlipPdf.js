@@ -38,23 +38,29 @@ export function buildIssueSlipPdf(slip) {
     title: 'Bloomflex — Material Issue Slip ' + (slip.slipNo || ''),
     // Helvetica's WinAnsi has no arrow — say it in words
     subtitle: 'Stores to ' + (dept || 'the shop floor') + (so ? ' · Sale order ' + so : '') + ' · issued ' + when(slip.issuedAt),
+    // Issues 30.09: "Job name and Customer name overlap." The short facts sit in two
+    // columns; the customer, the job name and the note — the values that run long —
+    // each get a full-width row and as many lines as they need.
     meta: [
       ['Slip No.', slip.slipNo || ''],
       ['Sale order', so || '—'],
       ['JSS / Spec', slip.spec || '—'],
-      ['Customer', slip.customer || '—'],
-      ['Job name', slip.jobName || '—'],
       ['Department', dept || '—'],
       ['Rolls / units issued', String(lines.length)],
       ['Total quantity', nf(total) + (uoms.length === 1 ? ' ' + uoms[0] : '')],
       ['Issued by', slip.issuedBy || ''],
-      ['Note', slip.note || '—'],
+      ['Customer', slip.customer || '—', { full: true }],
+      ['Job name', slip.jobName || '—', { full: true }],
+      ['Note', slip.note || '—', { full: true }],
     ],
+    // The line number is what a return is quoted against, so it prints on one line
+    // (it wrapped as "ISS/2026/77." + "0"); the sticker and the code likewise. The
+    // description gives up the width.
     columns: [
-      { label: 'Line no.', width: 1.3 },
-      { label: 'Roll / Sticker', width: 1.5 },
-      { label: 'Item code', width: 1.2 },
-      { label: 'Description', width: 3.2 },
+      { label: 'Line no.', width: 2.0, nowrap: true },
+      { label: 'Roll / Sticker', width: 1.5, nowrap: true },
+      { label: 'Item code', width: 1.2, nowrap: true },
+      { label: 'Description', width: 2.5 },
       { label: 'Width (mm)', width: 1.1, align: 'right' },
       { label: 'From rack', width: 1.1 },
       { label: 'Quantity', width: 1.2, align: 'right' },
@@ -97,25 +103,27 @@ export function buildReturnSlipPdf(slip) {
   return buildTablePdf({
     title: 'Bloomflex — Material Return Slip ' + (slip.returnNo || slip.slipNo || ''),
     subtitle: (dept || 'The shop floor') + ' to Stores' + (so ? ' · Sale order ' + so : '') + ' · returned ' + when(slip.returnedAt),
+    // Issues 30.09: the same two fixes as the issue slip — the long values on rows of
+    // their own, and RET/2026/77.0/1 on one line.
     meta: [
       ['Return slip No.', slip.returnNo || slip.slipNo || ''],
       ['Against issue line', issue.lineNo || '—'],
       ['Issue slip', issue.slipNo || '—'],
       ['Parent roll', issue.internalCode ? issue.internalCode + (issue.widthMm ? ' · ' + nf(issue.widthMm) + ' mm' : '') : '—'],
-      ['Issued', issue.qtyIssued != null ? nf(issue.qtyIssued) + ' ' + (issue.uom || '') + (issue.ts ? ' on ' + when(issue.ts) : '') : '—'],
       ['Sale order', so || '—'],
       ['JSS / Spec', slip.spec || '—'],
-      ['Customer', slip.customer || '—'],
       ['Department', dept || '—'],
       ['Returned by', slip.returnedBy || ''],
       ['Total returned', nf(total) + (uoms.length === 1 ? ' ' + uoms[0] : '')],
-      ['Note', slip.note || '—'],
+      ['Issued', issue.qtyIssued != null ? nf(issue.qtyIssued) + ' ' + (issue.uom || '') + (issue.ts ? ' on ' + when(issue.ts) : '') : '—', { full: true }],
+      ['Customer', slip.customer || '—', { full: true }],
+      ['Note', slip.note || '—', { full: true }],
     ],
     columns: [
-      { label: 'Return no.', width: 1.5 },
-      { label: 'Roll / Sticker', width: 1.5 },
-      { label: 'Item code', width: 1.2 },
-      { label: 'Description', width: 3 },
+      { label: 'Return no.', width: 2.3, nowrap: true },
+      { label: 'Roll / Sticker', width: 1.5, nowrap: true },
+      { label: 'Item code', width: 1.2, nowrap: true },
+      { label: 'Description', width: 2.2 },
       { label: 'Width (mm)', width: 1.1, align: 'right' },
       { label: 'To rack', width: 1 },
       { label: 'Quantity', width: 1.2, align: 'right' },
