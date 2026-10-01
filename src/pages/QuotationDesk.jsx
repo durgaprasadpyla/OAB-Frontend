@@ -8,8 +8,11 @@ import { negoUnreadTotal } from '../lib/nego.js';
 import {
   DEFAULT_GST_PCT, buildTier, buildQuotation, applyQuoteSideEffects,
   allQuotes, freezeQuote, nextQuoteVersion, platesTotal, quoteStatusCounts,
-  daysSince,
+  daysSince, repName, leadCategories,
 } from '../lib/sales.js';
+import { skuOwnerRep, linkDirectCsa } from '../lib/repFlow.js';
+import { csaStatusLabel } from '../lib/csa.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 
 // Quotation Desk — raises priced quotations against a customer's SKUs.
 // A quote is versioned PER CUSTOMER and, once frozen, is final; a revision is a
@@ -22,6 +25,12 @@ const TABS = [
   { k: 'nego', label: '💬 Negotiations' },
 ];
 const blankTier = () => ({ qty: '', price: '' });
+/** A SKU freshly ticked on the New Quotation form, its specs carried from the SKU. */
+const blankCfg = (sku) => ({
+  item_code: '', anti_fog: '', moq: '', gst: DEFAULT_GST_PCT, plate: {}, tiers: [blankTier()],
+  width: (sku && sku.width) || '', height: (sku && sku.height) || '', gusset: (sku && sku.gusset) || '',
+  thick: (sku && sku.thick) || '', micron: (sku && sku.micron) || '',
+});
 
 // Fine-print defaults (mirror of QT_FINE_DEFAULTS, index.html 15765). {CLIENT} in the
 // greeting is filled with the customer's name when a quote is started for them.
@@ -55,6 +64,22 @@ function pendingReports(sales) {
   return (sales.qc_reports || []).filter((r) => (r.plant_comments && r.status !== 'Quoted') || r.needs_quote_review);
 }
 
+const normKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * 30.09 QT2: the rep a CSA's quotation will land on — the Super Admin's allocation
+ * (skuOwnerRep). A direct CSA not yet linked to a SKU is resolved through the lead of
+ * the same name. '' when nobody is allocated.
+ */
+function reportOwnerRep(sales, r) {
+  const sku = (sales.skus || []).find((x) => x.id === r.sku_id);
+  if (sku) return skuOwnerRep(sales, sku);
+  const lead = (sales.leads || []).find((l) => normKey(l.client_name) === normKey(r.company_name));
+  if (!lead) return '';
+  const cats = leadCategories(lead);
+  return skuOwnerRep(sales, { lead_id: lead.id, category: cats.length === 1 ? cats[0] : '', created_by: '' });
+}
+
 export default function QuotationDesk() {
   // New Quotation is the initial view; the Pending queue is the first tab and its
   // badge draws the eye to anything waiting.
@@ -65,10 +90,13 @@ export default function QuotationDesk() {
   const counts = quoteStatusCounts(sales.quotations);
   const unread = negoUnreadTotal(sales, 'quote');
   const pending = pendingReports(sales).length;
+  // 30.09 QT1: what the plant pushed a minute ago, in another login, shows on opening
+  useFreshModule('sales', tab);
 
-  // Make Quotation / Revise both land on the New tab: the first with just a customer
-  // preselected, the second with the whole prior quote copied in for a new version.
-  const startFor = (leadId) => { setPrefill({ lead_id: leadId }); setTab('new'); };
+  // Make Quotation / Revise both land on the New tab: the first with the customer
+  // preselected and the CSA's SKU ticked, the second with the whole prior quote
+  // copied in for a new version.
+  const startFor = (leadId, skuId) => { setPrefill({ lead_id: leadId, pick: skuId ? [skuId] : [] }); setTab('new'); };
 
   return (
     <div id="app">
@@ -107,8 +135,10 @@ function PendingForQuotation({ onMakeQuotation }) {
   const skuById = (id) => (sales.skus || []).find((x) => x.id === id) || null;
   const leadById = (id) => (sales.leads || []).find((l) => l.id === id) || null;
 
+  // 30.09 QT1: aged from when the plant pushed it here (the name the plant now
+  // writes; older answers carry only plant_answered_at)
   const rows = useMemo(() => pendingReports(sales)
-    .map((r) => ({ r, days: daysSince(r.plant_commented_at || r.created_at) }))
+    .map((r) => ({ r, days: daysSince(r.plant_commented_at || r.plant_answered_at || r.created_at) }))
     .sort((a, b) => (b.days || 0) - (a.days || 0)), [sales]);
 
   async function pushPlates(r) {
@@ -117,7 +147,7 @@ function PendingForQuotation({ onMakeQuotation }) {
       await save('sales', (prev) => ({
         ...(prev || {}),
         qc_reports: ((prev && prev.qc_reports) || []).map((x) => (x.id === r.id ? { ...x, plates_pushed: true, plates_pushed_at: new Date().toISOString() } : x)),
-      }));
+      }), { retry: true });
       setMsg({ t: 'g', text: '✅ Plate cost pushed to the sales rep.' });
     } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
     finally { setBusy(false); }
@@ -129,9 +159,28 @@ function PendingForQuotation({ onMakeQuotation }) {
       await save('sales', (prev) => ({
         ...(prev || {}),
         qc_reports: ((prev && prev.qc_reports) || []).map((x) => (x.id === r.id ? { ...x, needs_quote_review: false } : x)),
-      }));
+      }), { retry: true });
       setMsg({ t: 'g', text: '✅ Marked reviewed.' });
     } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+
+  /**
+   * 30.09 QT2: a CSA QC raised without a sample has no SKU, and the desk can only
+   * quote a SKU. Link it (find or create the lead and the SKU, once), then open the
+   * quotation with that SKU ticked.
+   */
+  async function quoteDirect(r) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      let link = null;
+      await save('sales', (prev) => {
+        link = linkDirectCsa(prev || {}, r.id);
+        return link.sales;
+      }, { retry: true });
+      onMakeQuotation(link.leadId, link.skuId);
+    } catch (e) { setMsg({ t: 'r', text: 'Could not link the CSA: ' + (e.message || e) }); }
     finally { setBusy(false); }
   }
 
@@ -149,11 +198,13 @@ function PendingForQuotation({ onMakeQuotation }) {
         <table>
           <thead><tr>
             <th style={{ minWidth: 160 }}>Customer</th><th style={{ minWidth: 160 }}>SKU</th>
+            {/* 30.09 QT2: who the quotation lands on — the Super Admin's allocation */}
+            <th style={{ minWidth: 120 }}>Rep</th>
             <th>QC / PM Comments</th><th style={{ width: 90, textAlign: 'center' }}>Days Pending</th><th style={{ width: 260 }}>Action</th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>Nothing pending — you&rsquo;re all caught up.</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>Nothing pending — you&rsquo;re all caught up.</td></tr>
             ) : rows.map(({ r, days }) => {
               const sku = skuById(r.sku_id);
               const lead = leadById(r.lead_id);
@@ -162,10 +213,13 @@ function PendingForQuotation({ onMakeQuotation }) {
               const item = direct ? (r.product_desc || '—') : (sku ? sku.sku_name : '—');
               const p = r.plates;
               const plateTotal = p ? Math.round((Number(p.ci_per) || 0) * (Number(p.ci_n) || 0) + (Number(p.off_per) || 0) * (Number(p.off_n) || 0)) : 0;
+              const owner = reportOwnerRep(sales, r);
+              const ownerKnown = owner && (sales.sales_users || []).some((u) => String(u.id) === String(owner));
               return (
                 <tr key={r.id} style={r.needs_quote_review ? { background: '#fffaf0' } : undefined}>
                   <td style={{ fontWeight: 700 }}>
                     {company}{r.needs_quote_review && <span className="tag ty" style={{ marginLeft: 6, fontSize: 9 }}>edited</span>}
+                    {direct && <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--i3)' }}>direct CSA — no sample</div>}
                   </td>
                   <td>
                     {item}
@@ -176,14 +230,22 @@ function PendingForQuotation({ onMakeQuotation }) {
                       </div>
                     )}
                   </td>
+                  <td style={{ fontSize: 11 }} aria-label={`Rep for ${item}`}>
+                    {ownerKnown
+                      ? repName(sales.sales_users, owner)
+                      : <span style={{ color: '#c0392b', fontWeight: 600 }}>⚠ no rep allocated — Super Admin: allocate a KAM / category for {company}</span>}
+                  </td>
                   <td style={{ fontSize: 11, color: 'var(--i2)' }}>
-                    QC: {r.plant_comment_req || '—'}<br />PM: {r.plant_comments || '—'}
+                    QC: {r.plant_comment_req || '—'}<br />PM: {r.plant_comments || (r.needs_pm_review ? '⏳ re-sent to the plant' : '—')}
+                    {r.status && <div style={{ fontSize: 10, color: 'var(--i3)' }}>{csaStatusLabel(r.status)}</div>}
                   </td>
                   <td style={{ textAlign: 'center', fontWeight: 800, color: dayColor(days || 0) }}>{days == null ? '—' : days + 'd'}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {lead
-                      ? <button className="btn btn-s" style={{ color: '#5e35b1' }} aria-label={`Make quotation for ${company}`} onClick={() => onMakeQuotation(lead.id)}>Make Quotation</button>
-                      : <span style={{ color: 'var(--i3)', fontSize: 11 }}>—</span>}
+                    {direct && !sku
+                      ? <button className="btn btn-s" style={{ color: '#5e35b1' }} disabled={busy} aria-label={`Make quotation for ${company}`} onClick={() => quoteDirect(r)}>Make Quotation</button>
+                      : lead
+                        ? <button className="btn btn-s" style={{ color: '#5e35b1' }} aria-label={`Make quotation for ${company}`} onClick={() => onMakeQuotation(lead.id, r.sku_id)}>Make Quotation</button>
+                        : <span style={{ color: 'var(--i3)', fontSize: 11 }}>—</span>}
                     {p && !r.plates_pushed && (
                       <button className="btn btn-s" style={{ marginLeft: 4 }} disabled={busy} aria-label={`Push plates to rep for ${item}`} onClick={() => pushPlates(r)}>Push plates→rep</button>
                     )}
@@ -213,6 +275,12 @@ function NewQuotation({ prefill, onIssued }) {
   const [picked, setPicked] = useState(() => {
     if (!prefill) return {};
     const out = {};
+    // 30.09 QT1: "Make Quotation" opens with the CSA's SKU already ticked — the one
+    // the plant just pushed here, and only if it is this customer's
+    (prefill.pick || []).forEach((id) => {
+      const sku = skus.find((s) => s.id === id && String(s.lead_id) === String(prefill.lead_id));
+      if (sku) out[id] = blankCfg(sku);
+    });
     (prefill.items || []).forEach((it) => {
       out[it.sku_id] = {
         item_code: it.item_code || '', anti_fog: it.anti_fog || '', moq: it.moq || '',
@@ -245,11 +313,10 @@ function NewQuotation({ prefill, onIssued }) {
   const [busy, setBusy] = useState(false);
 
   const lead = leads.find((l) => l.id === leadId);
-  // SKUs belonging to the chosen customer; fall back to all when none are linked.
-  const leadSkus = useMemo(() => {
-    const own = skus.filter((s) => String(s.lead_id) === String(leadId));
-    return own.length ? own : skus;
-  }, [skus, leadId]);
+  // SKUs belonging to the chosen customer — and only those. 30.09 QT1: falling back
+  // to every SKU in the blob when a customer had none let a quotation be issued
+  // against another customer's SKU.
+  const leadSkus = useMemo(() => skus.filter((s) => String(s.lead_id) === String(leadId)), [skus, leadId]);
 
   const version = nextQuoteVersion(sales.quotations, leadId);
 
@@ -264,14 +331,7 @@ function NewQuotation({ prefill, onIssued }) {
     setPicked((p) => {
       if (p[id]) { const { [id]: _drop, ...rest } = p; return rest; }
       const sku = skus.find((s) => s.id === id) || {};
-      return {
-        ...p,
-        [id]: {
-          item_code: '', anti_fog: '', moq: '', gst: DEFAULT_GST_PCT, plate: {}, tiers: [blankTier()],
-          width: sku.width || '', height: sku.height || '', gusset: sku.gusset || '',
-          thick: sku.thick || '', micron: sku.micron || '',
-        },
-      };
+      return { ...p, [id]: blankCfg(sku) };
     });
   }
   const setField = (id, f, v) => setPicked((p) => ({ ...p, [id]: { ...p[id], [f]: v } }));
@@ -301,17 +361,19 @@ function NewQuotation({ prefill, onIssued }) {
           plate: cfg.plate || {},
         };
       });
-      const quote = buildQuotation(
-        { leadId, clientName: lead ? lead.client_name : '', items, header, finePrint },
-        sales.quotations,
-      );
-      const side = applyQuoteSideEffects(quote, { qcReports: sales.qc_reports, skus: sales.skus });
-      await save('sales', (prev) => ({
-        ...(prev || {}),
-        quotations: [...((prev && prev.quotations) || []), quote],
-        qc_reports: side.qc_reports,
-        skus: side.skus,
-      }));
+      // 30.09: the version and the side-effects are worked out on the server's copy
+      // (re-applied once if another login saved first), so the CSA report the plant
+      // pushed a moment ago is the one marked Quoted
+      let quote = null;
+      await save('sales', (prev) => {
+        const cur = prev || {};
+        quote = buildQuotation(
+          { leadId, clientName: lead ? lead.client_name : '', items, header, finePrint },
+          cur.quotations,
+        );
+        const side = applyQuoteSideEffects(quote, { qcReports: cur.qc_reports, skus: cur.skus });
+        return { ...cur, quotations: [...(cur.quotations || []), quote], qc_reports: side.qc_reports, skus: side.skus };
+      }, { retry: true });
       setMsg({ t: 'g', text: `✅ Quotation v${quote.version} issued for ${quote.client_name}.` });
       setTimeout(onIssued, 700);
     } catch (e) {
@@ -653,8 +715,10 @@ export function QuotationDoc({ quote, innerRef }) {
 function QuotationModal({ quote, onClose }) {
   const ref = useRef(null);
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, overflow: 'auto', padding: 20 }}>
-      <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }}>
+    // 30.09 QT1: above the sticky role bar (#hdr is z-index 200) — at 60 the Print /
+    // PDF / Close bar sat hidden under it, the same fault as the purchase PO preview
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflow: 'auto', padding: 20 }}>
+      <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }} role="dialog" aria-label={`Quotation ${quote.client_name} v${quote.version || 1}`}>
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>{quote.client_name} — v{quote.version || 1}</div>
           <span style={{ flex: 1 }} />

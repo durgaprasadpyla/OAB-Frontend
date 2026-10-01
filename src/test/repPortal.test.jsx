@@ -67,7 +67,14 @@ describe('acceptedMinPrice — the slab that applies to an order', () => {
 
   it('is null when no slabs are recorded, so nothing is blocked', () => {
     expect(acceptedMinPrice(sku(), 100)).toBe(null);
-    expect(acceptedMinPrice(sku({ price_tiers: [{ qty: 0, price: 5 }] }), 100)).toBe(null);
+    expect(acceptedMinPrice(sku({ price_tiers: [{ qty: 5, price: 0 }] }), 100)).toBe(null);
+  });
+
+  it('reads a slab with no quantity as a flat price from any quantity (30.09 QT7)', () => {
+    // "no tiers = one price above MOQ" — it used to be thrown away, so the PO line
+    // was never priced
+    expect(acceptedMinPrice(sku({ price_tiers: [{ qty: 0, price: 5 }] }), 100)).toBe(5);
+    expect(acceptedMinPrice(sku({ price_tiers: [{ qty: '', price: 5 }, { qty: 1000, price: 4 }] }), 2000)).toBe(4);
   });
 });
 

@@ -196,7 +196,11 @@ describe('QC — JSS from the accepted CSA', () => {
     const cands = csaCandidatesForJss({ skus, leads, qc_reports: reports }, customers);
     expect(cands.map((c) => c.sku.id)).toEqual(['S1']);
     const f = jssFieldsFromCsa({ ...cands[0], customers });
-    expect(f).toMatchObject({ group: 'BETA GROUP', customer: 'Beta Foods', jobName: '200g Pouch', material: 'PET 12 / LDPE 50', mic: '12', gsm: '80', width: '150', height: '220', pouchWeight: '4.2', dispatchForm: 'Pouch', status: 'Active' });
+    expect(f).toMatchObject({ group: 'BETA GROUP', customer: 'Beta Foods', jobName: '200g Pouch', mic: '12', gsm: '80', width: '150', height: '220', pouchWeight: '4.2', dispatchForm: 'Pouch', status: 'Active' });
+    // 30.09 QT6: the CSA report's substrates become the JSS layers, one for one
+    expect(f.layers[0]).toEqual({ material: 'PET', specialty: '', microns: '12' });
+    expect(f.layers[1]).toMatchObject({ material: 'LDPE' });
+    expect(f.layers[2].material).toBe('');
   });
 });
 

@@ -219,20 +219,16 @@ export function sendSkuForCsa(skus, skuId, request) {
 /* ── quotations: the desk's price, the rep's price, sent, accepted ─────── */
 
 /**
- * The quote desk's price slabs for a SKU — the latest quotation that covers it —
- * as [{qty, price}] (price without GST), lowest quantity first. Empty when the
- * desk has not quoted it.
+ * A minimum order quantity as the desk typed it — "1,00,000", "50000 nos",
+ * "1 lakh", "25k" — read as a number. 0 when there is none.
  */
-export function deskTiersForSku(sales, skuId) {
-  const q = arr(sales && sales.quotations)
-    .filter((x) => arr(x.items).some((i) => i.sku_id === skuId))
-    .sort((a, b) => (n(b.version) || 1) - (n(a.version) || 1))[0];
-  if (!q) return [];
-  const item = arr(q.items).find((i) => i.sku_id === skuId);
-  return arr(item && item.tiers).filter(Boolean)
-    .map((t) => ({ qty: n(t.qty), price: n(t.price_wo_gst != null ? t.price_wo_gst : t.price) }))
-    .filter((t) => t.price > 0)
-    .sort((a, b) => a.qty - b.qty);
+export function parseMoq(moq) {
+  const t = lower(moq);
+  if (!t) return 0;
+  const num = Number(t.replace(/,/g, '').replace(/[^0-9.]/g, '')) || 0;
+  if (/lakh|lac/.test(t)) return num * 100000;
+  if (/\d\s*k\b|thousand/.test(t)) return num * 1000;
+  return num;
 }
 
 /** The quotation record the latest desk quote came from (for the fine print / version). */
@@ -242,10 +238,146 @@ export function deskQuoteForSku(sales, skuId) {
     .sort((a, b) => (n(b.version) || 1) - (n(a.version) || 1))[0] || null;
 }
 
-/** The price the rep is currently quoting: their own saved slabs, else the desk's. */
-export function repTiersForSku(sku, deskTiers) {
-  const own = arr(sku && sku.rep_quote && sku.rep_quote.tiers).filter((t) => t && n(t.qty) >= 0 && n(t.price) > 0);
-  return own.length ? own.map((t) => ({ qty: n(t.qty), price: n(t.price) })) : deskTiers;
+/**
+ * 30.09 QT4: the line the desk wrote for this SKU on its latest quotation — item
+ * code, specifications, MOQ, plate charges, GST — so a quotation the rep prepares
+ * from it prints complete instead of with blank specification and MOQ columns.
+ */
+export function deskItemForSku(sales, skuId) {
+  const q = deskQuoteForSku(sales, skuId);
+  return q ? (arr(q.items).find((i) => i.sku_id === skuId) || null) : null;
+}
+
+/**
+ * The quote desk's price slabs for a SKU — the latest quotation that covers it —
+ * as [{qty, price}] (price without GST), lowest quantity first. Empty when the
+ * desk has not quoted it.
+ *
+ * 30.09 QT3: "no tiers = one price above MOQ". The desk quotes one flat price by
+ * leaving the slab quantity blank (stored as 0) and typing the MOQ beside it, so a
+ * slab with no quantity takes the desk's MOQ — otherwise the rep's table read
+ * "MOQ 0" and the accepted price could not be matched to an order quantity.
+ */
+export function deskTiersForSku(sales, skuId) {
+  const item = deskItemForSku(sales, skuId);
+  if (!item) return [];
+  const moq = parseMoq(item.moq);
+  return arr(item.tiers).filter(Boolean)
+    .map((t) => ({ qty: n(t.qty) || moq, price: n(t.price_wo_gst != null ? t.price_wo_gst : t.price) }))
+    .filter((t) => t.price > 0)
+    .sort((a, b) => a.qty - b.qty);
+}
+
+/**
+ * The price the rep is currently quoting: their own saved slabs, else the desk's.
+ *
+ * 30.09 QT3: slabs the rep saved against an EARLIER desk quotation are not carried
+ * onto a newer one — the desk re-quoted, so the rep starts again from the new
+ * figure (and can never be left quoting under it).
+ */
+export function repTiersForSku(sku, deskTiers, deskQuote = null) {
+  const rq = (sku && sku.rep_quote) || {};
+  const own = arr(rq.tiers).filter((t) => t && n(t.qty) >= 0 && n(t.price) > 0);
+  const deskAt = s(deskQuote && deskQuote.created_at);
+  const stale = !!(deskAt && s(rq.saved_at) && s(rq.saved_at) < deskAt);
+  return own.length && !stale ? own.map((t) => ({ qty: n(t.qty), price: n(t.price) })) : deskTiers;
+}
+
+/**
+ * "The sales rep cannot decrease the quoted price below the amount received from
+ * the quote login per MOQ." Throws naming the first slab under the floor; a SKU the
+ * desk never priced (a manual quotation) has no floor.
+ */
+export function assertTiersAboveFloor(tiers, deskTiers) {
+  arr(tiers).forEach((t) => {
+    const floor = floorFor(deskTiers, n(t.qty));
+    if (floor != null && n(t.price) < floor - 1e-9) {
+      throw new Error(`₹${n(t.price)} for ${n(t.qty)} is below the quote desk's ₹${floor} for that quantity — the price can be raised, never lowered.`);
+    }
+  });
+}
+
+/**
+ * Who the quotation goes to — the rep the Super Admin allocated, not whoever happened
+ * to type the SKU in. 30.09 QT2: "the quotation goes to the rep per the SA customer
+ * allocation."
+ *
+ *   1. the rep the lead's CATEGORY is assigned to (the SKU's category; for a SKU with
+ *      none, the one rep all the lead's categories are assigned to)
+ *   2. the lead's KAM
+ *   3. the lead's owner (assigned_to)
+ *   4. the rep who created the SKU
+ *
+ * '' when nobody is allocated (a direct CSA for a customer no rep holds yet).
+ */
+export function skuOwnerRep(sales, sku) {
+  if (!sku) return '';
+  const lead = arr(sales && sales.leads).find((l) => l && l.id === sku.lead_id) || null;
+  const map = (lead && lead.category_assignments) || {};
+  if (s(sku.category) && s(map[sku.category])) return s(map[sku.category]);
+  if (!s(sku.category)) {
+    const reps = [...new Set(Object.values(map).map(s).filter(Boolean))];
+    if (reps.length === 1) return reps[0];
+  }
+  if (lead && s(lead.kam)) return s(lead.kam);
+  if (lead && s(lead.assigned_to)) return s(lead.assigned_to);
+  const by = s(sku.created_by);
+  return by && by !== 'quote' ? by : '';
+}
+
+/**
+ * 30.09 QT2: "CSA without a sample is possible." A CSA QC raised directly names a
+ * customer (or lead) and a job, but no SKU — and the desk can only quote a SKU, and a
+ * rep only ever sees one. Linking it creates (or finds) both, once:
+ *   · the lead, matched by name, else a new one — already a customer when QC picked
+ *     it from the Customer Master
+ *   · the SKU, carrying the report's job name, despatch form and structure, marked
+ *     as having its CSA
+ * and ties the report to them. A second call returns the same lead and SKU.
+ * Returns { sales, leadId, skuId }.
+ */
+export function linkDirectCsa(sales, reportId, { now = new Date(), uid = salesUid } = {}) {
+  const cur = sales || {};
+  const report = arr(cur.qc_reports).find((r) => r && r.id === reportId);
+  if (!report) throw new Error('That CSA report no longer exists.');
+  const linkedSku = report.sku_id && arr(cur.skus).find((sk) => sk.id === report.sku_id);
+  if (linkedSku) return { sales: cur, leadId: linkedSku.lead_id, skuId: linkedSku.id };
+
+  const name = s(report.company_name);
+  if (!name) throw new Error('The CSA report names no customer.');
+  const key = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let leads = arr(cur.leads);
+  let lead = leads.find((l) => l && s(l.client_name).toLowerCase().replace(/[^a-z0-9]/g, '') === key) || null;
+  const at = now.toISOString();
+  if (!lead) {
+    const customer = report.party_kind !== 'lead';
+    lead = {
+      id: uid('lead'), client_name: name, categories: [], category_assignments: {},
+      // QC picked a customer from the Customer Master — it is a customer already,
+      // not a lead waiting for the Super Admin to convert it
+      stage: customer ? 'Converted' : 'To Approach', converted_to_customer: customer,
+      created_by: 'quote', source: 'direct_csa', created_at: at,
+    };
+    leads = [...leads, lead];
+  }
+  let skus = arr(cur.skus);
+  let sku = skus.find((sk) => sk && sk.csa_report_id === report.id) || null;
+  if (!sku) {
+    const cats = leadCategories(lead);
+    sku = {
+      id: uid('sku'), lead_id: lead.id, sku_name: s(report.product_desc) || 'Direct CSA',
+      category: cats.length === 1 ? cats[0] : '',
+      dispatch_form: s(report.dispatch_type),
+      structure: [report.substrate1, report.substrate2, report.substrate3].map(s).filter(Boolean).join(' + '),
+      csa_received: 'Yes', csa_report_id: report.id, csa_requested: false,
+      sample_received: false, sample_sent: false, quotation_received: false, quotation_sent: false,
+      quotation_accepted: false, price_tiers: [],
+      created_by: 'quote', source: 'direct_csa', created_at: at,
+    };
+    skus = [...skus, sku];
+  }
+  const qc_reports = arr(cur.qc_reports).map((r) => (r.id === report.id ? { ...r, sku_id: sku.id, lead_id: lead.id } : r));
+  return { sales: { ...cur, leads, skus, qc_reports }, leadId: lead.id, skuId: sku.id };
 }
 
 /** The floor for one slab: the desk's price for that quantity — the rep can never go below it. */
@@ -266,16 +398,33 @@ export function floorFor(deskTiers, qty) {
 export function saveRepQuote(skus, skuId, tiers, deskTiers, { now = new Date(), user = '' } = {}) {
   const clean = arr(tiers).map((t) => ({ qty: n(t.qty), price: n(t.price) })).filter((t) => t.price > 0);
   if (!clean.length) throw new Error('Enter at least one price slab (quantity and price).');
-  clean.forEach((t) => {
-    const floor = floorFor(deskTiers, t.qty);
-    if (floor != null && t.price < floor - 1e-9) {
-      throw new Error(`₹${t.price} for ${t.qty} is below the quote desk's ₹${floor} for that quantity — the price can be raised, never lowered.`);
-    }
+  assertTiersAboveFloor(clean, deskTiers);
+  return arr(skus).map((sk) => {
+    if (sk.id !== skuId) return sk;
+    // 30.09 QT3: an amount edited after the quote went out has not reached the
+    // customer — the SKU reads "to be sent" again until it is re-sent.
+    const lastSent = arr(sk.quote_history)[0];
+    const same = (a, b) => JSON.stringify(arr(a).map((t) => [n(t.qty), n(t.price)])) === JSON.stringify(arr(b).map((t) => [n(t.qty), n(t.price)]));
+    const changedAfterSend = !!(sk.quotation_sent && !(lastSent && same(lastSent.tiers, clean)));
+    return {
+      ...sk,
+      rep_quote: { tiers: clean, saved_at: now.toISOString(), saved_by: user, source: arr(deskTiers).length ? 'desk' : 'manual', changed_after_send: changedAfterSend },
+      quotation_received: sk.quotation_received || arr(deskTiers).length > 0,
+      quote_status: sk.quote_status === 'accepted' ? 'accepted' : (sk.quotation_sent && !changedAfterSend ? 'sent' : 'to_send'),
+    };
   });
-  return arr(skus).map((sk) => (sk.id === skuId
-    ? { ...sk, rep_quote: { tiers: clean, saved_at: now.toISOString(), saved_by: user, source: arr(deskTiers).length ? 'desk' : 'manual' },
-      quotation_received: sk.quotation_received || arr(deskTiers).length > 0, quote_status: sk.quote_status === 'accepted' ? 'accepted' : 'to_send' }
-    : sk));
+}
+
+/**
+ * True while what the customer was sent is still the current quotation: it was
+ * sent, the rep has not changed an amount since, and the desk has not re-quoted.
+ */
+export function quoteSentStill(sales, sku) {
+  if (!sku || !sku.quotation_sent) return false;
+  if (sku.rep_quote && sku.rep_quote.changed_after_send) return false;
+  const desk = deskQuoteForSku(sales, sku.id);
+  const deskAt = s(desk && desk.created_at);
+  return !(deskAt && s(sku.quotation_sent_at) && deskAt > s(sku.quotation_sent_at));
 }
 
 /** Where a SKU stands: 'none' (nothing to quote) · 'to_send' · 'sent' · 'accepted'. */
@@ -284,26 +433,35 @@ export function quoteStatusOf(sales, sku) {
   if (sku.quotation_accepted) return 'accepted';
   const hasQuote = deskTiersForSku(sales, sku.id).length > 0 || arr(sku.rep_quote && sku.rep_quote.tiers).length > 0;
   if (!hasQuote) return 'none';
-  return sku.quotation_sent ? 'sent' : 'to_send';
+  return quoteSentStill(sales, sku) ? 'sent' : 'to_send';
 }
 
-/** The SKUs the Quotations tab lists: everything the desk (or the rep, manually) has priced, for the rep's own book. */
-export function quotableSkus(sales, repId, bookIds) {
+/**
+ * The SKUs the Quotations tab lists: everything the desk (or the rep, manually) has
+ * priced, for the SKUs this rep is allocated (skuOwnerRep) — a lead split between
+ * two reps by category shows each its own SKUs, and a SKU follows the lead when the
+ * Super Admin moves it.
+ */
+export function quotableSkus(sales, repId) {
+  if (!s(repId)) return [];
   return arr(sales && sales.skus)
-    .filter((sk) => (sk.created_by === repId || (bookIds && bookIds.has(sk.lead_id))))
+    .filter((sk) => skuOwnerRep(sales, sk) === s(repId))
     .filter((sk) => quoteStatusOf(sales, sk) !== 'none');
 }
 
 /**
  * "Sent Quote": the SKUs go out to the customer at the rep's current slabs. Each
  * send is kept in the SKU's history ("each SKU can have a history of the
- * quotations that are sent"), newest first, and the status flips to sent.
+ * quotations that are sent"), newest first, and the status flips to sent. A slab
+ * under the desk's current figure is refused, naming it.
  */
 export function markQuotesSent(sales, skuIds, { now = new Date(), user = '' } = {}) {
   const ids = new Set(arr(skuIds));
   return arr(sales && sales.skus).map((sk) => {
     if (!ids.has(sk.id)) return sk;
-    const tiers = repTiersForSku(sk, deskTiersForSku(sales, sk.id));
+    const desk = deskTiersForSku(sales, sk.id);
+    const tiers = repTiersForSku(sk, desk, deskQuoteForSku(sales, sk.id));
+    try { assertTiersAboveFloor(tiers, desk); } catch (e) { throw new Error(`${sk.sku_name}: ${e.message}`); }
     const entry = { sent_at: now.toISOString(), sent_by: user, tiers, version: arr(sk.quote_history).length + 1 };
     return {
       ...sk,
@@ -312,23 +470,27 @@ export function markQuotesSent(sales, skuIds, { now = new Date(), user = '' } = 
       quotation_sent_at: now.toISOString(),
       quote_status: sk.quotation_accepted ? 'accepted' : 'sent',
       quote_history: [entry, ...arr(sk.quote_history)],
+      ...(sk.rep_quote ? { rep_quote: { ...sk.rep_quote, changed_after_send: false } } : {}),
     };
   });
 }
 
 /**
  * "Quote accepted yes / no": yes moves the SKU to the Quote Accepted table and fixes
- * the accepted slabs — the ones the PO is validated against; no takes it back to
- * sent (or to-send when it was never sent).
+ * the accepted slabs — the ones the PO is validated against (refused when a slab is
+ * under the desk's current figure); no takes it back to sent (or to-send when it was
+ * never sent).
  */
 export function setQuoteAccepted(sales, skuId, accepted, { now = new Date() } = {}) {
   return arr(sales && sales.skus).map((sk) => {
     if (sk.id !== skuId) return sk;
     if (accepted) {
-      const tiers = repTiersForSku(sk, deskTiersForSku(sales, sk.id));
+      const desk = deskTiersForSku(sales, sk.id);
+      const tiers = repTiersForSku(sk, desk, deskQuoteForSku(sales, sk.id));
+      try { assertTiersAboveFloor(tiers, desk); } catch (e) { throw new Error(`${sk.sku_name}: ${e.message}`); }
       return { ...sk, quotation_accepted: true, quotation_accepted_at: now.toISOString(), quotation_received: true, quote_status: 'accepted', price_tiers: tiers };
     }
-    return { ...sk, quotation_accepted: false, quotation_accepted_at: '', quote_status: sk.quotation_sent ? 'sent' : 'to_send' };
+    return { ...sk, quotation_accepted: false, quotation_accepted_at: '', quote_status: quoteSentStill(sales, sk) ? 'sent' : 'to_send' };
   });
 }
 
@@ -402,7 +564,11 @@ export function pendingRepPos(sales) {
     if (!groups.has(key)) {
       groups.set(key, {
         key, po_number: p.po_number || '', date: p.date || '', customer: p.customer || '', lead_id: p.lead_id,
-        despatch_location: p.despatch_location || '', created_by: p.created_by, created_at: p.created_at, lines: [],
+        despatch_location: p.despatch_location || '',
+        // 30.09 PE3: the warehouse behind the town rides on to Add SO — it was written
+        // onto every PO line but dropped here, so the Superstar's page never saw it.
+        warehouse_name: p.warehouse_name || '',
+        created_by: p.created_by, created_at: p.created_at, lines: [],
       });
     }
     groups.get(key).lines.push(p);
@@ -410,10 +576,16 @@ export function pendingRepPos(sales) {
   return [...groups.values()].sort((a, b) => s(a.created_at).localeCompare(s(b.created_at)));
 }
 
-/** Stamp the PO lines as pushed onto the OAB, with the sale orders they became. */
-export function markPosPushed(pos, ids, { so = '', by = '', now = new Date() } = {}) {
+/**
+ * Stamp the PO lines as pushed onto the OAB, with the sale orders they became.
+ * `soById` names each line's own sale order ({ [lineId]: '26/901' }); `so` is the
+ * fallback for a line it does not name.
+ */
+export function markPosPushed(pos, ids, { so = '', soById = null, by = '', now = new Date() } = {}) {
   const set = new Set(arr(ids));
-  return arr(pos).map((p) => (set.has(p.id) ? { ...p, pushed_to_oab: { so, by, at: now.toISOString() } } : p));
+  return arr(pos).map((p) => (set.has(p.id)
+    ? { ...p, pushed_to_oab: { so: (soById && soById[p.id]) || so, by, at: now.toISOString() } }
+    : p));
 }
 
 /* ── costs (Log Visit → Admin Dashboard) ────────────────────────────────── */

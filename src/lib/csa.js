@@ -12,7 +12,15 @@ import { salesUid, salesToday } from './sales.js';
 const s = (v) => String(v == null ? '' : v).trim();
 const arr = (v) => (Array.isArray(v) ? v : []);
 
-export const CSA_STATUSES = ['Pending Plant', 'Pending QC', 'Quoted', 'Done'];
+// 30.09 QT1: the plant's answer PUSHES the report on to the Quotation desk — "Pending
+// Quote". Reports answered before this read "Pending QC" and mean the same thing.
+export const CSA_STATUSES = ['Pending Plant', 'Pending Quote', 'Quoted', 'Done'];
+
+/** A report's status as it reads today — the legacy "Pending QC" is "Pending Quote". */
+export function csaStatusLabel(status) {
+  const st = s(status);
+  return st === 'Pending QC' ? 'Pending Quote' : st;
+}
 export const QC_RESPONSIBLE = ['Manasa', 'Sundeep', 'ASM', 'Others'];
 export const DISPATCH_TYPES = ['Pouch', 'Roll', 'Label', 'Bulk Bag'];
 export const YES_NO = ['Yes', 'No'];
@@ -153,7 +161,8 @@ export function buildCsaReport(form, { sales, skuId = '', user = '', now = new D
     lead_id: direct ? null : (sku ? sku.lead_id : null),
     company_name: direct ? s(form.company_name) : null,
     product_desc: direct ? s(form.product_desc) : null,
-    dispatch_type: direct ? s(form.dispatch_type) : (sku ? sku.dispatch_type : null),
+    // 30.09 QT1: the rep's SKU form writes `dispatch_form`; older SKUs carry `dispatch_type`
+    dispatch_type: direct ? s(form.dispatch_type) : (sku ? (sku.dispatch_form || sku.dispatch_type || null) : null),
     responsible_person: direct ? s(form.responsible_person) : null,
     party_kind: direct ? (s(form.party_kind) === 'lead' ? 'lead' : 'customer') : null,
     substrate1: s(form.substrate1), substrate2: s(form.substrate2), substrate3: s(form.substrate3),
@@ -185,15 +194,27 @@ export function markSkuCsaReceived(skus, skuId) {
   return arr(skus).map((sk) => (sk.id === skuId ? { ...sk, csa_received: 'Yes' } : sk));
 }
 
-/** Record the plant's answer on a report. (pmCsaSubmit) */
+/**
+ * Record the plant's answer on a report and push it on to the Quotation desk.
+ * (pmCsaSubmit)
+ *
+ * 30.09 QT1: "CSA request → QC CSA report → plant comments → quote login quotation".
+ * The answer went back to QC ("Pending QC"), and its time was written as
+ * `plant_answered_at` while the desk's day counter and the S Dashboard's tracker read
+ * `plant_commented_at` — so both always aged from the day the report was raised.
+ * A report answered again after it was quoted is flagged for the desk to re-check.
+ */
 export function answerCsaReport(reports, reportId, { comments, plates, user = '', now = new Date() } = {}) {
+  const at = now.toISOString();
   return arr(reports).map((r) => (r.id === reportId ? {
     ...r,
     plant_comments: s(comments),
     plates: plates || r.plates || null,
     needs_pm_review: false,
-    status: 'Pending QC',
+    status: 'Pending Quote',
     plant_answered_by: user,
-    plant_answered_at: now.toISOString(),
+    plant_answered_at: at,
+    plant_commented_at: at,
+    needs_quote_review: !!(r.needs_quote_review || r.quoted_at),
   } : r));
 }
