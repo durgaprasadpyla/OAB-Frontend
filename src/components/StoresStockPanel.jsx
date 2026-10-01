@@ -4,6 +4,7 @@ import { storesApi } from '../api.js';
 import { inr } from '../lib/format.js';
 import { findSpecForRow } from '../lib/master.js';
 import { bomMaterialForSO, plannedBomMap } from '../lib/bom.js';
+import { codeKey } from '../lib/soMaterial.js';
 import { bomApi } from '../api.js';
 
 // Super Admin → Raw Material header. Two questions, answered above the existing
@@ -19,15 +20,20 @@ import { bomApi } from '../api.js';
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /**
- * How far PLAN has got with one order's BOM: how many lines are covered, out of how
- * many the BOM asks for, and whether every one of them is satisfied.
+ * How far one order's BOM is covered: how many lines are covered, out of how many the
+ * BOM asks for, and whether every one of them is satisfied. `allocated` is what the
+ * order HAS of each item (code, upper-cased) — allocated plus issued net of returns.
  *
  * An order with no BOM cannot be "complete" — there is nothing to measure it against
  * — so it reports no lines and stays out of the completed list.
  */
 function allocationOf(bom, row, allocated) {
   const need = bomMaterialForSO(bom, row.spec, num(row.poQty));
-  const lines = need.filter((m) => m.itemCode && m.required > 0);
+  // an item the BOM uses in two departments is one requirement, summed
+  const req = new Map();
+  need.filter((m) => m.itemCode && m.required > 0)
+    .forEach((m) => req.set(codeKey(m.itemCode), (req.get(codeKey(m.itemCode)) || 0) + m.required));
+  const lines = [...req.entries()].map(([itemCode, required]) => ({ itemCode, required }));
   if (!lines.length) {
     const any = Object.keys(allocated).length;
     return { allocLines: any, allocNeed: 0, allocDone: false };
@@ -65,7 +71,9 @@ export default function StoresStockPanel() {
     try {
       const [s, t, a, b] = await Promise.all([
         storesApi.summary(),
-        storesApi.txns({ limit: 1000 }),
+        // 30.09: the whole ledger (the server honours up to 20,000) — what each order
+        // has been issued is summed from it below, rather than asked for order by order
+        storesApi.txns({ limit: 20000 }),
         storesApi.allocations().catch(() => []),
         bomApi.list().catch(() => []),
       ]);
@@ -91,18 +99,37 @@ export default function StoresStockPanel() {
     return m;
   }, [txns]);
 
-  /** What PLAN has reserved against each sale order, by item code. */
+  /**
+   * What each sale order HAS of each item: what is allocated to it (by PLAN or the
+   * stores desk) plus what has been issued to it, net of what came back.
+   *
+   * Issues as on 30.09: counting the holds alone, a fully ISSUED order dropped back to
+   * "not fully allocated" — the stores desk deletes a hold as it issues the roll. The
+   * issues and returns come off the ledger already loaded here (no request per order).
+   * A return is taken off the ISSUE line's item: a slit roll comes back under the code
+   * of its narrower width, but it is the issued item that came back.
+   */
   const allocBySo = useMemo(() => {
     const m = {};
-    (Array.isArray(allocs) ? allocs : []).forEach((a) => {
-      const so = String(a.so || '').trim();
-      const code = String(a.itemCode || '').trim();
+    const add = (so0, code0, q) => {
+      const so = String(so0 || '').trim();
+      const code = codeKey(code0);
       if (!so || !code) return;
       if (!m[so]) m[so] = {};
-      m[so][code] = (m[so][code] || 0) + num(a.qty);
+      m[so][code] = (m[so][code] || 0) + q;
+    };
+    (Array.isArray(allocs) ? allocs : []).forEach((a) => add(a.so, a.itemCode, num(a.qty)));
+    const list = Array.isArray(txns) ? txns : [];
+    const issueById = new Map(list.filter((t) => t.kind === 'ISSUE').map((t) => [String(t.id), t]));
+    list.forEach((t) => {
+      if (t.kind === 'ISSUE') { add(t.so, t.itemCode, num(t.qty)); return; }
+      if (t.kind !== 'RETURN') return;
+      const parent = t.issueTxnId != null ? issueById.get(String(t.issueTxnId)) : null;
+      if (parent) add(parent.so, parent.itemCode, -num(t.qty));
+      else add(t.so, t.itemCode, -num(t.qty));
     });
     return m;
-  }, [allocs]);
+  }, [allocs, txns]);
 
   const openRows = useMemo(() => {
     const oab = (mods.oab && mods.oab.OAB) || {};
@@ -171,8 +198,9 @@ export default function StoresStockPanel() {
       <div className="card">
         <div className="ctitle">Open sale orders with <strong>material assigned</strong> <span className="tag tg">{assigned.length}</span></div>
         <div className="pg-sub" style={{ marginTop: 0 }}>
-          Allocated in the PLAN login against the order’s BOM, or already issued from stores.
-          Orders whose BOM is <b>fully</b> allocated are listed first — those are the ones that can run.
+          Allocated against the order’s BOM (in the PLAN login or by the stores desk), or already issued from stores.
+          A BOM line counts once what is allocated plus what is issued (net of returns) reaches what the BOM needs
+          for the whole order. Orders whose BOM is <b>fully</b> allocated are listed first — those are the ones that can run.
         </div>
         <SoTable rows={assigned} empty="No material has been allocated or issued to any open order yet." showIssued />
       </div>

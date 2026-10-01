@@ -412,6 +412,9 @@ export const storesApi = {
   // Issues 6: a sale order's route and BOM, read through its JSS — what the
   // Issues & Returns desk narrows the Department and Material pickers to.
   soContext: (so) => api('/api/stores/so-context?so=' + encodeURIComponent(so)),
+  // Issues 30.09: one order's material position — what its BOM needs (on the PO qty),
+  // what is allocated (and by whom), what has been issued net of returns.
+  soMaterial: (so) => api('/api/stores/so-material?so=' + encodeURIComponent(so)),
   // Issues 6 §13: several rolls to one department for one sale order on ONE slip —
   // the response is the slip the desk prints and hands over with the material.
   issueBatch: (body) => api('/api/stores/issues/batch', { method: 'POST', body }),

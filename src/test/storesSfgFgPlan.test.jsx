@@ -167,8 +167,10 @@ describe('PLAN login — the planner assigns material, FIFO', () => {
     fireEvent.change(screen.getByLabelText('Quantity of any roll for 26/910'), { target: { value: '300' } });
     await user.click(screen.getByRole('button', { name: 'Assign anyway' }));
 
+    // 30.09 (P3): the server takes a roll the BOM does not name only when PLAN says it
+    // is a deliberate substitution — the stores desk can then issue it to this order.
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/allocations') && c.method === 'POST'
-      && c.body.so === '26/910' && c.body.unitId === 11 && c.body.qty === 300)).toBe(true));
+      && c.body.so === '26/910' && c.body.unitId === 11 && c.body.qty === 300 && c.body.offBom === true)).toBe(true));
 
     // what the order holds is shown back, and can be released again
     expect(await screen.findByText('BLMU-OLD')).toBeInTheDocument();

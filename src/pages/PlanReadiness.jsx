@@ -230,11 +230,14 @@ export default function PlanReadiness() {
             <button className="btn btn-s" style={{ height: 26, fontSize: 11 }}
               aria-label="Close the material panel" onClick={() => setMatFor('')}>✕ Close</button>
           </div>
+          {/* 30.09: the BOM is scaled on the ORDER quantity, not the balance — what has
+              been issued to an order is a lifetime figure, and the stores desk and the
+              server's BOM cap measure it against the whole order too. */}
           <MaterialAssignPanel
             so={pickedRow.so}
             spec={pickedRow.spec}
             material={pickedRow.substrate}
-            soQty={pickedRow.bal}
+            soQty={num(pickedRow.poQty)}
             onChange={loadBoard}
           />
         </div>
