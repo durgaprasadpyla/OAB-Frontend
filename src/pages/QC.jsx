@@ -6,8 +6,11 @@ import { groupOptions, specGroup } from '../lib/master.js';
 import { materialKey } from '../lib/material.js';
 import SpecFields from '../components/SpecFields.jsx';
 import { ddList } from '../lib/dropdowns.js';
-import { blankLayer, layerFields, layerCountFor, materialOptions } from '../lib/jssSpec.js';
+import {
+  blankLayer, layerFields, layerCountFor, materialOptions, specialtyOptions, micronOptions, isLaminateJobType,
+} from '../lib/jssSpec.js';
 import { useApi } from '../lib/useApi.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
@@ -38,6 +41,37 @@ const BLANK = {
 // Status -> legacy .tag colour class.
 function tagClass(status) {
   return { Active: 'tg', Sample: 'tb', Inactive: 'tgr', Redundant: 'tr' }[status] || 'ty';
+}
+
+/** Auto spec code = 'A' + (max numeric suffix among existing /^A(\d+)$/ specs) + 1. */
+function nextSpecOf(jss) {
+  const suffixes = (jss || [])
+    .map((j) => { const m = /^A(\d+)$/.exec(String((j && j.spec) || '')); return m ? parseInt(m[1], 10) : null; })
+    .filter((n) => n != null);
+  return 'A' + ((suffixes.length ? Math.max(...suffixes) : 0) + 1);
+}
+
+/**
+ * 30.09 QT6: the CSA's layers as JSS layers — each material, speciality and micron
+ * matched to what the Item Master offers. A material the master does not carry is
+ * left for QC to choose (and named), never written in as free text.
+ * Returns { layers, filled, unknown }.
+ */
+export function csaLayersForJss(csaLayers, items) {
+  const materials = materialOptions(items);
+  const unknown = [];
+  let filled = 0;
+  const layers = [0, 1, 2].map((i) => {
+    const l = (csaLayers || [])[i] || {};
+    if (!String(l.material || '').trim()) return blankLayer();
+    filled += 1;
+    const known = materials.find((m) => materialKey(m) === materialKey(l.material));
+    if (!known) { unknown.push(l.material); return blankLayer(); }
+    const specialty = specialtyOptions(items, known).find((x) => materialKey(x) === materialKey(l.specialty)) || '';
+    const microns = micronOptions(items, known, specialty).find((x) => String(l.microns || '').trim() !== '' && Number(x) === Number(l.microns)) || '';
+    return { material: known, specialty, microns };
+  });
+  return { layers, filled, unknown };
 }
 
 // Legacy qcCalcPW: pouch weight in grams (QC variant, no sealing), reused from lib/calc.
@@ -86,22 +120,53 @@ export default function QC() {
   // Sales Login §63-65: the accepted CSA this JSS is being created from — Add Spec
   // writes the new spec code back onto that SKU.
   const [fromSku, setFromSku] = useState('');
+  // 30.09 QT6: a JSS saved whose link onto the sales SKU did not — kept so QC can
+  // retry the link rather than make the spec again
+  const [pendingLink, setPendingLink] = useState(null);   // { skuId, spec, skuName }
+  // 30.09: the CSA the rep accepted in another login is listed on opening this page
+  useFreshModule('sales', tab);
   function pickCsa(skuId, fields) {
     setFromSku(skuId);
-    setForm((f) => {
-      const { material, ...rest } = fields || {};
-      const next = { ...f, ...rest };
-      // The CSA's structure fills the first layer; QC then picks its speciality and
-      // micron from the Item Master. A material the master does not carry is left
-      // for QC to choose rather than written in as free text.
-      if (material) {
-        const known = materials.find((m) => materialKey(m) === materialKey(material));
-        next.layers = [{ ...blankLayer(), material: known || '' }, blankLayer(), blankLayer()];
-      }
-      return next;
-    });
-    setMsg({ type: 'g', text: 'Filled from the CSA — check the fields and press Add Spec.' });
+    const { material, layers: csaLayers, ...rest } = fields || {};
+    const mapped = csaLayersForJss(csaLayers, items);
+    // a CSA with no layered report yet: its structure text, as one material
+    if (!mapped.filled && material) {
+      const known = materials.find((m) => materialKey(m) === materialKey(material));
+      mapped.layers = [{ ...blankLayer(), material: known || '' }, blankLayer(), blankLayer()];
+    }
+    const dispatch = rest.dispatchForm
+      ? (dispatchOptions.find((o) => String(o).trim().toLowerCase() === String(rest.dispatchForm).trim().toLowerCase()) || '')
+      : '';
+    setForm((f) => ({ ...f, ...rest, dispatchForm: dispatch || f.dispatchForm, layers: mapped.layers }));
+    const notes = ['Filled from the CSA — check the fields and press Add Spec.'];
+    if (mapped.filled >= 2 && !isLaminateJobType(form.jobType)) {
+      notes.push(`This CSA has ${mapped.filled} layers — pick a laminate Job Type to see layers 2 and 3.`);
+    }
+    if (mapped.unknown.length) notes.push(`The Item Master carries no ${mapped.unknown.join(', ')} — pick that layer's material.`);
+    const made = jss.find((j) => String(j.fromSku || '') === String(skuId));
+    if (made) notes.push(`JSS ${made.spec} was already made from this CSA — Add Spec links it to the SKU without a new number.`);
+    setMsg({ type: 'g', text: notes.join(' ') });
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ }
+  }
+
+  /** §65: the JSS number goes onto the sales SKU, so the rep's PO can carry it. */
+  async function linkSku(skuId, spec) {
+    await save('sales', (prev) => ({
+      ...(prev || {}),
+      skus: ((prev && prev.skus) || []).map((sk) => (sk.id === skuId && !String(sk.jss_spec || '').trim()
+        ? { ...sk, jss_spec: spec, jss_created_at: new Date().toISOString() } : sk)),
+    }), { retry: true });
+  }
+  async function retryLink() {
+    if (!pendingLink) return;
+    setBusy(true);
+    try {
+      await linkSku(pendingLink.skuId, pendingLink.spec);
+      setMsg({ type: 'g', text: `JSS ${pendingLink.spec} is on the sales SKU now.` });
+      setPendingLink(null);
+    } catch (e) {
+      setMsg({ type: 'r', text: 'Linking failed again: ' + (e && e.message ? e.message : e) });
+    } finally { setBusy(false); }
   }
 
   // Issues 2.0: the Dispatch Form options come from the Super Admin dashboard's
@@ -128,13 +193,7 @@ export default function QC() {
   const jobTypes = useMemo(() => ddList(mods.sales, 'jobTypes'), [mods.sales]);
 
   // Auto spec code = 'A' + (max numeric suffix among existing /^A(\d+)$/ specs) + 1.
-  const nextSpec = useMemo(() => {
-    const suffixes = jss
-      .map((j) => { const m = /^A(\d+)$/.exec(String(j.spec || '')); return m ? parseInt(m[1], 10) : null; })
-      .filter((n) => n != null);
-    const max = suffixes.length ? Math.max(...suffixes) : 0;
-    return 'A' + (max + 1);
-  }, [jss]);
+  const nextSpec = useMemo(() => nextSpecOf(jss), [jss]);
 
   // Pouch weight is entered manually, but the ↺ button derives it from the
   // dimensions on demand (legacy qcCalcPW). The auto figure is also the fallback
@@ -181,6 +240,31 @@ export default function QC() {
   }
 
   async function addSpec() {
+    // 30.09 QT6: the orphan guard. A JSS already made from this CSA (its link onto
+    // the SKU failed) is linked, not numbered again; a SKU that already carries a JSS
+    // gets no second one.
+    if (fromSku) {
+      const skuNow = ((mods.sales && mods.sales.skus) || []).find((sk) => sk.id === fromSku);
+      if (skuNow && String(skuNow.jss_spec || '').trim()) {
+        setMsg({ type: 'r', text: `${skuNow.sku_name} already carries JSS ${skuNow.jss_spec} — no new spec made.` });
+        setFromSku('');
+        return;
+      }
+      const made = jss.find((j) => String(j.fromSku || '') === String(fromSku));
+      if (made) {
+        setBusy(true);
+        try {
+          await linkSku(fromSku, made.spec);
+          setMsg({ type: 'g', text: `JSS ${made.spec} was already made from this CSA — it is linked to the sales SKU now (no new number).` });
+          setFromSku('');
+          setPendingLink(null);
+        } catch (e) {
+          setPendingLink({ skuId: fromSku, spec: made.spec, skuName: skuNow ? skuNow.sku_name : '' });
+          setMsg({ type: 'r', text: 'Linking failed: ' + (e && e.message ? e.message : e) });
+        } finally { setBusy(false); }
+        return;
+      }
+    }
     const group = effGroup;
     const customer = effCustomer;
     const jobName = String(form.jobName || '').trim();
@@ -200,16 +284,7 @@ export default function QC() {
       setMsg({ type: 'r', text: 'Still to choose: ' + missing.join(', ') + '.' });
       return;
     }
-    const spec = nextSpec;
-    if (jss.some((j) => j.spec === spec)) {
-      setMsg({ type: 'r', text: 'Spec ' + spec + ' already exists.' });
-      return;
-    }
-
-    const maxSno = jss.reduce((m, j) => Math.max(m, num(j.sno)), 0);
     const row = {
-      sno: maxSno + 1,
-      spec,
       jobType: String(form.jobType || '').trim(),
       group,
       customer,
@@ -234,18 +309,28 @@ export default function QC() {
     const pw = (Number.isFinite(pwManual) && pwManual > 0) ? pwManual
       : (Number.isFinite(autoGrams) && autoGrams > 0 ? Number(autoGrams.toFixed(6)) : 0);
     if (pw > 0) row.pouchWeight = pw;
-
-    const next = JSON.parse(JSON.stringify(jss));
-    next.push(row);
+    // 30.09 QT6: which accepted CSA this spec was made from — what lets a re-pick
+    // link it instead of numbering a duplicate when the SKU link did not save
+    if (fromSku) row.fromSku = fromSku;
 
     setBusy(true);
+    let spec = nextSpec;
     try {
-      await save('jss', next);
+      // numbered on the server's copy (re-applied once if another QC saved first), so
+      // two specs can never take one number
+      await save('jss', (prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        spec = nextSpecOf(list);
+        const maxSno = list.reduce((m, j) => Math.max(m, num(j.sno)), 0);
+        return [...JSON.parse(JSON.stringify(list)), { sno: maxSno + 1, spec, ...row }];
+      }, { retry: true });
       // §65: the JSS number goes back onto the SKU, so the rep's PO can carry it
       if (fromSku) {
         try {
-          await save('sales', (prev) => ({ ...(prev || {}), skus: ((prev && prev.skus) || []).map((sk) => (sk.id === fromSku ? { ...sk, jss_spec: spec, jss_created_at: new Date().toISOString() } : sk)) }));
+          await linkSku(fromSku, spec);
         } catch (e) {
+          const skuNow = ((mods.sales && mods.sales.skus) || []).find((sk) => sk.id === fromSku);
+          setPendingLink({ skuId: fromSku, spec, skuName: skuNow ? skuNow.sku_name : '' });
           setMsg({ type: 'r', text: 'Spec ' + spec + ' saved, but it could not be written onto the sales SKU: ' + (e && e.message ? e.message : e) });
           setBusy(false); setFromSku('');
           return;
@@ -327,6 +412,12 @@ export default function QC() {
       <div className="card">
         <div className="ctitle">Add New Spec{fromSku ? <span className="tag tb" style={{ marginLeft: 8, fontSize: 10 }}>from CSA</span> : null}</div>
         {msg && <div className={'al al-' + msg.type}>{msg.text}</div>}
+        {pendingLink && (
+          <div className="al al-y" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span>JSS {pendingLink.spec} is saved but not yet on the sales SKU{pendingLink.skuName ? ` ${pendingLink.skuName}` : ''}.</span>
+            <button className="btn btn-s" onClick={retryLink} disabled={busy}>↻ Retry linking {pendingLink.spec} to the SKU</button>
+          </div>
+        )}
 
         <div className="pg-sub" style={{ marginTop: 0 }}>
           Everything here is chosen from a master the business maintains — the Job Name is the only thing typed.

@@ -173,9 +173,18 @@ describe('markSkuCsaReceived / answerCsaReport', () => {
   it('is a no-op for a direct report with no SKU', () => {
     expect(markSkuCsaReceived(SALES.skus, '')).toEqual(SALES.skus);
   });
-  it('records the plant answer and clears the re-review flag', () => {
-    const out = answerCsaReport([{ id: 'R1', needs_pm_review: true }], 'R1', { comments: 'Runs fine', plates: { ci_per: 100, ci_n: 2 }, user: 'pm1' });
-    expect(out[0]).toMatchObject({ plant_comments: 'Runs fine', needs_pm_review: false, status: 'Pending QC', plant_answered_by: 'pm1' });
+  it('records the plant answer, clears the re-review flag and pushes it on to the quote desk', () => {
+    const now = new Date('2026-09-30T10:00:00Z');
+    const out = answerCsaReport([{ id: 'R1', needs_pm_review: true }], 'R1', { comments: 'Runs fine', plates: { ci_per: 100, ci_n: 2 }, user: 'pm1', now });
+    // 30.09 QT1: "plant comments → quote login quotation" — not back to QC
+    expect(out[0]).toMatchObject({ plant_comments: 'Runs fine', needs_pm_review: false, status: 'Pending Quote', plant_answered_by: 'pm1' });
+    // stamped under the name the desk's day counter and the S Dashboard read
+    expect(out[0].plant_commented_at).toBe(now.toISOString());
+    expect(out[0].needs_quote_review).toBe(false);
+  });
+  it('flags a report the desk already quoted for re-review when the plant answers again', () => {
+    const out = answerCsaReport([{ id: 'R1', quoted_at: '2026-09-20T00:00:00Z' }], 'R1', { comments: 'Changed film' });
+    expect(out[0].needs_quote_review).toBe(true);
   });
   it('leaves other reports alone', () => {
     const out = answerCsaReport([{ id: 'R1' }, { id: 'R2' }], 'R1', { comments: 'x' });
@@ -353,18 +362,21 @@ describe('PM — CSA tab', () => {
     await userEvent.type(screen.getByLabelText('CI plates'), '4');
     // Text is split across nodes by JSX interpolation, so match on the element.
     expect(screen.getByText((_t, el) => /Total plate cost:\s*₹4,800/.test(el?.textContent || ''), { selector: 'span' })).toBeTruthy();
-    await userEvent.click(screen.getByText(/Submit to QC/));
+    // 30.09 QT1: the plant pushes its answer on to the quotation desk
+    await userEvent.click(screen.getByRole('button', { name: /Push to Quote/ }));
 
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const r = saved.filter((s) => s.key === 'sales').pop().data.qc_reports[0];
-    expect(r).toMatchObject({ plant_comments: 'Runs at 180 m/min', status: 'Pending QC', needs_pm_review: false });
+    expect(r).toMatchObject({ plant_comments: 'Runs at 180 m/min', status: 'Pending Quote', needs_pm_review: false });
+    expect(r.plant_commented_at).toBeTruthy();
     expect(r.plates).toMatchObject({ ci_per: '1200', ci_n: '4' });
+    expect(await screen.findByText(/pushed to the Quotation desk/)).toBeInTheDocument();
   });
 
   it('refuses to submit an empty comment', async () => {
     const { saved } = await openCsa();
     await userEvent.click(await screen.findByLabelText('Answer CSA for Pouch C'));
-    await userEvent.click(screen.getByText(/Submit to QC/));
+    await userEvent.click(screen.getByRole('button', { name: /Push to Quote/ }));
     expect(screen.getByText(/Enter your comments/)).toBeInTheDocument();
     expect(saved.some((s) => s.key === 'sales')).toBe(false);
   });

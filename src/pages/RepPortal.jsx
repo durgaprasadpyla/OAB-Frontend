@@ -11,7 +11,7 @@ import RepVisitTab from '../components/RepVisitTab.jsx';
 import RepPoTab from '../components/RepPoTab.jsx';
 import RepTargetsTab from '../components/RepTargetsTab.jsx';
 import RepSkusTab from '../components/RepSkusTab.jsx';
-import { quotesToSend } from '../lib/repPortal.js';
+import { quotesToSend, quoteFollowUps } from '../lib/repPortal.js';
 import { kamCustomerStats, kamPrimaryContact } from '../lib/kam.js';
 import { QuotationDoc } from './QuotationDesk.jsx';
 import { elementToPDF, printElement } from '../lib/pdf.js';
@@ -263,8 +263,8 @@ function QuoteFollowTable({ sales, repId, onGoToPo }) {
     .filter((q) => (q.items || []).some((i) => i.sku_id === skuId))
     .sort((a, b) => (b.version || 1) - (a.version || 1))[0] || null;
 
-  const pend = (sales.skus || []).filter((s) =>
-    s.created_by === repId && s.quotation_accepted && !((sales.pos || []).some((p) => p.sku_id === s.id)));
+  // 30.09 QT2: the SKUs the Super Admin allocated to this rep, not only the ones they typed in
+  const pend = quoteFollowUps(sales, repId);
   if (!pend.length) return null;
 
   return (
@@ -306,7 +306,7 @@ function QuoteFollowTable({ sales, repId, onGoToPo }) {
 function QuoteDocModal({ quote, onClose }) {
   const ref = useRef(null);
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, overflow: 'auto', padding: 20 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflow: 'auto', padding: 20 }}>
       <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }}>
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>{quote.client_name} — v{quote.version || 1}</div>

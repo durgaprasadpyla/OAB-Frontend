@@ -26,8 +26,9 @@ import {
   CSA_BLANK, DISPATCH_TYPES, YES_NO,
   csaPendingForQc, csaPendingForPlant, csaDoneForPlant, csaSampleDate, csaDaysSince,
   ageColor, csaCompanyItem, csaStructure, substrateList, substrateUnit,
-  buildCsaReport, markSkuCsaReceived, answerCsaReport,
+  buildCsaReport, markSkuCsaReceived, answerCsaReport, csaStatusLabel,
 } from '../lib/csa.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 
 // CSA panels shared by QC and PM over the sales blob (module 12).
 //   <CsaPanel role="qc" />    QC writes the report from a pending sample
@@ -36,8 +37,6 @@ import {
 export default function CsaPanel({ role = 'qc' }) {
   return role === 'pm' ? <PlantCsa /> : <QcCsa />;
 }
-
-const patcher = (save) => (p) => save('sales', (prev) => ({ ...(prev || {}), ...p }));
 
 function Age({ days }) {
   return <span style={{ color: ageColor(days), fontWeight: 700 }}>{days}d</span>;
@@ -48,7 +47,6 @@ function QcCsa() {
   const { mods, save } = useData();
   const { user } = useAuth();
   const sales = mods.sales || {};
-  const patch = patcher(save);
   // The Item Master backs the substrate dropdowns (¶5) — the same list the JSS is
   // built from, so a CSA and the spec it becomes name the same film.
   const itemsApi = useApi('/api/master/items');
@@ -74,14 +72,14 @@ function QcCsa() {
   }, [sales, fGroup, mods.customers]);
   useEffect(() => { if (fCust && !csaCustNames.includes(fCust)) setFCust(''); }, [csaCustNames, fCust]);
   const csaStatuses = useMemo(
-    () => [...new Set((sales.qc_reports || []).map((r) => String(r.status || '').trim()).filter(Boolean))].sort(),
+    () => [...new Set((sales.qc_reports || []).map((r) => csaStatusLabel(r.status)).filter(Boolean))].sort(),
     [sales]);
   const reports = useMemo(() => {
     let list = (sales.qc_reports || []).slice()
       .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     if (fGroup) list = list.filter((r) => custGroupOf(csaCompanyItem(sales, r).company, mods.customers) === fGroup);
     if (fCust) list = list.filter((r) => String(csaCompanyItem(sales, r).company || '').trim() === fCust);
-    if (fStatus) list = list.filter((r) => String(r.status || '').trim() === fStatus);
+    if (fStatus) list = list.filter((r) => csaStatusLabel(r.status) === fStatus);
     const s = q.trim().toLowerCase();
     if (!s) return list;
     return list.filter((r) => {
@@ -129,10 +127,17 @@ function QcCsa() {
     setMsg(null);
     try {
       const report = buildCsaReport(draft.form, { sales, skuId: draft.skuId, user });
-      await patch({
-        qc_reports: [...(sales.qc_reports || []), report],
-        skus: markSkuCsaReceived(sales.skus, draft.skuId),
-      });
+      // 30.09: built on the server's copy and re-applied once if another login saved
+      // the sales blob first (data.jsx retry) — the report is added only once
+      await save('sales', (prev) => {
+        const cur = prev || {};
+        const reports = cur.qc_reports || [];
+        return {
+          ...cur,
+          qc_reports: reports.some((x) => x.id === report.id) ? reports : [...reports, report],
+          skus: markSkuCsaReceived(cur.skus, draft.skuId),
+        };
+      }, { retry: true });
       setDraft(null);
       setMsg({ t: 'g', text: '✅ CSA report saved and sent to the plant.' });
     } catch (e) {
@@ -151,13 +156,20 @@ function QcCsa() {
     setMsg(null);
     try {
       const rebuilt = buildCsaReport(reapprove.form, { sales, skuId: reapprove.skuId, user });
-      await patch({
-        qc_reports: (sales.qc_reports || []).map((x) => (x.id === reapprove.id ? {
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        qc_reports: ((prev && prev.qc_reports) || []).map((x) => (x.id === reapprove.id ? {
           ...x, ...rebuilt, id: x.id, created_at: x.created_at,
+          // a report linked to its SKU after it was raised (a direct CSA the desk
+          // quoted) keeps that link
+          sku_id: x.sku_id || rebuilt.sku_id, lead_id: x.lead_id || rebuilt.lead_id,
           needs_pm_review: true, status: 'Pending Plant', plant_comments: '',
+          // 30.09 QT1: a report the desk already quoted comes back to the desk
+          // flagged "edited", so the quotation is re-checked against the change
+          needs_quote_review: !!(x.needs_quote_review || x.quoted_at || x.status === 'Quoted'),
           qc_reapprove_note: String(reapprove.note).trim(), qc_reapproved_at: new Date().toISOString(),
         } : x)),
-      });
+      }), { retry: true });
       setReapprove(null);
       setDraft(null);
       setMsg({ t: 'g', text: '✅ CSA updated and sent to the plant for re-review.' });
@@ -286,7 +298,7 @@ function QcCsa() {
                       <td style={{ fontSize: 11 }}>{csaStructure(r)}</td>
                       <td><span className={'tag ' + (direct ? 'ty' : 'tb')} style={{ fontSize: 9 }}>{direct ? 'Direct / Walk-in' : 'Sales OS'}</span></td>
                       <td style={{ fontSize: 11 }}>{r.created_at ? fmtDate(String(r.created_at).slice(0, 10)) : '—'}</td>
-                      <td><span className={'tag ' + (r.status === 'Pending Plant' ? 'ty' : r.status === 'Quoted' ? 'tg' : 'tb')}>{r.status}</span></td>
+                      <td><span className={'tag ' + (r.status === 'Pending Plant' ? 'ty' : r.status === 'Quoted' ? 'tg' : 'tb')}>{csaStatusLabel(r.status)}</span></td>
                       <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.plant_comments || <span style={{ color: 'var(--i3)' }}>awaiting plant</span>}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`View CSA for ${ci.item}`} onClick={() => setViewing(r)}>View</button>{' '}
@@ -540,7 +552,8 @@ function PlantCsa() {
   const { mods, save } = useData();
   const { user } = useAuth();
   const sales = mods.sales || {};
-  const patch = patcher(save);
+  // 30.09: the plant opens this tab after QC has written the report in another login
+  useFreshModule('sales');
 
   const [openId, setOpenId] = useState(null);
   const [comments, setComments] = useState('');
@@ -562,9 +575,13 @@ function PlantCsa() {
     if (!comments.trim()) { setMsg({ t: 'r', text: 'Enter your comments before submitting.' }); return; }
     setBusy(true);
     try {
-      await patch({ qc_reports: answerCsaReport(sales.qc_reports, r.id, { comments, plates: plate, user }) });
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        qc_reports: answerCsaReport((prev && prev.qc_reports) || [], r.id, { comments, plates: plate, user }),
+      }), { retry: true });
       setOpenId(null);
-      setMsg({ t: 'g', text: '✅ Comments sent back to QC.' });
+      // 30.09 QT1: the plant's answer goes on to the quote desk, not back to QC
+      setMsg({ t: 'g', text: '✅ Comments pushed to the Quotation desk.' });
     } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
     finally { setBusy(false); }
   }
@@ -655,7 +672,7 @@ function PlantCsaRow({
           <div className="fbar">
             <span style={{ fontSize: 12, fontWeight: 700 }}>Total plate cost: ₹{inr(platesTotal(plate))}</span>
             <span style={{ flex: 1 }} />
-            <button className="btn btn-g" onClick={onSubmit} disabled={busy}>{busy ? 'Saving…' : '✓ Submit to QC'}</button>
+            <button className="btn btn-g" onClick={onSubmit} disabled={busy}>{busy ? 'Saving…' : '✓ Push to Quote'}</button>
           </div>
         </td></tr>
       )}

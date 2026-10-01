@@ -5,6 +5,7 @@ import { fmtDate, inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
 import { pendingRepPos } from '../lib/repFlow.js';
 import { repName } from '../lib/sales.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 
 // Sales Login §71-§75 — "SUPERSTAR OAB Entry Pending PAGE": the POs the sales reps
 // have entered, waiting to be put on the OAB as sale orders. Pick one, press Add to
@@ -19,6 +20,8 @@ export default function PoToSo() {
   const prices = mods.prices || {};
   const [pick, setPick] = useState('');
   const [q, setQ] = useState('');
+  // 30.09: the PO a rep saved a moment ago, in another login, is on the list on opening
+  useFreshModule('sales');
   const pending = useMemo(() => pendingRepPos(sales), [sales]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -34,7 +37,8 @@ export default function PoToSo() {
           key: picked.key, poNum: picked.po_number, poDate: picked.date, customer: picked.customer,
           loc: picked.despatch_location, warehouse: picked.warehouse_name || '',
           lineIds: picked.lines.map((l) => l.id),
-          lines: picked.lines.map((l) => ({ spec: l.jss_spec, sku: l.sku_name, qty: l.qty, price: l.price })),
+          // each line keeps its id, so only the lines that go onto the OAB are marked pushed
+          lines: picked.lines.map((l) => ({ id: l.id, spec: l.jss_spec, sku: l.sku_name, qty: l.qty, price: l.price })),
         },
       },
     });
@@ -45,8 +49,9 @@ export default function PoToSo() {
       <div className="pg-ttl">🧾 PO → SO — OAB entry pending</div>
       <div className="pg-sub">
         Purchase orders the sales reps have entered against accepted quotations, waiting to be entered on the OAB. Select one and press
-        <b> Add to OAB</b>: the Add SO page opens pre-filled — customer, PO number and date, despatch location, SKUs with their JSS,
-        quantity and the PO price beside the Price Master price.
+        <b> Add to OAB</b>: the Add SO page opens pre-filled — customer, PO number and date, despatch location and warehouse, SKUs with
+        their JSS, quantity and the PO price beside the Price Master price — where finished goods in stock can be used, then
+        <b> 🚀 Push to OAB</b>.
       </div>
       <div className="card">
         <div className="fbar">
@@ -74,9 +79,9 @@ export default function PoToSo() {
                       <td style={{ fontWeight: 600 }}>{p.customer || '—'}</td>
                       {/* 28.09 §Superstar ¶1: the warehouse behind the town — without it two
                           deliveries to the same place read identically here. */}
-                      <td style={{ fontSize: 11 }}>
+                      <td style={{ fontSize: 11 }} aria-label={`Despatch location of ${p.po_number}`}>
                         {p.despatch_location || '—'}
-                        {p.warehouse_name ? <div style={{ fontSize: 10, color: 'var(--i3)' }}>{p.warehouse_name}</div> : null}
+                        {p.warehouse_name ? <div style={{ fontSize: 10, color: 'var(--i3)' }}>🏭 {p.warehouse_name}</div> : null}
                       </td>
                       <td style={{ fontSize: 11 }}>{repName(sales.sales_users, p.created_by)}</td>
                       <td style={{ fontSize: 11 }}>

@@ -14,6 +14,23 @@ import FgAllocModal from '../components/FgAllocModal.jsx';
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 /** A Customer Master row's identity in the location picker: the location AND its warehouse. */
 const locRowKey = (r) => `${String((r && r.dispatchLoc) || '').trim()}||${String((r && r.warehouseName) || '').trim()}`;
+/** Names compared the way people mistype them — case and spacing do not matter. */
+const sameName = (a, b) => String(a || '').trim().toLowerCase().replace(/\s+/g, ' ') === String(b || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * 30.09 PE3: the Customer Master ROW a rep's PO is for — customer, despatch location
+ * AND warehouse. Kova Agro takes delivery at "DHARAPURAM" twice: under the SWIGGY group
+ * through the DHARAPURAM warehouse, and on its own account through KOVAI OWN. Taking
+ * the first row with the customer's name put a KOVAI OWN order under SWIGGY.
+ */
+function masterRowForRepPo(customers, repPo) {
+  const named = (customers || []).filter((c) => sameName(c.customer, repPo.customer));
+  const atLoc = named.filter((c) => sameName(c.dispatchLoc, repPo.loc));
+  const wh = String(repPo.warehouse || '').trim();
+  return (wh && atLoc.find((c) => sameName(c.warehouseName, wh)))
+    || (!wh && atLoc.find((c) => !String(c.warehouseName || '').trim()))
+    || atLoc[0] || null;
+}
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
 export default function NewPO() {
@@ -59,20 +76,16 @@ export default function NewPO() {
     if (!repPo) return;
     setPoNum(repPo.poNum || '');
     if (repPo.poDate) setPoDate(repPo.poDate);
-    const master = (mods.customers || []).find((c) => String(c.customer || '').trim().toLowerCase() === String(repPo.customer || '').trim().toLowerCase());
-    setGroup(master ? (master.group || '') : '');
-    setCustomer(repPo.customer || '');
-    setLoc(repPo.loc || '');
-    // 28.09 §Superstar ¶1: the rep's PO now names the WAREHOUSE as well as the town, so
-    // the picker can land on the right Customer Master row instead of leaving the
-    // Superstar to guess between two deliveries to the same place.
-    const wantLoc = String(repPo.loc || '').trim();
-    const wantWh = String(repPo.warehouse || '').trim();
-    const match = (mods.customers || []).find((c) => (
-      String(c.customer || '').trim().toLowerCase() === String(repPo.customer || '').trim().toLowerCase()
-      && String(c.dispatchLoc || '').trim() === wantLoc
-      && (!wantWh || String(c.warehouseName || '').trim() === wantWh)
-    ));
+    // 28.09 §Superstar ¶1 / 30.09 PE3: the rep's PO names the WAREHOUSE as well as the
+    // town, so the picker lands on that exact Customer Master row — and the group and
+    // the customer's spelling come FROM that row (the location list is read by exact
+    // name under the group, so the rep's lead spelling would find nothing).
+    const match = masterRowForRepPo(mods.customers, repPo);
+    const first = (mods.customers || []).find((c) => sameName(c.customer, repPo.customer)) || null;
+    const row = match || first;
+    setGroup(row ? String(row.group || '').trim() : '');
+    setCustomer(row ? String(row.customer || '').trim() : (repPo.customer || ''));
+    setLoc(match ? String(match.dispatchLoc || '') : (repPo.loc || ''));
     setLocKey(match ? locRowKey(match) : '');
     setSkus([]); setStep(1);
   }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -202,6 +215,14 @@ export default function NewPO() {
     const chosen = skus.filter((s) => s.checked);
     if (!chosen.length) return alert('Select at least one SKU');
     for (const s of chosen) if (!num(s.qty)) return alert('Enter qty for: ' + String(s.jobName || '').slice(0, 40));
+    // 30.09 PE3: the finished goods chosen against each line, within what is in stock
+    // and what the line orders
+    for (const s of chosen) {
+      const use = num(s.fgUse);
+      if (use < 0) return alert('FG to use cannot be negative: ' + s.spec);
+      if (use > fgAvail(mods.fgLedger, s.spec)) return alert(`Only ${fgAvail(mods.fgLedger, s.spec)} FG of ${s.spec} is available.`);
+      if (use > num(s.qty)) return alert(`FG to use for ${s.spec} is more than its PO quantity.`);
+    }
     let n = startN;
     const rows = chosen.map((s) => ({
       so: `${soY}/${n++}`, spec: s.spec, jobName: s.jobName, jobType: s.jobType, subBrand: s.subBrand || '',
@@ -209,32 +230,52 @@ export default function NewPO() {
       poNum: poNum.trim(), poDate, poExp, poQty: num(s.qty), invDisp: 0, manDisp: 0, fg: 0, stage: '',
       width: s.width, material: s.material, mic: s.mic, height: s.height, filmWidth: s.filmWidth,
       gsm: s.gsm, dispatchForm: s.dispatchForm || '', pouchingMachines: s.pouchingMachines || '',
+      poPrice: s.poPrice, fgQty: num(s.fgUse),
     }));
     setSelPO(rows);
     setStep(3);
   }
 
   async function submit() {
+    // the rep's PO this run came from — read once, because the page's route state is
+    // cleared once the sale orders exist
+    const rp = repPo;
     setBusy(true);
     try {
       // Send the chosen SKUs; the server assigns each SO number atomically and
       // returns them. The SO numbers shown in the Confirm step are a provisional
       // preview — the authoritative numbers come back here.
+      // 30.09 PE3: the warehouse goes with every line (the server reads it per item;
+      // it was shown on Confirm but saved blank) and once more for the whole order.
       const items = selPO.map((r) => ({
         spec: r.spec, jobName: r.jobName, jobType: r.jobType, subBrand: r.subBrand, poQty: r.poQty,
         width: r.width, material: r.material, mic: r.mic, height: r.height, filmWidth: r.filmWidth,
         gsm: r.gsm, dispatchForm: r.dispatchForm, pouchingMachines: r.pouchingMachines,
+        warehouseName: r.warehouseName || '',
       }));
-      const resp = await ordersApi.createSalesOrders({ poNum: poNum.trim(), poDate, poExp, customer, dispLoc: loc, items });
+      const resp = await ordersApi.createSalesOrders({ poNum: poNum.trim(), poDate, poExp, customer, dispLoc: loc, warehouseName: warehouse, items });
       await reloadModule('oab');
       const created = (resp && resp.created) || [];
       setAdded({ count: created.length, first: created[0], last: created[created.length - 1] });
       setStep(4);
-      // the rep's PO is on the OAB now — it leaves the PO → SO list
-      if (repPo && Array.isArray(repPo.lineIds) && repPo.lineIds.length) {
-        try {
-          await save('sales', (prev) => ({ ...(prev || {}), pos: markPosPushed((prev && prev.pos) || [], repPo.lineIds, { so: created.join(', '), by: 'superstar' }) }));
-        } catch (e) { console.warn('The sale orders were created but the sales PO could not be marked as pushed: ' + (e && e.message ? e.message : e)); }
+      // the rep's PO is on the OAB now — the lines that went onto it leave the PO → SO
+      // list, each stamped with its own sale order; a line the Superstar left unticked
+      // (or whose spec was not active) stays pending
+      if (rp && Array.isArray(rp.lines) && rp.lines.length) {
+        const soBySpec = new Map();
+        if (created.length === selPO.length) selPO.forEach((r, i) => soBySpec.set(String(r.spec || '').trim(), created[i]));
+        else selPO.forEach((r) => soBySpec.set(String(r.spec || '').trim(), created.join(', ')));
+        const pushed = rp.lines.filter((l) => l.id && soBySpec.has(String(l.spec || '').trim()));
+        // a PO handed over before lines carried their ids: every line, as before
+        const ids = pushed.length ? pushed.map((l) => l.id) : (rp.lines.some((l) => l.id) ? [] : (rp.lineIds || []));
+        const soById = Object.fromEntries(pushed.map((l) => [l.id, soBySpec.get(String(l.spec || '').trim())]));
+        if (ids.length) {
+          try {
+            await save('sales', (prev) => ({ ...(prev || {}), pos: markPosPushed((prev && prev.pos) || [], ids, { so: created.join(', '), soById, by: 'superstar' }) }), { retry: true });
+          } catch (e) { console.warn('The sale orders were created but the sales PO could not be marked as pushed: ' + (e && e.message ? e.message : e)); }
+        }
+        // the hand-off is done: "+ New PO" starts a clean page, not this PO again
+        nav('/po', { replace: true, state: null });
       }
       // Best-effort low-stock check for the just-created SOs (§8): compute material
       // requirements against the BOM + stock and surface any shortfall. The server
@@ -264,10 +305,16 @@ export default function NewPO() {
       // created[i] corresponds to selPO[i]; only map when the lengths agree so a
       // mismatch never mis-attributes an allocation.
       if (created.length === selPO.length) {
-        const cands = created
-          .map((so, i) => ({ so, spec: selPO[i].spec, jobName: selPO[i].jobName, avail: fgAvail(mods.fgLedger, selPO[i].spec) }))
-          .filter((c) => c.spec && c.avail > 0);
-        if (cands.length) setAllocRows(cands);
+        if (rp) {
+          // 30.09 PE3: from a rep's PO the FG was chosen on the SKU step — apply it
+          const plan = created.map((so, i) => ({ so, spec: selPO[i].spec, qty: num(selPO[i].fgQty) })).filter((p) => p.spec && p.qty > 0);
+          if (plan.length) await applyAlloc(plan);
+        } else {
+          const cands = created
+            .map((so, i) => ({ so, spec: selPO[i].spec, jobName: selPO[i].jobName, avail: fgAvail(mods.fgLedger, selPO[i].spec) }))
+            .filter((c) => c.spec && c.avail > 0);
+          if (cands.length) setAllocRows(cands);
+        }
       }
     } catch (e) {
       alert('Save failed: ' + e.message);
@@ -405,13 +452,17 @@ export default function NewPO() {
                   <th style={{ width: 42 }}>W</th><th style={{ width: 42 }}>H</th><th style={{ width: 38 }}>Mic</th>
                   <th style={{ width: 70 }}>PO Qty*</th><th style={{ width: 50 }}>UOM</th><th style={{ width: 80 }}>Rate (₹)</th>
                   {repPo && <th style={{ width: 90 }}>PO price (₹)</th>}
+                  {/* 30.09 PE3: "can select pending FG" — what is in stock, and how much of it to use */}
+                  {repPo && <th style={{ width: 80, textAlign: 'right' }}>FG available</th>}
+                  {repPo && <th style={{ width: 80 }}>Use FG</th>}
                 </tr>
               </thead>
               <tbody>
                 {skus.length === 0 ? (
-                  <tr><td colSpan={11} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No active specs found for this customer</td></tr>
+                  <tr><td colSpan={repPo ? 14 : 11} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No active specs found for this customer</td></tr>
                 ) : skus.map((s, i) => {
                   const rate = getPM(s.spec, mods.prices).price;
+                  const avail = repPo ? fgAvail(mods.fgLedger, s.spec) : 0;
                   return (
                     <tr key={i} className={s.checked ? 'hi' : ''}>
                       <td><input type="checkbox" className="cb" aria-label={`Select ${s.spec}`} checked={s.checked} onChange={(e) => setRow(i, { checked: e.target.checked })} /></td>
@@ -427,6 +478,18 @@ export default function NewPO() {
                       {repPo && (
                         <td style={{ textAlign: 'right', fontWeight: 600, color: s.poPrice != null && rate > 0 && num(s.poPrice) < rate ? 'var(--red)' : 'var(--blu)' }} aria-label={`PO price for ${s.spec}`}>
                           {s.poPrice != null ? '₹' + num(s.poPrice).toFixed(2) : '-'}
+                        </td>
+                      )}
+                      {repPo && (
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: avail > 0 ? '#1e7e34' : 'var(--i3)' }} aria-label={`FG available for ${s.spec}`}>
+                          {avail > 0 ? dash(avail) : '—'}
+                        </td>
+                      )}
+                      {repPo && (
+                        <td>
+                          <input type="number" min="0" max={Math.min(avail, num(s.qty) || avail)} placeholder="0" disabled={!s.checked || avail <= 0}
+                            value={s.fgUse ?? ''} aria-label={`Use FG for ${s.spec}`} style={{ width: 70, opacity: s.checked && avail > 0 ? 1 : 0.4 }}
+                            onChange={(e) => setRow(i, { fgUse: e.target.value })} />
                         </td>
                       )}
                     </tr>
@@ -468,6 +531,9 @@ export default function NewPO() {
                 <th>Customer</th><th>Location</th><th>PO#</th><th>Date</th><th style={{ textAlign: 'right' }}>Qty</th>
                 <th style={{ width: 50 }}>UOM</th>
                 <th style={{ textAlign: 'right' }}>Base Price (₹) <span style={{ fontWeight: 400 }}>per unit</span></th>
+                {/* 30.09 PE3: the customer's PO price beside the Price Master rate */}
+                {repPo && <th style={{ textAlign: 'right' }}>PO price (₹)</th>}
+                {repPo && <th style={{ textAlign: 'right' }}>FG to use</th>}
                 <th style={{ textAlign: 'right' }}>Base Value (₹) <span style={{ fontWeight: 400 }}>without GST</span></th>
                 <th style={{ textAlign: 'right' }}>Total (₹) <span style={{ fontWeight: 400 }}>with {GST_PCT}% GST</span></th>
               </tr></thead>
@@ -497,6 +563,12 @@ export default function NewPO() {
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
+                      {repPo && (
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: r.poPrice != null && rate > 0 && num(r.poPrice) < rate ? 'var(--red)' : 'var(--blu)' }} aria-label={`Confirm PO price for ${r.spec}`}>
+                          {r.poPrice != null ? '₹' + num(r.poPrice).toFixed(2) : '-'}
+                        </td>
+                      )}
+                      {repPo && <td style={{ textAlign: 'right' }} aria-label={`Confirm FG for ${r.spec}`}>{num(r.fgQty) > 0 ? dash(r.fgQty) : '—'}</td>}
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? rupees(base) : '-'}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rate > 0 ? rupees(withGst(base)) : '-'}</td>
                     </tr>
@@ -511,15 +583,15 @@ export default function NewPO() {
                   return (
                     <>
                       <tr>
-                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (without GST)</td>
+                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (without GST)</td>
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(base)}</td>
                       </tr>
                       <tr>
-                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>GST @ {GST_PCT}%</td>
+                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>GST @ {GST_PCT}%</td>
                         <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>{rupees(withGst(base) - base)}</td>
                       </tr>
                       <tr>
-                        <td colSpan={12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (with {GST_PCT}% GST)</td>
+                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (with {GST_PCT}% GST)</td>
                         <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rupees(withGst(base))}</td>
                       </tr>
                     </>
@@ -530,7 +602,8 @@ export default function NewPO() {
           </div>
           <div className="act">
             <button className="btn btn-s" onClick={() => setStep(2)} disabled={busy}>← Back</button>
-            <button className="btn btn-g" onClick={submit} disabled={busy}>{busy ? 'Writing…' : '✓ Add to OAB'}</button>
+            {/* 30.09 PE3: from a rep's PO the last step is the push the Superstar was asked to make */}
+            <button className="btn btn-g" onClick={submit} disabled={busy}>{busy ? 'Writing…' : (repPo ? '🚀 Push to OAB' : '✓ Add to OAB')}</button>
           </div>
         </div>
       )}

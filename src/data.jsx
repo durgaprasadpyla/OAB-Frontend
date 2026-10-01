@@ -129,6 +129,10 @@ export function DataProvider({ children }) {
   // every load and after every successful module-1 save: the two moments local
   // and server state are known to agree. See lib/merge.js.
   const baseRef = useRef(null);
+  // How many saves each module has started. A reloadModule that was already in
+  // flight when a save began must not land on top of it — it would put the
+  // pre-save copy back on screen under the post-save version.
+  const writeSeqRef = useRef({});
 
   const reload = useCallback(async () => {
     setLoading(true); setError('');
@@ -173,8 +177,11 @@ export function DataProvider({ children }) {
   const reloadModule = useCallback(async (key) => {
     const id = KEY_TO_ID[key];
     if (!id) return;
+    const seq = writeSeqRef.current[key] || 0;
     const fresh = await loadOne(id);
     const value = fresh.value != null ? fresh.value : emptyModules()[key];
+    // a save of this module started meanwhile: its result is newer than this read
+    if ((writeSeqRef.current[key] || 0) !== seq) return value;
     setMods(m => ({ ...m, [key]: value }));
     setVersions(m => ({ ...m, [key]: fresh.version }));
     if (id === 1) baseRef.current = snapshotBase(value);
@@ -182,12 +189,23 @@ export function DataProvider({ children }) {
     return value;
   }, []);
 
-  /** Replace one module and persist it. `next` may be a value or (prev)=>next. */
-  const save = useCallback(async (key, next) => {
+  /**
+   * Replace one module and persist it. `next` may be a value or (prev)=>next.
+   *
+   * Issues 30.09 — `{ retry: true }` (opt-in): when the save meets a 409 because
+   * another login wrote the module first, reload it and run the FUNCTIONAL updater
+   * once more on the fresh copy, then save that. A hand-off chain (rep → QC → plant →
+   * desk → rep) is five logins writing one blob; without this every hand-off's first
+   * save failed and asked the user to do it again. Only pass it for an updater that
+   * derives everything from `prev` — one that closes over a stale copy would write
+   * that stale copy back.
+   */
+  const save = useCallback(async (key, next, opts = {}) => {
     const id = KEY_TO_ID[key];
     if (!id) throw new Error('unknown module: ' + key);
     const prev = modsRef.current[key];                 // snapshot for rollback
     let value = typeof next === 'function' ? next(prev) : next;
+    writeSeqRef.current[key] = (writeSeqRef.current[key] || 0) + 1;
     setMods(m => ({ ...m, [key]: value }));   // optimistic local update
     setSaving(true);
     try {
@@ -226,6 +244,35 @@ export function DataProvider({ children }) {
         // in the screen, not here, so it is preserved; they can review and re-submit.
         let fresh = null;
         try { fresh = await loadOne(id); } catch { /* fall through to rollback */ }
+        if (fresh && opts && opts.retry && typeof next === 'function') {
+          const freshValue = fresh.value != null ? fresh.value : emptyModules()[key];
+          let again;
+          try {
+            again = next(freshValue);
+          } catch (e2) {
+            // the edit no longer applies to what is on the server (e.g. a newer desk
+            // price) — show the server copy and say why, not "save again"
+            setMods(m => ({ ...m, [key]: freshValue }));
+            setVersions(m => ({ ...m, [key]: fresh.version }));
+            if (id === 1) baseRef.current = snapshotBase(freshValue);
+            throw e2;
+          }
+          setMods(m => ({ ...m, [key]: again }));
+          try {
+            const v2 = await saveOne(id, again, fresh.version);
+            setVersions(m => ({ ...m, [key]: v2 }));
+            if (id === 1) baseRef.current = snapshotBase(again);
+            return again;
+          } catch (e3) {
+            if (!(e3 && (e3.code === 'conflict' || e3.status === 409))) {
+              setMods(m => ({ ...m, [key]: freshValue }));
+              setVersions(m => ({ ...m, [key]: fresh.version }));
+              throw e3;
+            }
+            // a second writer got in between as well: fall through to the notice
+            try { fresh = await loadOne(id); } catch { fresh = null; }
+          }
+        }
         if (fresh) {
           const freshValue = fresh.value != null ? fresh.value : emptyModules()[key];
           setMods(m => ({ ...m, [key]: freshValue }));
@@ -242,6 +289,8 @@ export function DataProvider({ children }) {
       setMods(m => ({ ...m, [key]: prev }));  // roll back: never show unsaved data as saved
       throw e;
     } finally {
+      // bumped again on the way out, so a reload begun DURING the save is dropped too
+      writeSeqRef.current[key] = (writeSeqRef.current[key] || 0) + 1;
       setSaving(false);
     }
   }, []);

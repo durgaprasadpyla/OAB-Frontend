@@ -13,6 +13,9 @@
 // Ported from repSkus / repToggleSkuFlag / repSkuReadyForPO / repAcceptedMinPrice /
 // repPO / repSavePO / repVisit / repSaveVisit / repQuotesToSend / repPlatesForSku.
 import { salesUid, salesToday, datePlus } from './sales.js';
+// repFlow reads acceptedMinPrice from here; both sides only call each other at run
+// time, so the circular import is safe.
+import { skuOwnerRep, quoteSentStill } from './repFlow.js';
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -63,9 +66,13 @@ export function toggleSkuStage(skus, skuId, key, { now = new Date() } = {}) {
  * The accepted price that applies to an order quantity: the highest slab whose
  * quantity the order reaches, falling back to the smallest slab below it. Returns
  * null when the SKU has no accepted slabs. (repAcceptedMinPrice)
+ *
+ * 30.09 QT7: a slab with no quantity is a FLAT price — "no tiers = one price above
+ * MOQ" — and applies from any quantity. It used to be thrown away, so a flat-price
+ * quotation never priced the PO line and the rep was told to set the price by hand.
  */
 export function acceptedMinPrice(sku, qty) {
-  const tiers = arr(sku && sku.price_tiers).filter((t) => t && t.qty);
+  const tiers = arr(sku && sku.price_tiers).filter((t) => t && n(t.price) > 0);
   if (!tiers.length) return null;
   const sorted = tiers.slice().sort((a, b) => n(a.qty) - n(b.qty));
   let applicable = sorted[0];
@@ -85,13 +92,31 @@ export function platesForSku(sales, sku) {
 /**
  * SKUs whose quotation has come back from the desk but has not been sent on to the
  * customer yet — the banner at the top of the rep's screens. (repQuotesToSend)
+ *
+ * 30.09 QT2: for the SKUs this rep is ALLOCATED (skuOwnerRep), not only the ones the
+ * rep typed in — a quotation for a customer the Super Admin gave the rep by KAM or by
+ * category never raised the banner. A quote edited after it was sent counts again.
  */
 export function quotesToSend(sales, repId) {
+  if (!s(repId)) return [];
   return arr(sales && sales.skus).filter((sku) => {
-    if (sku.created_by !== repId || sku.quotation_sent) return false;
+    if (sku.quotation_accepted || skuOwnerRep(sales, sku) !== s(repId)) return false;
+    if (quoteSentStill(sales, sku)) return false;
     const hasQuote = arr(sales && sales.quotations).some((q) => arr(q.items).some((i) => i.sku_id === sku.id));
     return hasQuote || sku.quotation_received;
   });
+}
+
+/**
+ * Quote Follow-up: the accepted quotations of the SKUs this rep is allocated that
+ * no PO has landed against yet. (repQuoteFollowTable)
+ */
+export function quoteFollowUps(sales, repId) {
+  if (!s(repId)) return [];
+  const pos = arr(sales && sales.pos);
+  return arr(sales && sales.skus).filter((sku) => sku.quotation_accepted
+    && skuOwnerRep(sales, sku) === s(repId)
+    && !pos.some((p) => p.sku_id === sku.id));
 }
 
 /** A rep's own SKUs, newest first. */

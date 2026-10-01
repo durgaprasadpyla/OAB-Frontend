@@ -386,8 +386,13 @@ export function buildQuotation({ leadId, clientName, items, header = {}, finePri
  */
 export function applyQuoteSideEffects(quote, { qcReports, skus }) {
   const quoted = new Set(arr(quote.items).map((i) => i.sku_id));
+  // 30.09 QT1: stamped under the name the S Dashboard's CSA tracker reads
+  // (`quoted_at`), with the quotation that did it.
+  const at = quote.created_at || new Date().toISOString();
   return {
-    qc_reports: arr(qcReports).map((r) => (quoted.has(r.sku_id) ? { ...r, status: 'Quoted', needs_quote_review: false } : r)),
+    qc_reports: arr(qcReports).map((r) => (r.sku_id && quoted.has(r.sku_id)
+      ? { ...r, status: 'Quoted', needs_quote_review: false, quoted_at: at, quote_id: quote.id || r.quote_id || '' }
+      : r)),
     skus: arr(skus).map((sk) => (quoted.has(sk.id) && !sk.quotation_sent
       ? { ...sk, quotation_received: true, quotation_received_at: new Date().toISOString() }
       : sk)),

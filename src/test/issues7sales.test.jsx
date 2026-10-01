@@ -112,12 +112,16 @@ describe('Rep — quotations, sending and accepting', () => {
     await userEvent.click(within(doc).getByText('📤 Sent Quote'));
     await waitFor(() => expect(lastSales(saved).skus[0].quotation_sent).toBe(true));
     expect(lastSales(saved).skus[0].quote_history).toHaveLength(1);
-    // the toggle at the end of the row accepts it
-    await userEvent.selectOptions(await screen.findByLabelText('Quote accepted 200g Pouch'), 'yes');
+    // the Yes/No switch in the row accepts it (30.09 QT4: a real toggle)
+    const toggle = await screen.findByRole('switch', { name: 'Quote accepted 200g Pouch' });
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
     await waitFor(() => expect(lastSales(saved).skus[0].quotation_accepted).toBe(true));
     expect(lastSales(saved).skus[0].price_tiers).toEqual([{ qty: 100000, price: 2.5 }]);
     await tab('✅ Quote Accepted');
-    expect(await screen.findByText('awaiting QC')).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Accepted quotations' });
+    const row = within(table).getByText('200g Pouch', { selector: 'td' }).closest('tr');
+    expect(within(row).getByText('awaiting QC')).toBeInTheDocument();
   });
 });
 
@@ -167,17 +171,17 @@ describe('QC — the JSS from the accepted CSA', () => {
     await waitFor(() => expect(screen.getByLabelText('Job Name')).toHaveValue('200g Pouch'));
     expect(screen.getByLabelText('Customer')).toHaveValue('Beta Foods');
     expect(screen.getByLabelText('Group')).toHaveValue('BETA GROUP');
-    // The CSA's structure is free text and the Item Master has no such material, so
-    // the layer is left for QC to choose rather than written in as invented text.
-    expect(screen.getByLabelText('Primary Material')).toHaveValue('');
+    // 30.09 QT6: the CSA report's first substrate (PET, 12 mic) fills the primary
+    // layer from the Item Master — it used to be left blank for QC to pick again
+    await waitFor(() => expect(screen.getByLabelText('Primary Material')).toHaveValue('PET'));
+    expect(screen.getByLabelText('Primary Micron')).toHaveValue('12');
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
     await userEvent.selectOptions(screen.getByLabelText('Job Type'), 'SF Pouch');
-    await userEvent.selectOptions(screen.getByLabelText('Primary Material'), 'PET');
     await userEvent.click(screen.getByRole('button', { name: 'Add Spec' }));
     await waitFor(() => expect(saved.some((s) => s.key === 'jss')).toBe(true));
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     expect(lastSales(saved).skus[0].jss_spec).toBe('A1');
-    expect(saved.find((s) => s.key === 'jss').data[0]).toMatchObject({ spec: 'A1', customer: 'Beta Foods', jobName: '200g Pouch' });
+    expect(saved.find((s) => s.key === 'jss').data[0]).toMatchObject({ spec: 'A1', customer: 'Beta Foods', jobName: '200g Pouch', material: 'PET', mic: '12', fromSku: 'S1' });
   });
 });
 

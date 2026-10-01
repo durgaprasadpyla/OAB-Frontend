@@ -3,7 +3,18 @@ import { useData } from '../data.jsx';
 import { fmtDate, inr } from '../lib/format.js';
 import { salesToday } from '../lib/sales.js';
 import { poValue } from '../lib/repPortal.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import { repBook, despatchLocationRowsFor, acceptedSkusForPo, acceptedSkusWithoutJss, acceptedPriceForQty, buildPoLines } from '../lib/repFlow.js';
+
+/**
+ * 30.09 QT7: the smallest quantity the accepted quotation was given for — an order
+ * under it is flagged (not refused). 0 when the quotation is a flat price from any
+ * quantity.
+ */
+function acceptedMoq(sku) {
+  const qs = ((sku && sku.price_tiers) || []).map((t) => Number(t && t.qty) || 0).filter((q) => q > 0);
+  return qs.length ? Math.min(...qs) : 0;
+}
 
 // 🧾 Enter PO — Sales Login §61-§70.
 //
@@ -20,6 +31,8 @@ const blankLine = () => ({ skuId: '', qty: '', price: '' });
 export default function RepPoTab({ leads, sales, save, repId }) {
   const { mods } = useData();
   const customers = mods.customers || [];
+  // 30.09: the JSS QC created a moment ago in another login is on the SKU list on opening
+  useFreshModule('sales');
   const book = useMemo(() => repBook(sales, customers, repId), [sales, customers, repId]);
   const [form, setForm] = useState({ leadId: '', location: '', poNumber: '', date: salesToday() });
   const [lines, setLines] = useState([blankLine()]);
@@ -56,6 +69,19 @@ export default function RepPoTab({ leads, sales, save, repId }) {
     }
     return next;
   }));
+  /**
+   * 30.09 QT7: picking a SKU fills the despatch location, while it is still empty,
+   * with the one the SKU's CSA requisition named — the customer's row for that town.
+   */
+  function pickSku(i, skuId) {
+    setLine(i, { skuId, priceTouched: false });
+    if (form.location) return;
+    const sku = skuOf(skuId);
+    const want = String(((sku && sku.csa_request) || {}).despatch_location || '').trim().toLowerCase();
+    if (!want) return;
+    const row = locations.find((l) => l.location.toLowerCase() === want) || locations.find((l) => l.label.toLowerCase() === want);
+    if (row) set({ location: row.key });
+  }
 
   async function savePo() {
     let rows;
@@ -69,7 +95,11 @@ export default function RepPoTab({ leads, sales, save, repId }) {
     } catch (e) { flash('r', e.message); return; }
     setBusy(true);
     try {
-      await save('sales', (prev) => ({ ...(prev || {}), pos: [...((prev && prev.pos) || []), ...rows] }));
+      await save('sales', (prev) => {
+        const pos = (prev && prev.pos) || [];
+        // re-applied once on a fresh copy if another login saved first — the PO lands once
+        return { ...(prev || {}), pos: pos.some((p) => p.id === rows[0].id) ? pos : [...pos, ...rows] };
+      }, { retry: true });
       setForm({ leadId: '', location: '', poNumber: '', date: salesToday() });
       setLines([blankLine()]);
       flash('g', `✓ PO ${rows[0].po_number} saved with ${rows.length} SKU(s). It is on the Superstar's PO → SO list to be entered on the OAB.`);
@@ -126,19 +156,24 @@ export default function RepPoTab({ leads, sales, save, repId }) {
               const sku = skuOf(l.skuId);
               const taken = new Set(lines.filter((x, j) => j !== i).map((x) => x.skuId));
               const min = sku ? acceptedPriceForQty(sku, Number(l.qty) || 0) : null;
+              const moq = sku ? acceptedMoq(sku) : 0;
+              const belowMoq = moq > 0 && Number(l.qty) > 0 && Number(l.qty) < moq;
               return (
                 <tr key={i}>
                   <td>
-                    <select value={l.skuId} aria-label={`PO SKU ${i + 1}`} disabled={!lead} onChange={(e) => setLine(i, { skuId: e.target.value, priceTouched: false })} style={{ width: '100%' }}>
+                    <select value={l.skuId} aria-label={`PO SKU ${i + 1}`} disabled={!lead} onChange={(e) => pickSku(i, e.target.value)} style={{ width: '100%' }}>
                       <option value="">-- Select an accepted SKU --</option>
                       {ready.filter((s) => !taken.has(s.id)).map((s) => <option key={s.id} value={s.id}>{s.sku_name} ({s.category || ''} / {s.dispatch_form || s.dispatch_type || ''})</option>)}
                     </select>
                     {sku && sku.price_tiers && sku.price_tiers.length > 0 && (
-                      <div style={{ fontSize: 10, color: 'var(--blu)', marginTop: 2 }}>Accepted: {sku.price_tiers.map((t) => `₹${t.price} @ ${t.qty}`).join(', ')}</div>
+                      <div style={{ fontSize: 10, color: 'var(--blu)', marginTop: 2 }}>Accepted: {sku.price_tiers.map((t) => (Number(t.qty) > 0 ? `₹${t.price} @ ${t.qty}` : `₹${t.price} flat`)).join(', ')}</div>
                     )}
                   </td>
                   <td style={{ fontFamily: 'monospace', fontWeight: 700 }} aria-label={`PO JSS ${i + 1}`}>{sku ? sku.jss_spec : '—'}</td>
-                  <td><input type="number" min="0" value={l.qty} aria-label={`PO quantity ${i + 1}`} onChange={(e) => setLine(i, { qty: e.target.value })} /></td>
+                  <td>
+                    <input type="number" min="0" value={l.qty} aria-label={`PO quantity ${i + 1}`} onChange={(e) => setLine(i, { qty: e.target.value })} />
+                    {belowMoq && <div style={{ fontSize: 10, color: '#b9770e', fontWeight: 600 }} aria-label={`Below MOQ ${i + 1}`}>⚠ Below the MOQ of {inr(moq)} the quotation was accepted for.</div>}
+                  </td>
                   <td>
                     <input type="number" min="0" step="0.01" value={l.price} aria-label={`PO price ${i + 1}`} onChange={(e) => setLine(i, { price: e.target.value, priceTouched: true })} />
                     {min != null && Number(l.price) > 0 && Number(l.price) < min && <div style={{ fontSize: 10, color: 'var(--red)' }}>Below the accepted ₹{min} for this quantity.</div>}
