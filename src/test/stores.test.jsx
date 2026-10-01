@@ -51,7 +51,8 @@ beforeEach(() => {
     if (u.match(/\/api\/stores\/items\/\d+\/msl/)) return res(200, { itemId: 1, msl: body.msl });
     if (u.match(/\/api\/stores\/units\/\d+\/status/)) return res(200, { unitId: 12, status: body.status });
     if (u.includes('/api/stores/grns')) return method === 'POST'
-      ? res(201, { grnNo: 'GRN/2026/1', units: [{ unitId: 99, internalCode: 'BLMU-9' }] })
+      // 30.09 §S7b: a GRN booked against a PO says what it left that PO at
+      ? res(201, { grnNo: 'GRN/2026/1', units: [{ unitId: 99, internalCode: 'BLMU-9' }], ...(body.poNum ? { poNum: body.poNum, poStatus: 'Closed' } : {}) })
       : res(200, []);
     if (u.includes('/api/stores/issues/batch')) return res(201, { slipNo: 'ISS/2026/1', so: body.so, department: body.department, totalQty: 150, lines: [{ unitId: 11, internalCode: 'BLMU-1', qty: 150, remaining: 100 }] });
     if (u.includes('/api/stores/so-context')) return res(200, { so: '26/500', found: true, spec: 'A1', route: { departments: [{ seq: 1, departmentName: 'Printing' }] }, bom: { found: true, items: [{ itemId: 1, itemCode: 'FILM-BOPP20', itemName: 'BOPP Film 20mic', departmentName: 'Printing' }] } });
@@ -76,7 +77,12 @@ beforeEach(() => {
           { company: 'Unmapped Traders' },
         ],
         pos: [{ poNum: 'BLM/PUR/2026-2027/7', poDate: '2026-08-20', supplier: 'Cosmos Films', status: 'Open',
-                items: [{ item: 'BOPP Film 20mic', qty: 500, unit: 'Kg', rate: 120, receivedQty: 0 }] }],
+                items: [{ item: 'BOPP Film 20mic', qty: 500, unit: 'Kg', rate: 120, receivedQty: 0 }] },
+              // 30.09 §S7a: neither of these is expected any more
+              { poNum: 'BLM/PUR/2026-2027/6', poDate: '2026-08-10', supplier: 'Cosmos Films', status: 'Closed',
+                items: [{ itemCode: 'FILM-BOPP20', item: 'BOPP Film 20mic', qty: 100, unit: 'Kg', rate: 118, receivedQty: 100 }] },
+              { poNum: 'BLM/PUR/2026-2027/8', poDate: '2026-08-22', supplier: 'Sun Chemical', status: 'Cancelled', cancelled: true,
+                items: [{ itemCode: 'INK-WHITE', item: 'White Ink', qty: 20, unit: 'Kg', rate: 300, receivedQty: 0 }] }],
       }), version: 1 }]);
     }
     return res(200, []);
@@ -159,6 +165,66 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     fireEvent.blur(eta);
     await waitFor(() => expect(calls.some((c) => c.u.includes('/po-eta') && c.method === 'PUT'
       && c.body.expectedDate === '2026-09-20')).toBe(true));
+  });
+
+  it('lists only the POs still expected — "Open POs only" hides cancelled and closed ones (30.09 §S7a)', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(screen.getByText(/Purchase Orders/));
+    await screen.findByLabelText('Expected date for BOPP Film 20mic on BLM/PUR/2026-2027/7');
+    expect(screen.queryByText('BLM/PUR/2026-2027/8')).toBeNull();     // cancelled
+    expect(screen.queryByText('BLM/PUR/2026-2027/6')).toBeNull();     // closed
+    expect(screen.queryByRole('columnheader', { name: /told by/i })).toBeNull();
+    // the old line names its item through the one Item Master item with that description
+    const row = screen.getByText('BLM/PUR/2026-2027/7').closest('tr');
+    await waitFor(() => expect(within(row).getByText('FILM-BOPP20')).toBeInTheDocument());
+    expect(within(row).getByText('BOPP')).toBeInTheDocument();
+    expect(within(row).getByText('High Barrier')).toBeInTheDocument();
+    // unticking shows them all, each with its own status
+    await user.click(screen.getByRole('checkbox', { name: 'Open POs only' }));
+    expect(within(screen.getByText('BLM/PUR/2026-2027/8').closest('tr')).getByText('Cancelled')).toBeInTheDocument();
+    expect(within(screen.getByText('BLM/PUR/2026-2027/6').closest('tr')).getByText('Closed')).toBeInTheDocument();
+  });
+
+  it('picks the GRN’s PO from the open POs, and re-reads the PO it closed (30.09 §PU2 / §S7b)', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(screen.getByText(/GRN/));
+    await screen.findByText('📥 New goods receipt');
+    const po = screen.getByLabelText('Purchase order');
+    expect(po.tagName).toBe('SELECT');
+    // no typed number any more — only the POs still expected, plus "none"
+    await waitFor(() => expect([...po.options].map((o) => o.value)).toEqual(['', 'BLM/PUR/2026-2027/7']));
+    expect(po.options[0].text).toBe('— no PO (direct purchase) —');
+    // picking the PO names its supplier
+    fireEvent.change(po, { target: { value: 'BLM/PUR/2026-2027/7' } });
+    expect(screen.getByLabelText('Supplier')).toHaveValue('Cosmos Films');
+    expect(screen.getByText(/Verify against BLM\/PUR\/2026-2027\/7/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Item for line 1')).not.toBeDisabled());
+    fireEvent.change(screen.getByLabelText('Item for line 1'), { target: { value: 'FILM-BOPP20' } });
+    fireEvent.change(screen.getByLabelText('Quantity line 1'), { target: { value: '500' } });
+    await user.click(screen.getByRole('button', { name: /Receive material/ }));
+
+    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/grns') && c.method === 'POST')).toBe(true));
+    const at = calls.findIndex((c) => c.u.includes('/api/stores/grns') && c.method === 'POST');
+    expect(calls[at].body.poNum).toBe('BLM/PUR/2026-2027/7');
+    // the purchase module is re-read, so the PO list shows what the GRN did to it
+    await waitFor(() => expect(calls.slice(at + 1).some((c) => c.u.includes('oab_data?id=eq.6'))).toBe(true));
+    expect(await screen.findByText(/BLM\/PUR\/2026-2027\/7 is now fully received and closed/)).toBeInTheDocument();
+  });
+
+  it('drops the PO when a different supplier is chosen', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(screen.getByText(/GRN/));
+    await screen.findByText('📥 New goods receipt');
+    await waitFor(() => expect([...screen.getByLabelText('Purchase order').options].length).toBe(2));
+    fireEvent.change(screen.getByLabelText('Purchase order'), { target: { value: 'BLM/PUR/2026-2027/7' } });
+    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'Sun Chemical' } });
+    expect(screen.getByLabelText('Purchase order')).toHaveValue('');
+    // Sun Chemical's only PO is cancelled — nothing to receive against
+    expect([...screen.getByLabelText('Purchase order').options].map((o) => o.value)).toEqual(['']);
+    expect(screen.getByText(/No open PO for Sun Chemical/)).toBeInTheDocument();
   });
 
   it('receives a GRN with the supplier label, internal code, location, price and expiry', async () => {
