@@ -199,7 +199,8 @@ export default function PM() {
         <div className="pg-ttl">Production</div>
         <PmTabs tab={tab} setTab={setTab} />
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
-        <PurchaseOrders flash={(t, text) => flash(text, t)} />
+        {/* 30.09 §PU3: read here, revised only by the stores desk (the server refuses the PM). */}
+        <PurchaseOrders readOnly flash={(t, text) => flash(text, t)} />
       </div>
     );
   }

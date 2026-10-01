@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { useState } from 'react';
 import { isCustomerLead, repBook } from '../lib/repFlow.js';
 import { canAccess } from '../lib/roles.js';
 import LeadCustomerPicker from '../components/LeadCustomerPicker.jsx';
+import { renderApp } from './harness.jsx';
+import PM from '../pages/PM.jsx';
 
 // "Issues as on 29.09.2026" — the trimmed follow-up list.
 
@@ -91,5 +93,24 @@ describe('purchase orders reach the desks that need them', () => {
   it('opens the purchase-order list to the Plant Manager and the stores desk', () => {
     expect(canAccess('pm', '/pm')).toBe(true);
     expect(canAccess('stores', '/stores')).toBe(true);
+  });
+
+  // 30.09 §PU3: the route was open but the list was always empty — the PM login could
+  // not read module 6. With the read granted the POs arrive; the PM only reads them.
+  it('shows the PM the POs themselves, read-only', async () => {
+    const purchase = {
+      asl: [],
+      pos: [{ poNum: 'BLM/PUR/2026-2027/103', poDate: '2026-09-28', supplier: 'KAPOOR IMAGING PVT LTD', status: 'Open',
+        expectedDelivery: '2026-10-11', items: [{ itemCode: 'PLT-1', item: '637 x 520', materialType: 'PLATE', specialty: 'DIGITAL', unit: "No's", qty: 100, receivedQty: 0 }] }],
+    };
+    renderApp(<PM />, { modules: { purchase }, role: 'pm', user: 'pm1' });
+    fireEvent.click(await screen.findByText('🧾 Purchase Orders'));
+    const row = (await screen.findByText('BLM/PUR/2026-2027/103')).closest('tr');
+    expect(within(row).getByText('KAPOOR IMAGING PVT LTD')).toBeInTheDocument();
+    expect(within(row).getByText('PLATE')).toBeInTheDocument();
+    // the purchase login's expected date, as text — the PM cannot change it
+    expect(within(row).getByText('11/10/2026')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Expected date for/)).toBeNull();
+    expect(row.querySelector('input')).toBeNull();
   });
 });

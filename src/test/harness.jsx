@@ -196,6 +196,31 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
         const any = (po.items || []).some((i) => num(i.receivedQty) > 0);
         return all ? 'Closed' : any ? 'Partial' : 'Open';
       };
+      // ── Issues 30.09 (CONTRACTS §9-§11): link a stores GRN, backfill, cancel ──
+      if (u.includes('/link-grn')) {
+        const po = findPo(pur, body.poNum);
+        const booked = (modules.storeGrns || []).some((g) => g.grnNo === body.grnNo
+          && String(g.poNum || '').trim().toUpperCase() === String(body.poNum || '').trim().toUpperCase());
+        if (!po || !booked) return res(400, { message: `GRN ${body.grnNo} was not booked by the stores desk against PO ${body.poNum}` });
+        if (po.status === 'Cancelled') return res(400, { message: `${body.poNum} was cancelled` });
+        if (!Array.isArray(po.receipts)) po.receipts = [];
+        let rec = po.receipts.find((r) => r.ref === body.grnNo);
+        if (!rec) { rec = { date: '2026-07-31', ref: body.grnNo, source: 'stores' }; po.receipts.push(rec); }
+        Object.assign(rec, { linked: true, linkedBy: user, linkedAt: '2026-07-31' }, body.receiptImage ? { image: body.receiptImage } : {});
+        po.grnRef = body.grnNo;
+        record(6, '/api/purchase-orders/link-grn', body);
+        return res(200, { poNum: po.poNum, status: po.status, grnRef: po.grnRef });
+      }
+      if (u.includes('/sync-stores')) {
+        record(6, '/api/purchase-orders/sync-stores', body);
+        return res(200, { synced: 0 });
+      }
+      if (u.includes('/cancel')) {
+        const po = findPo(pur, body.poNum);
+        if (po) Object.assign(po, { status: 'Cancelled', cancelled: true, cancelledDate: '2026-07-31', cancelReason: body.reason || '' });
+        record(6, '/api/purchase-orders/cancel', body);
+        return res(200, { poNum: body.poNum, status: 'Cancelled' });
+      }
       if (u.includes('/grn')) {
         const po = findPo(pur, body.poNum);
         if (po) {
@@ -231,7 +256,11 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
         const n = num(pur.counter) + 1;
         const poNum = `BLM/PUR/2026-2027/${n}`;
         const gst = num(body.gstPercent);
-        const built = (body.items || []).map((it) => ({ item: it.item, unit: it.unit, qty: num(it.qty), rate: num(it.rate), amount: num(it.qty) * num(it.rate), receivedQty: 0 }));
+        // 29.09: the line carries its item's identity (code, material, sub-group, speciality).
+        const built = (body.items || []).map((it) => ({
+          itemCode: it.itemCode || '', item: it.item, materialType: it.materialType || '', subGroup: it.subGroup || '', specialty: it.specialty || '',
+          unit: it.unit, qty: num(it.qty), rate: num(it.rate), amount: num(it.qty) * num(it.rate), receivedQty: 0,
+        }));
         const sub = built.reduce((s, i) => s + i.amount, 0);
         const total = sub + sub * gst / 100;
         pur.pos.unshift({ poNum, poDate: '2026-07-31', supplier: body.supplier, items: built, totalAmount: total, expectedDelivery: body.expectedDelivery || '', gstPercent: gst, status: 'Open', grnRef: '', actualReceiptDate: '', closedDate: '', manualClosed: false, receipts: [], paymentStatus: 'Unpaid', paymentDate: '', notes: body.notes || '', createdBy: 'purchase' });
@@ -469,6 +498,56 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
     // The Item Master backs every JSS material / speciality / micron / film-width
     // dropdown now, so a test can seed it with `modules.masterItems` and the spec
     // form offers exactly those. Anything else under /api/master/ stays empty.
+    // ── Issues 30.09: the stores desk's GRNs (CONTRACTS §8) and PO expected dates ──
+    // `modules.storeGrns` is the GRN list; each entry may carry `units` (an array, as
+    // GET /api/stores/grns/{id} returns them) — the list itself reports their COUNT.
+    // A GRN booked against a PO moves that PO's received quantity and closes it when
+    // everything ordered is in, the way the server now does.
+    if (u.includes('/api/stores/grns')) {
+      const grns = modules.storeGrns || (modules.storeGrns = []);
+      const listRow = (g) => ({ ...g, units: Array.isArray(g.units) ? g.units.length : (g.units ?? 0) });
+      const idM = /\/api\/stores\/grns\/(\d+)/.exec(u);
+      if (method === 'GET' && idM) {
+        const g = grns.find((x) => String(x.id) === idM[1]);
+        return g ? res(200, { ...g, units: Array.isArray(g.units) ? g.units : [] }) : res(404, { message: 'No GRN ' + idM[1] });
+      }
+      if (method === 'GET') return res(200, grns.map(listRow));
+      if (method === 'POST' && !u.includes('/purge')) {
+        const id = grns.reduce((m, g) => Math.max(m, num(g.id)), 0) + 1;
+        const grnNo = body.grnNo || `GRN/2026/${id}`;
+        const byId = new Map((modules.masterItems || []).map((it) => [String(it.id), it]));
+        const units = (body.lines || []).map((l, i) => {
+          const it = byId.get(String(l.itemId)) || {};
+          return { id: id * 100 + i, itemId: l.itemId, itemCode: it.code || '', itemName: it.name || '', qtyReceived: num(l.qty), uom: l.uom || it.uom || '', internalCode: l.internalCode || `BLMU-${id * 100 + i}`, parentUnitId: null };
+        });
+        const pur = modules.purchase;
+        const po = body.poNum && pur && (pur.pos || []).find((p) => String(p.poNum).trim().toUpperCase() === String(body.poNum).trim().toUpperCase());
+        if (po && po.status === 'Cancelled') return res(400, { message: `${po.poNum} was cancelled` });
+        grns.unshift({ id, grnNo, poNum: po ? po.poNum : (body.poNum || ''), supplier: body.supplier, grnDate: body.grnDate || '2026-07-31', invoiceNo: body.invoiceNo || '', units });
+        let poStatus = null;
+        if (po) {
+          units.forEach((un) => {
+            const line = (po.items || []).find((ln) => String(ln.itemCode || '').toUpperCase() === String(un.itemCode).toUpperCase());
+            if (line) line.receivedQty = num(line.receivedQty) + un.qtyReceived;
+          });
+          const all = (po.items || []).every((ln) => num(ln.receivedQty) >= num(ln.qty));
+          const any = (po.items || []).some((ln) => num(ln.receivedQty) > 0);
+          po.status = all ? 'Closed' : any ? 'Partial' : 'Open';
+          if (po.status === 'Closed') po.closedDate = body.grnDate || '2026-07-31';
+          if (!Array.isArray(po.receipts)) po.receipts = [];
+          po.receipts.push({ date: body.grnDate || '2026-07-31', ref: grnNo, source: 'stores' });
+          poStatus = po.status;
+          versions[6] = (versions[6] || 0) + 1;
+        }
+        saved.push({ endpoint: '/api/stores/grns', body });
+        return res(201, { id, grnNo, poNum: po ? po.poNum : body.poNum, poStatus, units: units.map((x) => ({ unitId: x.id, internalCode: x.internalCode })) });
+      }
+    }
+    if (u.includes('/api/stores/po-eta')) {
+      if (method === 'GET') return res(200, modules.storeEtas || []);
+      saved.push({ endpoint: '/api/stores/po-eta', method, body });
+      return res(200, { ok: true });
+    }
     if (u.includes('/api/master/items')) return res(200, modules.masterItems || []);
     if (u.includes('/api/master/')) return res(200, []);
     if (u.includes('/api/stock/alerts')) return res(200, []);

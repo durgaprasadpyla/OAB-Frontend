@@ -2,6 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
+import { PurchaseOrders } from '../components/PurchaseOrdersTab.jsx';
+import { isOpenPo, poStatus } from '../lib/poLines.js';
 import FgEntryPanel from '../components/FgEntryPanel.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
@@ -598,92 +600,10 @@ function UnitTraceModal({ unit, onClose, flash }) {
 
 /* ─────────────────────────── Purchase Orders + ETA ──────────────────────── */
 
-export function PurchaseOrders({ flash }) {
-  const { mods } = useData();
-  const pos = useMemo(() => (mods.purchase && Array.isArray(mods.purchase.pos) ? mods.purchase.pos : []), [mods.purchase]);
-  const [etas, setEtas] = useState([]);
-  const [q, setQ] = useState('');
-  const [openOnly, setOpenOnly] = useState(true);
-
-  const load = useCallback(async () => {
-    try { setEtas(await storesApi.etas() || []); } catch (e) { flash('r', e.message); }
-  }, [flash]);
-  useEffect(() => { load(); }, [load]);
-
-  const etaOf = (poNum, item) => etas.find((e) => e.poNum === poNum && e.itemName === item) || null;
-
-  async function saveEta(poNum, itemName, expectedDate) {
-    try {
-      await storesApi.setEta({ poNum, itemName, expectedDate });
-      await load();
-      flash('g', `${itemName} on ${poNum} expected ${expectedDate || '—'}. The planner sees this against not-ready orders.`);
-    } catch (e) { flash('r', e.message); }
-  }
-
-  const rows = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    const out = [];
-    pos.forEach((po) => {
-      if (openOnly && String(po.status || '').toLowerCase() === 'closed') return;
-      (po.items || []).forEach((it, i) => {
-        if (t && ![po.poNum, po.supplier, it.item].some((v) => String(v || '').toLowerCase().includes(t))) return;
-        out.push({ po, it, key: po.poNum + '|' + i });
-      });
-    });
-    return out;
-  }, [pos, q, openOnly]);
-
-  return (
-    <div className="card">
-      <div className="fbar" style={{ flexWrap: 'wrap' }}>
-        <div className="ctitle" style={{ margin: 0 }}>Purchase orders raised by Purchase <span className="tag tgr">{rows.length}</span></div>
-        <input placeholder="Search PO / supplier / item…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search purchase orders" style={{ minWidth: 220 }} />
-        <label className="cb" style={{ fontSize: 12 }}>
-          <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} />
-          <span>Open POs only</span>
-        </label>
-      </div>
-      <div className="al al-b">
-        Put the date each material will actually reach the plant. The <strong>PLAN</strong> login shows that date against the
-        sale orders it has marked <em>not ready — plates / material / others</em>, so the planner knows when the order can be planned.
-      </div>
-      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
-        <table>
-          <thead><tr>
-            <th>PO #</th><th>PO Date</th><th>Supplier</th><th style={{ minWidth: 200 }}>Item</th>
-            <th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th>
-            <th>Status</th><th style={{ width: 160 }}>Expected on</th><th>Told by</th>
-          </tr></thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No purchase orders to show</td></tr>
-            ) : rows.map(({ po, it, key }) => {
-              const eta = etaOf(po.poNum, it.item);
-              return (
-                <tr key={key}>
-                  <td style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{po.poNum}</td>
-                  <td style={{ fontSize: 11 }}>{po.poDate || '—'}</td>
-                  <td style={{ fontSize: 11 }}>{po.supplier || '—'}</td>
-                  <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{it.item}</td>
-                  <td style={{ textAlign: 'right' }}>{qty(it.qty)} {it.unit || ''}</td>
-                  <td style={{ textAlign: 'right', color: 'var(--g)' }}>{qty(it.receivedQty || 0)}</td>
-                  <td><span className={'tag ' + (String(po.status).toLowerCase() === 'closed' ? 'tg' : 'ty')} style={{ fontSize: 9 }}>{po.status || 'Open'}</span></td>
-                  <td>
-                    <input type="date" defaultValue={eta ? eta.expectedDate || '' : ''}
-                      aria-label={`Expected date for ${it.item} on ${po.poNum}`}
-                      onBlur={(e) => { const v = e.target.value; if (v !== (eta ? eta.expectedDate || '' : '')) saveEta(po.poNum, it.item, v); }}
-                      style={{ height: 26, fontSize: 11 }} />
-                  </td>
-                  <td style={{ fontSize: 10, color: 'var(--i3)' }}>{eta ? eta.actor || '—' : '—'}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+// Issues 30.09: the tab lives in components/PurchaseOrdersTab.jsx (the PM login reads
+// the same list); re-exported here so `import { PurchaseOrders } from './Stores.jsx'`
+// keeps working.
+export { PurchaseOrders };
 
 /* ─────────────────────────────────── GRN ────────────────────────────────── */
 
@@ -835,7 +755,7 @@ const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: ''
 // SKU from one supplier on one despatch.
 
 function Grn({ flash }) {
-  const { mods } = useData();
+  const { mods, reloadModule } = useData();
   const [items, setItems] = useState([]);
   const [grns, setGrns] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -1084,8 +1004,33 @@ function Grn({ flash }) {
   }
 
   // The PO the stores person must physically check before receiving.
-  // A typed PO number still pulls up its lines to check against, when it matches one.
   const chosenPo = useMemo(() => pos.find((p) => String(p.poNum || '').trim().toLowerCase() === String(head.poNum || '').trim().toLowerCase()) || null, [pos, head.poNum]);
+
+  /**
+   * Issues 30.09 §PU2/§S7b — the PO this receipt is booked against is PICKED, never
+   * typed. A typed number was optional free text, so it was usually blank or spelt
+   * differently from the PO — and then the purchase login could not find the GRN to
+   * link, nor could the PO close itself when its quantity had all come in. Only POs
+   * still expected are offered (a closed or cancelled one takes no more receipts); once
+   * the supplier is chosen, only that supplier's.
+   */
+  const poOptions = useMemo(() => {
+    const sup = String(head.supplier || '').trim().toLowerCase();
+    return pos.filter((p) => isOpenPo(p) && (!sup || String(p.supplier || '').trim().toLowerCase() === sup))
+      .sort((a, b) => String(b.poDate || '').localeCompare(String(a.poDate || '')));
+  }, [pos, head.supplier]);
+
+  /** Picking a PO names its supplier too — and a different supplier means different lines. */
+  function pickPo(poNum) {
+    const po = pos.find((p) => p.poNum === poNum) || null;
+    const sup = po && String(po.supplier || '').trim();
+    if (sup && sup !== head.supplier) {
+      setHead({ ...head, poNum, supplier: sup });
+      setLines([blankLine()]);
+    } else {
+      setHead({ ...head, poNum });
+    }
+  }
 
   async function submit() {
     if (!String(head.supplier || '').trim()) { flash('r', 'Choose the supplier this material came from.'); return; }
@@ -1110,9 +1055,17 @@ function Grn({ flash }) {
         })),
       });
       const codes = (r.units || []).map((u) => u.internalCode).join(', ');
-      flash('g', `✓ ${r.grnNo} received — print stickers for ${codes}.`);
+      // §S7b: the server moves the PO's received quantity with every GRN booked against
+      // it, and closes the PO once everything ordered has come in — so the purchase
+      // copy on this screen is re-read, and the desk is told when this receipt closed it.
+      const poNum = r.poNum || head.poNum;
+      const closedNote = r.poStatus === 'Closed' && poNum ? ` ${poNum} is now fully received and closed.` : '';
+      flash('g', `✓ ${r.grnNo} received — print stickers for ${codes}.${closedNote}`);
       setHead({ grnNo: '', poNum: '', supplier: '', grnDate: today(), invoiceNo: '', invoiceDate: '', notes: '' });
       setLines([blankLine()]);
+      if (reloadModule) {
+        try { await reloadModule('purchase'); } catch { /* the receipt is booked; the PO list catches up on the next visit */ }
+      }
       await load();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
@@ -1133,16 +1086,24 @@ function Grn({ flash }) {
         <div className="ctitle" style={{ fontSize: 11, margin: '10px 0 2px' }}>① The paperwork</div>
         <div className="g4">
           <div className="fg"><label>GRN No.</label><input value={head.grnNo} placeholder="auto" onChange={(e) => setHead({ ...head, grnNo: e.target.value })} aria-label="GRN number" /></div>
-          {/* §10: PO generation is not automated yet, so this is a plain note — type
-              the number if there is one, leave it blank if there is not. The supplier's
-              own PO numbers are offered, so it is picked rather than remembered. */}
+          {/* Issues 30.09 §PU2: picked from the POs Purchase raised, never typed — the
+              purchase login links its GRN by this, and the PO closes itself by it. A
+              receipt with no PO behind it (a direct purchase) is still allowed. */}
           <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
-            <input value={head.poNum} onChange={(e) => setHead({ ...head, poNum: e.target.value })}
-              list="grn-po-numbers" placeholder="PO number, if any" aria-label="Purchase order" />
-            <datalist id="grn-po-numbers">
-              {pos.filter((p) => !head.supplier || String(p.supplier || '').trim().toLowerCase() === String(head.supplier).trim().toLowerCase())
-                .map((p) => <option key={p.poNum} value={p.poNum} />)}
-            </datalist>
+            <select value={head.poNum} onChange={(e) => pickPo(e.target.value)} aria-label="Purchase order">
+              <option value="">— no PO (direct purchase) —</option>
+              {poOptions.map((p) => (
+                <option key={p.poNum} value={p.poNum}>
+                  {p.poNum}{head.supplier ? '' : ` · ${p.supplier || '—'}`}{poStatus(p) === 'Partial' ? ' (part received)' : ''}
+                </option>
+              ))}
+              {head.poNum && !poOptions.some((p) => p.poNum === head.poNum) && <option value={head.poNum}>{head.poNum}</option>}
+            </select>
+            <div className="pg-sub" style={{ margin: '3px 0 0' }}>
+              {poOptions.length
+                ? `${poOptions.length} open PO${poOptions.length === 1 ? '' : 's'}${head.supplier ? ` for ${head.supplier}` : ''}.`
+                : head.supplier ? `No open PO for ${head.supplier} — book it as a direct purchase.` : 'No open purchase orders.'}
+            </div>
           </div>
           <div className="fg"><label>GRN Date</label><input type="date" value={head.grnDate} onChange={(e) => setHead({ ...head, grnDate: e.target.value })} aria-label="GRN date" /></div>
           <div className="fg"><label>Invoice Date</label><input type="date" value={head.invoiceDate} onChange={(e) => setHead({ ...head, invoiceDate: e.target.value })} aria-label="Invoice date" /></div>
@@ -1177,7 +1138,12 @@ function Grn({ flash }) {
           {/* §9: chosen, never typed — and it decides which items this GRN can receive. */}
           <div className="fg"><label>Supplier *</label>
             <select value={head.supplier} aria-label="Supplier"
-              onChange={(e) => { setHead({ ...head, supplier: e.target.value }); setLines([blankLine()]); }}>
+              onChange={(e) => {
+                // A PO belongs to one supplier — naming another one drops it (§PU2).
+                const keepPo = !chosenPo || String(chosenPo.supplier || '').trim().toLowerCase() === e.target.value.trim().toLowerCase();
+                setHead({ ...head, supplier: e.target.value, poNum: keepPo ? head.poNum : '' });
+                setLines([blankLine()]);
+              }}>
               <option value="">{supplierOptions.length ? '— select a supplier —' : '— no suppliers on file —'}</option>
               {supplierOptions.map((sup) => <option key={sup} value={sup}>{sup}</option>)}
               {/* a supplier already on this GRN but no longer on the approved list still reads correctly */}
@@ -1208,9 +1174,16 @@ function Grn({ flash }) {
         {chosenPo && (
           <div className="al al-b" style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <span><strong>Verify against {chosenPo.poNum}:</strong></span>
-            {(chosenPo.items || []).map((it, i) => (
-              <span key={i}>{it.item} — {qty(it.qty)} {it.unit || ''} @ ₹{num(it.rate).toFixed(2)}</span>
-            ))}
+            {/* §S7b: what is still to come on each line, not only what was ordered. */}
+            {(chosenPo.items || []).map((it, i) => {
+              const bal = Math.max(0, num(it.qty) - num(it.receivedQty));
+              return (
+                <span key={i}>
+                  {it.itemCode ? `${it.itemCode} · ` : ''}{it.item} — {qty(it.qty)} {it.unit || ''} @ ₹{num(it.rate).toFixed(2)}
+                  {num(it.receivedQty) > 0 && <> · received {qty(it.receivedQty)}, <b>{bal > 0 ? `${qty(bal)} to come` : 'all in'}</b></>}
+                </span>
+              );
+            })}
           </div>
         )}
 

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { inr, amountInWords } from '../lib/format.js';
 import { num } from '../lib/calc.js';
 import { printElement } from '../lib/pdf.js';
@@ -166,14 +166,33 @@ export function PurchaseOrderDoc({ po, asl, innerRef }) {
  * Modal wrapper: preview a PO with Download-PDF and Print actions.
  * The document is rendered at full width inside a scrolling shell so what the
  * user sees is exactly what gets captured.
+ *
+ * Issues 30.09 §PU1 (RED): "once I create a purchase order, the visibility is not
+ * clear." The overlay sat at z-index 60 — UNDER the sticky role bar / header (z 200),
+ * which painted over the modal's top: its title and the Print / Download PDF / Close
+ * buttons were hidden, and unclickable. It now sits above both bars like the shared
+ * Modal (z 1000), its button row stays pinned while the sheet scrolls, and Escape
+ * closes it.
  */
 export default function PurchaseOrderModal({ po, asl, onClose }) {
   const docRef = useRef(null);
+  // Held in a ref so the key listener is installed once, whatever the caller passes.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const open = !!po;
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) closeRef.current(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
   if (!po) return null;
   return (
-    <div className="modal-back" style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, overflow: 'auto', padding: 20 }}>
-      <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }}>
-        <div className="fbar">
+    <div className="modal-back" data-testid="po-modal-overlay"
+      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflow: 'auto', padding: '24px 16px' }}>
+      <div role="dialog" aria-modal="true" aria-label={`Purchase Order ${po.poNum}`}
+        style={{ background: 'var(--wh)', borderRadius: 10, padding: '0 16px 16px', maxWidth: 860, width: '100%' }}>
+        <div className="fbar" style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--wh)', padding: '12px 0 10px', margin: 0, flexWrap: 'wrap' }}>
           <div className="ctitle" style={{ margin: 0 }}>Purchase Order — {po.poNum}</div>
           <span style={{ flex: 1 }} />
           <button className="btn btn-s" onClick={() => printElement(docRef.current)}>🖨 Print</button>
@@ -183,7 +202,7 @@ export default function PurchaseOrderModal({ po, asl, onClose }) {
           >⬇ Download PDF</button>
           <button className="btn btn-s" onClick={onClose}>Close</button>
         </div>
-        <div style={{ overflow: 'auto', maxHeight: '80vh', border: '1px solid var(--bd)' }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 140px)', border: '1px solid var(--bd)' }}>
           <PurchaseOrderDoc po={po} asl={asl} innerRef={docRef} />
         </div>
       </div>

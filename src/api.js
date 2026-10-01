@@ -94,6 +94,11 @@ export const purchaseApi = {
   cancelPO: (poNum, reason) => api('/api/purchase-orders/cancel', { method: 'POST', body: { poNum, reason } }),
   pay: (poNum) => api('/api/purchase-orders/pay', { method: 'POST', body: { poNum } }),
   unpay: (poNum) => api('/api/purchase-orders/unpay', { method: 'POST', body: { poNum } }),
+  // Issues 30.09 §PU2: link a GRN the stores desk booked against this PO — picked, not
+  // typed; the quantities are the stores' units, so linking twice never double counts.
+  linkGrn: ({ poNum, grnNo, receiptImage }) => api('/api/purchase-orders/link-grn', { method: 'POST', body: { poNum, grnNo, receiptImage } }),
+  // §S7b backfill: re-read every PO's received quantity from the stores GRNs (Padmin / SA).
+  syncStores: () => api('/api/purchase-orders/sync-stores', { method: 'POST' }),
 };
 
 // Raw-material ₹/kg rates (server-side; was per-device localStorage).

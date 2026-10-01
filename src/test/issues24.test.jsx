@@ -157,11 +157,16 @@ describe('Stores GRN (§9-§13)', () => {
     expect(within(sup).getByRole('option', { name: 'Jindal Poly' })).toBeTruthy();
   });
 
-  it('takes the PO as an optional note, not a dropdown (§10)', async () => {
+  // Issues 30.09 §PU2 reverses §10's free-text note: a typed PO number was usually
+  // blank or misspelt, so the purchase login could not find the GRN to link and the PO
+  // could not close itself. It is picked from the open POs now — and still optional.
+  it('picks the PO from the open POs, still optional (§10 → 30.09 §PU2)', async () => {
     await renderGrn();
     const po = screen.getByLabelText('Purchase order');
-    expect(po.tagName).toBe('INPUT');
+    expect(po.tagName).toBe('SELECT');
     expect(po).not.toBeRequired();
+    expect(within(po).getByRole('option', { name: '— no PO (direct purchase) —' })).toBeTruthy();
+    expect(within(po).getByRole('option', { name: /PO-1/ })).toBeTruthy();
     expect(screen.getByText(/\(optional\)/)).toBeTruthy();
   });
 

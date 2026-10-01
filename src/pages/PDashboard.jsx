@@ -5,12 +5,14 @@ import { masterApi, purchaseApi } from '../api.js';
 import { UOM_DEFAULTS } from '../lib/dropdowns.js';
 import { ITEM_IDENTITY, identityByCode, applyIdentity, fillGaps, identityConflicts } from '../lib/itemIdentity.js';
 import { parseWidthMm, widthFromName, itemWidthMm } from '../lib/itemWidth.js';
-import { purchComputeStatus, num, parsePaymentDays } from '../lib/calc.js';
+import { num, parsePaymentDays } from '../lib/calc.js';
 import { dash, today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA, readSheet } from '../lib/xlsx.js';
 import { buildScrapChart, scrapChartTitle, bestByItem, CHART_BOX } from '../lib/scrapChart.js';
 import { readAttachments, viewAttachment } from '../lib/attach.js';
 import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
+import PoLineFilters, { useItemMaster } from '../components/PoLineFilters.jsx';
+import { EMPTY_PO_FILTERS, filterPoLines, flattenPoLines, groupByPo, isOpenPo, poLineContext, poLineOptions, poStatus } from '../lib/poLines.js';
 import { OnHand } from './Stores.jsx';
 
 // Native port of the legacy Purchase Admin ("P Dashboard") — a tabbed admin page
@@ -42,14 +44,16 @@ function delayDays(po) {
   const e = new Date(end + 'T00:00:00');
   return Math.round((e - exp) / 86400000);
 }
-function isClosed(po) { return po.status === 'Closed' || !!po.closedDate; } // (purchIsClosed 6249)
+// 30.09 §S7: closed or cancelled — anything no longer expected. (purchIsClosed 6249)
+function isClosed(po) { return !isOpenPo(po); }
 function recvTotals(po) { // (purchReceivedTotals 6242)
   let ordered = 0, received = 0;
   (po.items || []).forEach((i) => { ordered += num(i.qty); received += num(i.receivedQty); });
   return { ordered, received };
 }
-function statusOf(po) { return po.status || purchComputeStatus(po.items || []); }
+function statusOf(po) { return poStatus(po); }   // Open / Partial / Closed / Cancelled (lib/poLines)
 function tagClass(status, overdue) {
+  if (status === 'Cancelled') return 'tr';
   if (status === 'Closed') return 'tg';
   if (overdue) return 'tr';
   if (status === 'Partial') return 'tb';
@@ -179,31 +183,37 @@ export default function PDashboard() {
 }
 
 /* ─────────────────────────── 1 · PO Tracking (read-only) ─────────────────────────── */
-// Human stage label for a PO — status is Open / Partial / Closed, with an overdue flag. (purchStage 12323)
+// Human stage label for a PO — status is Open / Partial / Closed / Cancelled, with an overdue flag. (purchStage 12323)
 function stageLabel(po) {
-  const st = statusOf(po);
-  const overdue = st !== 'Closed' && !!po.expectedDelivery && delayDays(po) > 0;
+  const st = poStatus(po);
+  if (st === 'Cancelled') return '✕ Cancelled';
+  const overdue = isOpenPo(po) && !!po.expectedDelivery && delayDays(po) > 0;
   if (st === 'Closed') return '✓ Closed';
   if (st === 'Partial') return overdue ? '◐ Partial (Overdue)' : '◐ Partially Received';
   return overdue ? '⚠ Overdue' : '⏳ Open';
 }
 
 function POTracking() {
-  const { mods } = useData();
+  const { mods, reloadModule } = useData();
   const purchase = mods.purchase || {};
   const asl = arr(purchase.asl);
   const pos = posOf(purchase);
   const [sup, setSup] = useState('');
-  const [stat, setStat] = useState('');
-  const [q, setQ] = useState('');
+  // 30.09 §S7c: the status filter (Cancelled included) and Material type / Speciality /
+  // Item description — the same bar every purchase-order page carries.
+  const [f, setF] = useState(EMPTY_PO_FILTERS);
   const [docPo, setDocPo] = useState(null);   // PO previewed as a printable document
   // 29.09 §Purchase: "There should be a provision in the PAdmin where the PAdmin
   // should be able to cancel the purchase orders that the purchase login has created."
-  const { reloadModule } = useData();
   const { role } = useAuth() || {};
   const canCancel = role === 'padmin' || role === 'superadmin';
   const [busyPo, setBusyPo] = useState('');
   const [poMsg, setPoMsg] = useState(null);
+  const master = useItemMaster();
+  const ctx = useMemo(
+    () => poLineContext({ master, asl: purchase.asl, itemsExtra: purchase.itemsExtra }),
+    [master, purchase.asl, purchase.itemsExtra],
+  );
 
   async function cancelPo(po) {
     const reason = window.prompt(`Cancel purchase order ${po.poNum}?
@@ -226,37 +236,42 @@ function POTracking() {
   const suppliers = useMemo(() => [...new Set(pos.map((p) => p.supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [pos]);
 
   const summary = useMemo(() => {
-    const s = { total: pos.length, open: 0, partial: 0, closed: 0, overdue: 0 };
+    const s = { total: pos.length, open: 0, partial: 0, closed: 0, cancelled: 0, overdue: 0 };
     pos.forEach((p) => {
-      const st = statusOf(p);
-      if (st === 'Open') s.open++; else if (st === 'Partial') s.partial++; else if (st === 'Closed') s.closed++;
-      if (!isClosed(p) && p.expectedDelivery && delayDays(p) > 0) s.overdue++;
+      const st = poStatus(p);
+      if (st === 'Open') s.open++; else if (st === 'Partial') s.partial++; else if (st === 'Closed') s.closed++; else if (st === 'Cancelled') s.cancelled++;
+      if (isOpenPo(p) && p.expectedDelivery && delayDays(p) > 0) s.overdue++;
     });
     return s;
   }, [pos]);
 
-  const rows = useMemo(() => {
-    let r = pos.slice().sort((a, b) => String(b.poDate || '').localeCompare(String(a.poDate || '')));
-    if (sup) r = r.filter((p) => p.supplier === sup);
-    if (stat) r = r.filter((p) => statusOf(p) === stat);
-    if (q) {
-      const s = q.toLowerCase();
-      r = r.filter((p) => String(p.poNum || '').toLowerCase().includes(s) || (p.items || []).some((i) => String(i.item || '').toLowerCase().includes(s)));
-    }
-    return r;
-  }, [pos, sup, stat, q]);
+  // One row per PO line, newest PO first; the supplier picker narrows before the rest.
+  const allLines = useMemo(() => {
+    const sorted = pos.slice().sort((a, b) => String(b.poDate || '').localeCompare(String(a.poDate || '')));
+    return flattenPoLines(sorted, ctx, { includeEmpty: true });
+  }, [pos, ctx]);
+  const supLines = useMemo(() => (sup ? allLines.filter((r) => r.po.supplier === sup) : allLines), [allLines, sup]);
+  const options = useMemo(() => poLineOptions(supLines, f), [supLines, f]);
+  const lines = useMemo(() => filterPoLines(supLines, f), [supLines, f]);
+  const groups = useMemo(() => groupByPo(lines), [lines]);
 
   function exportXlsx() {
-    const header = ['PO Number', 'Supplier', 'PO Date', 'Status', 'Total Amount', 'Ordered Qty', 'Received Qty', 'Expected Delivery', 'Actual Receipt', 'Delay Days'];
-    const body = rows.map((po) => {
-      const { ordered, received } = recvTotals(po);
-      const st = statusOf(po);
-      const overdue = !isClosed(po) && po.expectedDelivery && delayDays(po) > 0;
-      return [po.poNum || '', supName(po.supplier), po.poDate || '', overdue ? st + ' (Overdue)' : st, num(po.totalAmount), ordered, received, po.expectedDelivery || '', po.actualReceiptDate || '', po.expectedDelivery ? delayDays(po) : ''];
+    const header = ['PO Number', 'Supplier', 'PO Date', 'Status', 'Item Code', 'Item Description', 'Material Type', 'Speciality',
+      'Rate', 'Amount', 'Ordered Qty', 'Received Qty', 'PO Total Amount', 'Expected Delivery', 'Actual Receipt', 'GRN Ref', 'Delay Days'];
+    const body = lines.map((r) => {
+      const po = r.po;
+      const st = r.status;
+      const overdue = isOpenPo(po) && po.expectedDelivery && delayDays(po) > 0;
+      return [po.poNum || '', supName(po.supplier), po.poDate || '', overdue ? st + ' (Overdue)' : st,
+        r.id.code, r.empty ? '' : (r.id.description || r.line.item || ''), r.id.materialType, r.id.specialty,
+        r.empty ? '' : num(r.line.rate), r.empty ? '' : num(r.line.amount), r.empty ? '' : num(r.line.qty), r.empty ? '' : num(r.line.receivedQty),
+        num(po.totalAmount), po.expectedDelivery || '', po.actualReceiptDate || '', po.grnRef || '',
+        po.expectedDelivery && st !== 'Cancelled' ? delayDays(po) : ''];
     });
     exportAOA([header, ...body], 'PO_Tracking_' + today());
   }
 
+  const cols = canCancel ? 18 : 17;
   return (
     <>
       <div className="stats">
@@ -264,51 +279,52 @@ function POTracking() {
         <Stat label="⏳ Open" value={summary.open} color="#856404" />
         <Stat label="◐ Partial" value={summary.partial} color="var(--blu)" />
         <Stat label="✓ Closed" value={summary.closed} color="var(--g)" />
+        <Stat label="✕ Cancelled" value={summary.cancelled} color="#C0392B" />
         <Stat label="⚠ Overdue" value={summary.overdue} color="var(--red)" />
       </div>
       <div className="card">
         <div className="fbar">
-          <div className="ctitle" style={{ margin: 0 }}>📦 All Purchase Orders — Stage &amp; Status <span className="tag tgr">{rows.length}</span></div>
-          <select value={sup} onChange={(e) => setSup(e.target.value)}>
+          <div className="ctitle" style={{ margin: 0 }}>📦 All Purchase Orders — Stage &amp; Status <span className="tag tgr">{groups.length}</span></div>
+          <select value={sup} onChange={(e) => setSup(e.target.value)} aria-label="PO supplier filter">
             <option value="">All Suppliers</option>
             {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select value={stat} onChange={(e) => setStat(e.target.value)}>
-            <option value="">All Statuses</option>
-            <option value="Open">Open</option>
-            <option value="Partial">Partial</option>
-            <option value="Closed">Closed</option>
-          </select>
-          <input placeholder="Search PO / item…" value={q} onChange={(e) => setQ(e.target.value)} />
           <span style={{ flex: 1 }} />
-          <button className="btn btn-s" onClick={exportXlsx} disabled={!rows.length}>⬇ Export Excel</button>
+          <button className="btn btn-s" onClick={exportXlsx} disabled={!lines.length}>⬇ Export Excel</button>
         </div>
+        <PoLineFilters value={f} onChange={(patch) => setF((prev) => ({ ...prev, ...patch }))} options={options}
+          searchPlaceholder="Search PO / supplier / item…" />
+        {poMsg && <div className={'al al-' + poMsg.t}>{poMsg.text}</div>}
         <div className="pg-sub" style={{ marginTop: 0 }}>One row per item line — each item shows its own ordered vs received quantity.</div>
         <div className="tw sy">
           <table>
             <thead><tr>
-              <th>PO #</th><th>Date</th><th>Supplier</th><th>Item</th>
+              <th>PO #</th><th>Date</th><th>Supplier</th><th>Item Code</th><th style={{ minWidth: 160 }}>Item Description</th>
+              <th>Material Type</th><th>Speciality</th>
               <th style={rt}>Rate</th><th style={rt}>Amount</th><th style={rt}>PO Qty</th><th style={rt}>Qty Recd</th>
               <th>Expected</th><th>Actual Receipt</th><th>GRN Ref</th><th>Stage</th><th style={rt}>Delay</th><th style={{ textAlign: 'center' }}>PDF</th>
               {canCancel && <th style={{ textAlign: 'center' }}>Cancel</th>}
             </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={canCancel ? 15 : 14} style={emptyTd}>No purchase orders found</td></tr> : rows.map((po, pi) => {
-                const st = statusOf(po);
-                const overdue = !isClosed(po) && !!po.expectedDelivery && delayDays(po) > 0;
-                const dd = po.expectedDelivery ? delayDays(po) : null;
-                const list = (po.items && po.items.length) ? po.items : [{ item: '(no items)', qty: 0, rate: 0, amount: 0, receivedQty: 0 }];
-                return list.map((it, ii) => {
+              {groups.length === 0 ? <tr><td colSpan={cols} style={emptyTd}>No purchase orders found</td></tr> : groups.map(({ po, status: st, rows }, pi) => {
+                const cancelled = st === 'Cancelled';
+                const overdue = isOpenPo(po) && !!po.expectedDelivery && delayDays(po) > 0;
+                const dd = po.expectedDelivery && !cancelled ? delayDays(po) : null;
+                return rows.map((r, ii) => {
+                  const it = r.line;
                   const first = ii === 0;
                   const oq = num(it.qty), rq = num(it.receivedQty);
                   const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
                   const muted = { color: 'var(--i3)' };
                   return (
-                    <tr key={(po.poNum || pi) + '-' + ii} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                    <tr key={(po.poNum || pi) + '-' + r.key} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
                       <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{first ? (po.poNum || '-') : <span style={muted}>↳</span>}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.poDate ? fmtDate(po.poDate) : '-') : ''}</td>
                       <td style={{ fontSize: 11 }}>{first ? supName(po.supplier) : ''}</td>
-                      <td>{it.item}{it.unit ? <span style={{ ...muted, fontSize: 10 }}> ({it.unit})</span> : null}</td>
+                      <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id.code || (r.empty ? '' : '—')}</td>
+                      <td>{r.id.description || it.item}{it.unit ? <span style={{ ...muted, fontSize: 10 }}> ({it.unit})</span> : null}</td>
+                      <td style={{ fontSize: 11 }}>{r.id.materialType || (r.empty ? '' : '—')}</td>
+                      <td style={{ fontSize: 11 }}>{r.id.specialty || (r.empty ? '' : '—')}</td>
                       <td style={{ ...rt, whiteSpace: 'nowrap' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                       <td style={{ ...rt, fontWeight: 700, whiteSpace: 'nowrap' }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                       <td style={rt}>{dash(oq)}</td>
@@ -316,12 +332,12 @@ function POTracking() {
                       <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-') : ''}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '-') : ''}</td>
                       <td style={{ fontSize: 11 }}>{first ? (po.grnRef || '-') : ''}</td>
-                      <td>{first ? <span className={'tag ' + tagClass(st, overdue)}>{stageLabel(po)}</span> : ''}</td>
+                      <td>{first ? <span className={'tag ' + tagClass(st, overdue)} title={cancelled ? po.cancelReason || '' : undefined}>{stageLabel(po)}</span> : ''}</td>
                       <td style={{ ...rt, fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{first ? (dd == null ? '-' : (dd > 0 ? '+' + dd : dd)) : ''}</td>
                       <td style={{ textAlign: 'center' }}>{first ? <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>🖨</button> : ''}</td>
                       {canCancel && (
                         <td style={{ textAlign: 'center' }}>
-                          {first && (po.status === 'Cancelled'
+                          {first && (cancelled
                             ? <span className="tag tr" style={{ fontSize: 9 }} title={po.cancelReason || ''}>Cancelled</span>
                             : num(po.items && po.items.reduce((t, x) => t + num(x.receivedQty), 0)) > 0
                               ? <span style={{ fontSize: 10, color: 'var(--i3)' }} title="Goods already received — close it or raise a return">received</span>
@@ -1600,7 +1616,8 @@ function PriceTrends() {
 function Payments() {
   const { mods } = useData();
   const purchase = mods.purchase || {};
-  const pos = posOf(purchase);
+  // 30.09 §S7: a cancelled PO is not a bill.
+  const pos = posOf(purchase).filter((p) => poStatus(p) !== 'Cancelled');
   const asl = arr(purchase.asl);
   const [sup, setSup] = useState('');
   const [stat, setStat] = useState('');

@@ -46,6 +46,9 @@ describe('Purchase — Generate PO flow', () => {
     expect(mod.pos[0].poNum).toMatch(/^BLM\/PUR\/\d{4}-\d{4}\/1$/);
     expect(mod.counter).toBe(1);
     expect(mod.priceHistory.length).toBeGreaterThan(0);
+    // 30.09 §PU1: the line keeps its item code, and the new PO opens in the preview
+    expect(mod.pos[0].items[0].itemCode).toBe('BLM001');
+    expect(await screen.findByRole('dialog', { name: /Purchase Order BLM\/PUR\/2026-2027\/1/ })).toBeInTheDocument();
   });
 });
 

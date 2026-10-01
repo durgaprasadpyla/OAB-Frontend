@@ -1,36 +1,51 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
-import { purchaseApi, masterApi, storesApi } from '../api.js';
-import { parsePaymentDays, num, purchComputeStatus } from '../lib/calc.js';
+import { purchaseApi, storesApi } from '../api.js';
+import { parsePaymentDays, num } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { readImageCompressed } from '../lib/attach.js';
+import {
+  EMPTY_PO_FILTERS, filterPoLines, flattenPoLines, groupByPo, isOpenPo, poLineContext, poLineOptions, poStatus,
+  storeGrnsForPo,
+} from '../lib/poLines.js';
 import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
+import PoLineFilters, { useItemMaster } from '../components/PoLineFilters.jsx';
+import SupplierFinder from '../components/SupplierFinder.jsx';
 
 // ── Local helpers (kept in this file — shared libs are read-only for this port) ──
 
 /** Quantity display: Indian grouping, up to 2 decimals, no forced trailing zeros. */
 const qtyStr = (v) => num(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
-const statusOf = (po) => po.status || purchComputeStatus(po.items || []);
-const isClosed = (po) => statusOf(po) === 'Closed' || !!po.closed || !!po.manualClosed || !!po.closedDate;
-
-/** Days late/early vs expected delivery. Closed counts to the close date; open to today. (purchDelayDays 6235) */
+/**
+ * Days late/early vs expected delivery. Closed counts to the close date; open to today.
+ * A cancelled PO is not expected any more, so it is neither late nor early. (purchDelayDays 6235)
+ */
 function delayDays(po) {
   if (!po || !po.expectedDelivery) return null;
-  const end = isClosed(po) ? (po.closedDate || today()) : today();
+  const st = poStatus(po);
+  if (st === 'Cancelled') return null;
+  const end = st === 'Closed' ? (po.closedDate || today()) : today();
   return Math.round((new Date(end + 'T00:00:00') - new Date(po.expectedDelivery + 'T00:00:00')) / 86400000);
 }
 
 /** Stage label + colour for a PO. (purchStage 12323) */
 function stageOf(po) {
-  const st = statusOf(po);
+  const st = poStatus(po);
   const dd = delayDays(po);
-  const overdue = st !== 'Closed' && dd != null && dd > 0;
+  const overdue = (st === 'Open' || st === 'Partial') && dd != null && dd > 0;
+  if (st === 'Cancelled') return { label: '✕ Cancelled', color: 'var(--red)' };
   if (st === 'Closed') return { label: '✓ Closed', color: 'var(--g)' };
   if (st === 'Partial') return overdue ? { label: '◐ Partial (Overdue)', color: 'var(--red)' } : { label: '◐ Partial', color: 'var(--blu)' };
   return overdue ? { label: '⚠ Overdue', color: 'var(--red)' } : { label: '⏳ Open', color: '#856404' };
 }
+
+/** 29.09 ¶18: "no limit" is a supplier we do not hold to a due date — nothing ever falls due. */
+const isNoLimit = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ') === 'no limit';
+
+/** The stores GRNs this PO's receipts say were linked by the purchase desk. */
+const linkedRefs = (po) => (Array.isArray(po.receipts) ? po.receipts : []).filter((r) => r && r.linked && r.ref).map((r) => r.ref);
 
 const EMPTY_ROW = {
   itemCode: '', item: '', materialType: '', subGroup: '', specialty: '',
@@ -41,6 +56,248 @@ const textareaStyle = {
   fontSize: 13, color: 'var(--ink)', background: 'var(--wh)', fontFamily: 'inherit', resize: 'vertical',
 };
 
+/** "GRN/2026/12 · 28/09/2026 · Inv 123 · 2 roll(s)" — how a stores receipt reads in the picker. */
+function grnLabel(g, linked) {
+  const parts = [g.grnNo];
+  if (g.grnDate) parts.push(fmtDate(g.grnDate));
+  if (g.invoiceNo) parts.push('Inv ' + g.invoiceNo);
+  if (g.units != null && g.units !== '') parts.push(g.units + ' roll(s)');
+  return parts.join(' · ') + (linked ? ' (linked)' : '');
+}
+
+/**
+ * Link a stores GRN to a PO — Issues 30.09 §PU2: "The GRN number should not be
+ * manually entered … a drop-down selection based on the GRNs that are entered by the
+ * store's login for this particular purchase order … If there is only one GRN for this
+ * PO, then that should be auto-selected; upon saving the link should be established."
+ *
+ * The receipts are fetched FRESH each time the panel opens (a GRN booked after this
+ * page loaded must be there), only the ones booked against this PO are offered, and
+ * there is no typed box at all. The quantities are the stores desk's — read here off
+ * the GRN's own rolls, not typed again — so linking records which receipt it was and
+ * can never count a delivery twice.
+ */
+function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCancel, busy }) {
+  const [opts, setOpts] = useState(null);          // null = still reading the stores receipts
+  const [grnRef, setGrnRef] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [image, setImage] = useState('');
+  const [imgBusy, setImgBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const loadRef = useRef(loadGrns);
+  loadRef.current = loadGrns;
+  const linked = useMemo(() => new Set(linkedRefs(po)), [po]);
+  const linkedRef = useRef(linked);
+  linkedRef.current = linked;
+
+  // Once per opening: a fresh read of the stores receipts, narrowed to this PO.
+  useEffect(() => {
+    let live = true;
+    loadRef.current()
+      .then((list) => {
+        if (!live) return;
+        const mine = storeGrnsForPo(list, po.poNum)
+          .map((g) => ({ id: g.id, grnNo: String(g.grnNo || g.grn_no || '').trim(), grnDate: g.grnDate || '', invoiceNo: g.invoiceNo || '', units: g.units }))
+          .filter((g) => g.grnNo);
+        setOpts(mine);
+        // One receipt is the answer; so is the one receipt not yet linked.
+        const open = mine.filter((g) => !linkedRef.current.has(g.grnNo));
+        setGrnRef(mine.length === 1 ? mine[0].grnNo : (open.length === 1 ? open[0].grnNo : ''));
+      })
+      .catch((e) => {
+        if (!live) return;
+        setOpts([]);
+        setMsg({ t: 'r', m: 'Could not read the stores receipts: ' + (e.message || e) });
+      });
+    return () => { live = false; };
+  }, [po.poNum]);
+
+  const chosen = (opts || []).find((g) => g.grnNo === grnRef) || null;
+  const chosenId = chosen ? chosen.id : null;
+  useEffect(() => {
+    setDetail(null);
+    if (chosenId == null) return undefined;
+    let live = true;
+    storesApi.grn(chosenId)
+      .then((d) => { if (live) setDetail(d && typeof d === 'object' && !Array.isArray(d) ? d : { units: [] }); })
+      .catch(() => { if (live) setDetail({ units: [], failed: true }); });
+    return () => { live = false; };
+  }, [chosenId]);
+
+  const lines = useMemo(() => flattenPoLines([po], ctx), [po, ctx]);
+
+  /** What the chosen GRN brought in against each PO line (split-off children excluded). */
+  const inGrn = useMemo(() => {
+    const units = (detail && Array.isArray(detail.units) ? detail.units : []).filter((u) => u && u.parentUnitId == null);
+    const pool = new Map();
+    units.forEach((u) => {
+      const k = String(u.itemCode || '').trim().toUpperCase();
+      if (!pool.has(k)) pool.set(k, { code: u.itemCode || '', name: u.itemName || '', uom: u.uom || '', qty: 0 });
+      pool.get(k).qty += num(u.qtyReceived);
+    });
+    const byIdx = {};
+    lines.forEach((r) => {
+      const k = String(r.id.code || '').toUpperCase();
+      const p = k && pool.get(k);
+      if (!p || p.qty <= 0) return;
+      const same = lines.filter((x) => String(x.id.code || '').toUpperCase() === k);
+      const last = same[same.length - 1] === r;
+      const take = last ? p.qty : Math.min(p.qty, num(r.line.qty));
+      byIdx[r.idx] = take;
+      p.qty -= take;
+    });
+    const onPo = new Set(lines.map((r) => String(r.id.code || '').toUpperCase()).filter(Boolean));
+    const extra = [...pool.entries()].filter(([k]) => !onPo.has(k)).map(([, v]) => v);
+    return { byIdx, extra, any: units.length > 0 };
+  }, [detail, lines]);
+
+  async function pickPhoto(file) {
+    if (!file) return;
+    setImgBusy(true);
+    try { setImage(await readImageCompressed(file)); }
+    catch (e) { setMsg({ t: 'r', m: e.message || 'Could not read that photo.' }); }
+    finally { setImgBusy(false); }
+  }
+
+  async function save() {
+    setMsg(null);
+    if (!grnRef) { setMsg({ t: 'r', m: 'Pick the stores GRN to link.' }); return; }
+    const r = await onLink(po, grnRef, image, inGrn.byIdx);
+    if (r !== true && r) setMsg({ t: 'r', m: 'Link failed: ' + (r.message || r) });
+  }
+
+  const none = opts !== null && opts.length === 0;
+  const th = { textAlign: 'right' };
+  return (
+    <tr>
+      <td colSpan={colSpan} style={{ background: 'var(--bg)', padding: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Link the stores GRN — {po.poNum} · {po.supplier}</div>
+        <div className="g3">
+          <div className="fg">
+            <label>GRN Reference</label>
+            {opts === null ? (
+              <select disabled aria-label="GRN Reference" value=""><option value="">Reading the stores receipts…</option></select>
+            ) : none ? (
+              <select disabled aria-label="GRN Reference" value=""><option value="">— no GRN booked by stores against this PO yet —</option></select>
+            ) : (
+              <select value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)}>
+                <option value="">— select the stores GRN —</option>
+                {opts.map((g) => <option key={g.grnNo} value={g.grnNo}>{grnLabel(g, linked.has(g.grnNo))}</option>)}
+              </select>
+            )}
+            <div style={{ fontSize: 10, color: none ? '#9a5a06' : 'var(--i3)', marginTop: 3 }}>
+              {none
+                ? `The stores desk has not booked a receipt against ${po.poNum} yet. When they receive it on Stores → GRN and pick this PO, it appears here.`
+                : `The receipts the stores login booked against ${po.poNum}.`}
+            </div>
+          </div>
+          <div className="fg">
+            <label>Receipt Date</label>
+            <input type="date" value={chosen && chosen.grnDate ? String(chosen.grnDate).slice(0, 10) : ''} readOnly
+              aria-label="GRN receipt date" title="The date the stores desk booked this GRN" />
+          </div>
+          <div className="fg">
+            <label>Receipt Photo (optional)</label>
+            <input type="file" accept="image/*" capture="environment" aria-label="Capture receipt photo"
+              onChange={(e) => { pickPhoto(e.target.files && e.target.files[0]); e.target.value = ''; }} />
+          </div>
+        </div>
+
+        <div className="tw" style={{ background: 'var(--wh)', marginTop: 10 }}>
+          {/* Read-only: the quantities are the stores desk's. Every header sits over its
+              column the same way the figures do (§PU4). */}
+          <table style={{ tableLayout: 'fixed', minWidth: 760 }}>
+            <thead>
+              <tr>
+                <th style={{ width: 110 }}>Item Code</th>
+                <th style={{ width: 230 }}>Item Description</th>
+                <th style={{ ...th, width: 100 }}>Ordered</th>
+                <th style={{ ...th, width: 110 }}>Received</th>
+                <th style={{ ...th, width: 100 }}>Balance</th>
+                <th style={{ ...th, width: 130 }}>{grnRef ? `In ${grnRef}` : 'In this GRN'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((r) => {
+                const it = r.line;
+                const bal = Math.max(0, num(it.qty) - num(it.receivedQty));
+                const full = bal <= 0;
+                const here = inGrn.byIdx[r.idx];
+                return (
+                  <tr key={r.key}>
+                    <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id.code || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{r.id.description || it.item}{it.unit ? ` (${it.unit})` : ''}</td>
+                    <td style={{ textAlign: 'right' }}>{qtyStr(it.qty)}</td>
+                    <td style={{ textAlign: 'right', color: 'var(--i3)' }}>{qtyStr(it.receivedQty)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700, color: full ? 'var(--g)' : 'var(--blu)' }}>{full ? '✓ Full' : qtyStr(bal)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }} aria-label={`GRN quantity line ${r.idx + 1}`}>
+                      {!grnRef ? <span style={{ color: 'var(--i3)' }}>—</span>
+                        : !detail ? <span style={{ color: 'var(--i3)', fontWeight: 400 }}>…</span>
+                          : here ? qtyStr(here) : <span style={{ color: 'var(--i3)' }}>0</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {detail && inGrn.extra.length > 0 && (
+          <div className="al al-y" style={{ marginTop: 8 }}>
+            {grnRef} also brought in items that are not on this PO:{' '}
+            {inGrn.extra.map((x) => `${x.code || '?'} ${x.name ? '(' + x.name + ') ' : ''}${qtyStr(x.qty)} ${x.uom}`.trim()).join(', ')}.
+          </div>
+        )}
+        {detail && detail.failed && (
+          <div className="al al-y" style={{ marginTop: 8 }}>Could not open {grnRef} to show what came in on it — the link can still be saved.</div>
+        )}
+        {(imgBusy || image) && (
+          <div style={{ marginTop: 8 }}>
+            {imgBusy ? <span style={{ fontSize: 11, color: 'var(--i3)' }}>Processing photo…</span>
+              : <img src={image} alt="Receipt preview" style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, border: '1px solid var(--bd)', display: 'block' }} />}
+          </div>
+        )}
+        {Array.isArray(po.receipts) && po.receipts.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--i2)', fontWeight: 600, marginBottom: 6 }}>Previous receipts</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {po.receipts.map((r, ri) => {
+                const label = fmtDate(r.date) + (r.ref ? ' — ' + r.ref : '') + (r.linked ? ' (linked)' : '');
+                return r.image
+                  ? <a key={ri} href={r.image} target="_blank" rel="noreferrer" title={label}><img src={r.image} alt={label} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bd)' }} /></a>
+                  : <div key={ri} title={label} style={{ minWidth: 60, height: 60, borderRadius: 6, border: '1px dashed var(--bd)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 8.5, color: 'var(--i3)', textAlign: 'center', padding: 2 }}>
+                    <span>{fmtDate(r.date)}</span>{r.ref && <span>{r.ref}</span>}
+                  </div>;
+              })}
+            </div>
+          </div>
+        )}
+        {msg && <div className={'al ' + (msg.t === 'g' ? 'al-g' : 'al-r')} style={{ marginTop: 8 }}>{msg.m}</div>}
+        <div className="act">
+          <button className="btn btn-s" onClick={onCancel} disabled={busy}>Cancel</button>
+          {onForceClose && <button className="btn btn-b" onClick={() => onForceClose(po)} disabled={busy}>Force Close</button>}
+          <button className="btn btn-g" onClick={save} disabled={busy || imgBusy || !grnRef || !opts || !opts.length}>
+            {busy ? 'Saving…' : '🔗 Save GRN link'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** Linked / still-to-link stores receipts, under a PO number. */
+function GrnRefs({ po }) {
+  const receipts = Array.isArray(po.receipts) ? po.receipts : [];
+  const linked = receipts.filter((r) => r && r.linked && r.ref).map((r) => r.ref);
+  const pending = receipts.filter((r) => r && !r.linked && r.source === 'stores' && r.ref).map((r) => r.ref);
+  if (!linked.length && !pending.length) return null;
+  return (
+    <div style={{ fontSize: 9, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'normal' }}>
+      {linked.length > 0 && <div style={{ color: '#1e7e34' }} title="GRNs linked by the purchase desk">🔗 {linked.join(', ')}</div>}
+      {pending.length > 0 && <div style={{ color: '#9a5a06' }} title="Booked by stores, not linked yet">📥 {pending.join(', ')} — to link</div>}
+    </div>
+  );
+}
+
 /**
  * Purchase — native port of the legacy Purchase login (PO / GRN / Payments).
  * Legacy source: index.html pvGeneratePO, purchRenderTrackTable, pvOpenGRNModal,
@@ -50,7 +307,7 @@ const textareaStyle = {
 export default function Purchase() {
   const { mods, reloadModule } = useData();
 
-  const [tab, setTab] = useState('gen'); // 'gen' | 'track' | 'pay'
+  const [tab, setTab] = useState('gen'); // 'gen' | 'track' | 'pay' | 'sup'
   const [busy, setBusy] = useState(false);
 
   // Generate-PO form state
@@ -60,33 +317,30 @@ export default function Purchase() {
   const [expected, setExpected] = useState('');
   const [gst, setGst] = useState('');
   const [notes, setNotes] = useState('');
-  const [genMsg, setGenMsg] = useState(null); // { t:'g'|'r', m }
+  const [genMsg, setGenMsg] = useState(null); // { t:'g'|'r', m, poNum? }
+  const [pendingDocNum, setPendingDocNum] = useState(null); // a just-created PO to open in the preview
 
-  // GRN state
-  const [grnFor, setGrnFor] = useState(null); // poNum being received
+  // GRN-link state
+  const [grnFor, setGrnFor] = useState(null); // poNum whose GRN is being linked
   const [docPo, setDocPo] = useState(null);   // PO being previewed as a document
-  const [grnRef, setGrnRef] = useState('');
-  const [grnDate, setGrnDate] = useState(today());
-  const [grnQty, setGrnQty] = useState({}); // { itemIndex: value }
-  const [grnImage, setGrnImage] = useState('');   // compressed receipt photo (data URI)
-  const [grnImgBusy, setGrnImgBusy] = useState(false);
-  const [grnMsg, setGrnMsg] = useState(null);
-  const [trackQ, setTrackQ] = useState('');       // GRN-entry search box
+  const [trackMsg, setTrackMsg] = useState(null);
+  const [f, setF] = useState(EMPTY_PO_FILTERS); // the PO filter bar over both tracking cards
+  const changeFilters = useCallback((patch) => setF((prev) => ({ ...prev, ...patch })), []);
 
   // Payments state
   const [payStat, setPayStat] = useState('Unpaid'); // default to what still needs paying
 
   // ── Derived data straight off the module (re-derives after every save) ──
   const purchase = mods.purchase || {};
-  const asl = Array.isArray(purchase.asl) ? purchase.asl : [];
-  const pos = Array.isArray(purchase.pos) ? purchase.pos : [];
+  const asl = useMemo(() => (Array.isArray(purchase.asl) ? purchase.asl : []), [purchase.asl]);
+  const pos = useMemo(() => (Array.isArray(purchase.pos) ? purchase.pos : []), [purchase.pos]);
 
   // Follow-up nudge: open POs past their expected delivery, most overdue first.
-  // Days late is measured against today; a closed PO can no longer be late.
-  // (pvRenderNudges 13285)
+  // Days late is measured against today; a closed or cancelled PO can no longer be
+  // late. (pvRenderNudges 13285)
   const overdue = useMemo(() => {
     return pos
-      .filter((p) => !isClosed(p) && p.expectedDelivery)
+      .filter((p) => isOpenPo(p) && p.expectedDelivery)
       .map((p) => ({ po: p, late: delayDays(p) }))
       .filter((x) => x.late != null && x.late > 0)
       .sort((a, b) => b.late - a.late);
@@ -102,46 +356,33 @@ export default function Purchase() {
     [asl, supplier],
   );
 
-  // The Item Master is the identity source for a purchase line (29.09 §Purchase).
-  const [master, setMaster] = useState([]);
-  useEffect(() => {
-    let live = true;
-    masterApi.listItems()
-      .then((r) => { if (live && Array.isArray(r)) setMaster(r.filter((x) => x.active !== false)); })
-      .catch(() => { /* the supplier row's own copy carries it when the master is unreachable */ });
-    return () => { live = false; };
-  }, []);
+  // The Item Master is the identity source for a purchase line (29.09 §Purchase). The
+  // whole of it resolves an old PO line; only the active items are offered on a new one.
+  const masterAll = useItemMaster();
+  const master = useMemo(() => masterAll.filter((x) => x.active !== false), [masterAll]);
   const masterByCode = useMemo(
     () => new Map(master.map((it) => [String(it.code || '').trim().toUpperCase(), it])),
     [master],
   );
+  const ctx = useMemo(
+    () => poLineContext({ master: masterAll, asl, itemsExtra: purchase.itemsExtra }),
+    [masterAll, asl, purchase.itemsExtra],
+  );
 
   /**
-   * 29.09 §Purchase: "The GRN number should not be manually entered in the tool,
-   * whereas it should be a drop-down selection based on the GRNs that are entered by
-   * the store's login for this particular purchase order … If there is only one GRN
-   * for this PO, then that should be auto-selected."
-   *
-   * The receipts the stores desk actually booked, keyed by the PO they were booked
-   * against — so the two halves of the same delivery carry the same number instead of
-   * the buyer typing one from memory.
+   * The receipts the stores desk actually booked (GET /api/stores/grns), read on
+   * mount for the "to link" hints and AGAIN each time a link panel opens, so a GRN
+   * booked after this page loaded is offered. Stable — the panel holds it in a ref.
    */
   const [storeGrns, setStoreGrns] = useState([]);
-  useEffect(() => {
-    let live = true;
-    storesApi.grns()
-      .then((r) => { if (live && Array.isArray(r)) setStoreGrns(r); })
-      .catch(() => { /* stores not reachable — the box stays typeable below */ });
-    return () => { live = false; };
+  const loadStoreGrns = useCallback(async () => {
+    const r = await storesApi.grns();
+    const list = Array.isArray(r) ? r : [];
+    setStoreGrns(list);
+    return list;
   }, []);
-  const grnsForPo = useCallback((poNum) => {
-    const want = String(poNum || '').trim().toLowerCase();
-    if (!want) return [];
-    return storeGrns
-      .filter((g) => String(g.poNum || g.po_num || '').trim().toLowerCase() === want)
-      .map((g) => String(g.grnNo || g.grn_no || '').trim())
-      .filter(Boolean);
-  }, [storeGrns]);
+  useEffect(() => { loadStoreGrns().catch(() => { /* stores not reachable — the panel says so when opened */ }); }, [loadStoreGrns]);
+
   /**
    * 29.09 §Purchase: "only the item is visible. I need subgroup, specialty, item
    * description, microns (if applicable), Width (if applicable) and UOM also to be
@@ -156,16 +397,16 @@ export default function Purchase() {
     supplierRows.forEach((r) => {
       const code = String(r.itemCode || '').trim();
       if (!code || byCode.has(code)) return;
-      const master = masterByCode.get(code.toUpperCase()) || {};
+      const m = masterByCode.get(code.toUpperCase()) || {};
       byCode.set(code, {
         code,
-        description: String(master.name || r.specificMaterial || '').trim(),
-        materialType: String(master.materialType || r.materialType || '').trim(),
-        subGroup: String(master.subGroup || r.subGroup || '').trim(),
-        specialty: String(master.specialtyName || r.specialty || r.speciality || '').trim(),
-        microns: String(master.microns || r.microns || '').trim(),
-        widthMm: master.widthMm != null && master.widthMm !== '' ? String(master.widthMm) : '',
-        uom: String(master.uom || r.uom || '').trim(),
+        description: String(m.name || r.specificMaterial || '').trim(),
+        materialType: String(m.materialType || r.materialType || '').trim(),
+        subGroup: String(m.subGroup || r.subGroup || '').trim(),
+        specialty: String(m.specialtyName || r.specialty || r.speciality || '').trim(),
+        microns: String(m.microns || r.microns || '').trim(),
+        widthMm: m.widthMm != null && m.widthMm !== '' ? String(m.widthMm) : '',
+        uom: String(m.uom || r.uom || '').trim(),
         basicPrice: r.basicPrice,
       });
     });
@@ -194,15 +435,20 @@ export default function Purchase() {
     const row = asl.find((r) => r.company === po.supplier && r.paymentTerms);
     return row ? row.paymentTerms : '';
   }
+  /** '' when the supplier is on "No limit": such a bill never falls due (30.09). */
   function dueDate(po) {
-    const days = parsePaymentDays(paymentTermsText(po));
+    const terms = paymentTermsText(po);
+    if (isNoLimit(terms)) return '';
+    const days = parsePaymentDays(terms);
     const base = po.actualReceiptDate || po.poDate || today();
     const d = new Date(base + 'T00:00:00');
     d.setDate(d.getDate() + days);
     return d.toISOString().slice(0, 10);
   }
-  function dueInDays(po) { // negative = overdue (purchDueInDays 12523)
-    const d = new Date(dueDate(po) + 'T00:00:00');
+  function dueInDays(po) { // negative = overdue; null = never due (purchDueInDays 12523)
+    const due = dueDate(po);
+    if (!due) return null;
+    const d = new Date(due + 'T00:00:00');
     const t = new Date(today() + 'T00:00:00');
     return Math.round((d - t) / 86400000);
   }
@@ -277,43 +523,46 @@ export default function Purchase() {
     });
 
     if (r === true) {
-      setGenMsg({ t: 'g', m: '✓ ' + made + ' generated and saved.' });
+      setGenMsg({ t: 'g', m: '✓ ' + made + ' generated and saved.', poNum: made });
       setItems([{ ...EMPTY_ROW }]); setPoDate(today()); setExpected(''); setGst(''); setNotes(''); setSupplier('');
+      // §PU1: the new PO opens in the preview straight away, so it is seen — and can be
+      // printed or downloaded — the moment it exists.
+      if (made) setPendingDocNum(made);
     } else if (r) {
       setGenMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
     }
   }
 
-  // ── Section 2: GRN / receiving ──
+  // The fresh module arrives after the create resolves; open the PO once it is there.
+  useEffect(() => {
+    if (!pendingDocNum) return;
+    const p = pos.find((x) => x.poNum === pendingDocNum);
+    if (p) { setDocPo(p); setPendingDocNum(null); }
+  }, [pos, pendingDocNum]);
+
+  // ── Section 2: linking the stores GRN ──
   function openGRN(po) {
-    // One receipt for this PO is the answer; the desk should not have to pick it.
-    const only = grnsForPo(po.poNum);
-    if (!po.grnRef && only.length === 1) setTimeout(() => setGrnRef(only[0]), 0);
+    setTrackMsg(null);
     setGrnFor(po.poNum);
-    setGrnRef(po.grnRef || '');
-    setGrnDate(today());
-    setGrnQty({});
-    setGrnImage('');
-    setGrnMsg(null);
   }
-  const closeGRN = () => { setGrnFor(null); setGrnImage(''); setGrnMsg(null); };
+  const closeGRN = useCallback(() => setGrnFor(null), []);
 
-  async function pickGrnPhoto(file) {
-    if (!file) return;
-    setGrnImgBusy(true);
-    try { setGrnImage(await readImageCompressed(file)); }
-    catch (e) { setGrnMsg({ t: 'r', m: e.message || 'Could not read that photo.' }); }
-    finally { setGrnImgBusy(false); }
-  }
-
-  async function saveGRN(po) {
-    setGrnMsg(null);
-    if (!grnRef.trim()) { setGrnMsg({ t: 'r', m: 'Enter the GRN reference.' }); return; }
-    const qty = {};                       // { itemIndex: receiveNow }; server caps at the balance
-    (po.items || []).forEach((it, idx) => { const v = num(grnQty[idx]); if (v > 0) qty[idx] = v; });
-    const r = await runPurchase(() => purchaseApi.receiveGRN({ poNum: po.poNum, grnRef: grnRef.trim(), qty, receiptImage: grnImage || '' }));
-    if (r === true) closeGRN();
-    else if (r) setGrnMsg({ t: 'r', m: 'Save failed: ' + (r.message || r) });
+  async function linkGrn(po, grnNo, receiptImage, qtyByIdx) {
+    const r = await runPurchase(async () => {
+      try {
+        await purchaseApi.linkGrn({ poNum: po.poNum, grnNo, receiptImage: receiptImage || '' });
+      } catch (e) {
+        // A server from before 30.09 has no link endpoint: record the same receipt the
+        // old way, with the stores desk's own quantities (the server caps them).
+        if (!e || (e.status !== 404 && e.status !== 405)) throw e;
+        await purchaseApi.receiveGRN({ poNum: po.poNum, grnRef: grnNo, qty: qtyByIdx || {}, receiptImage: receiptImage || '' });
+      }
+    });
+    if (r === true) {
+      closeGRN();
+      setTrackMsg({ t: 'g', m: `✓ ${grnNo} linked to ${po.poNum}.` });
+    }
+    return r;
   }
 
   async function forceClose(po) {
@@ -342,53 +591,70 @@ export default function Purchase() {
     const header = ['PO Number', 'Supplier', 'PO / Invoice Date', 'GRN Ref', 'Actual Receipt Date', 'Payment Terms', 'Payment Due Date', 'Days to Due (neg = overdue)', 'Amount', 'Payment Status', 'Payment Date'];
     const body = rowsToExport.map((po) => {
       const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
+      const due = dueDate(po);
+      const di = dueInDays(po);
       return [
         po.poNum, po.supplier, po.poDate ? fmtDate(po.poDate) : '', po.grnRef || '', po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '',
-        paymentTermsText(po), fmtDate(dueDate(po)), paid ? '' : dueInDays(po), num(po.totalAmount),
+        paymentTermsText(po), due ? fmtDate(due) : '', paid || di == null ? '' : di, num(po.totalAmount),
         po.paymentStatus || 'Unpaid', po.paymentDate ? fmtDate(po.paymentDate) : '',
       ];
     });
     exportAOA([header, ...body], 'purchase-payments-' + today() + '.xlsx', 'Payments');
   }
 
-  // ── Tracking derived sets ──
-  const openPos = useMemo(() => {
-    let r = pos.filter((p) => !isClosed(p)); // closed POs live in "Recently Closed"
-    if (trackQ) {
-      const s = trackQ.toLowerCase();
-      r = r.filter((p) => String(p.poNum || '').toLowerCase().includes(s)
-        || String(p.supplier || '').toLowerCase().includes(s)
-        || (p.items || []).some((i) => String(i.item || '').toLowerCase().includes(s)));
-    }
-    return r.sort((a, b) => (delayDays(b) ?? 0) - (delayDays(a) ?? 0)); // most overdue first
-  }, [pos, trackQ]);
+  // ── Tracking derived sets: one row per PO line, filtered, regrouped per PO ──
+  const allLines = useMemo(() => flattenPoLines(pos, ctx, { includeEmpty: true }), [pos, ctx]);
+  const filterOptions = useMemo(() => poLineOptions(allLines, f), [allLines, f]);
+  const filterOn = !!(f.status || f.materialType || f.specialty || f.description || f.q);
 
-  const closedPos = useMemo(
-    () => pos.filter(isClosed).slice().sort((a, b) => String(b.closedDate || '').localeCompare(String(a.closedDate || ''))).slice(0, 30),
-    [pos],
-  );
+  const openGroups = useMemo(() => {
+    // closed and cancelled POs live in "Recently Closed"
+    const kept = filterPoLines(allLines, { ...f, openOnly: true });
+    return groupByPo(kept).sort((a, b) => (delayDays(b.po) ?? 0) - (delayDays(a.po) ?? 0)); // most overdue first
+  }, [allLines, f]);
+
+  const closedGroups = useMemo(() => {
+    const kept = filterPoLines(allLines, f).filter((r) => r.status === 'Closed' || r.status === 'Cancelled');
+    const when = (po) => String(po.closedDate || po.cancelledDate || '');
+    return groupByPo(kept).sort((a, b) => when(b.po).localeCompare(when(a.po))).slice(0, 30);
+  }, [allLines, f]);
 
   const payRows = useMemo(() => {
-    let r = pos.slice();
+    // a cancelled PO is not a bill — it leaves payables (29.09 cancel, 30.09 §S7)
+    let r = pos.filter((p) => poStatus(p) !== 'Cancelled');
     if (payStat) r = r.filter((p) => (p.paymentStatus || 'Unpaid') === payStat);
+    const dueKey = (p) => { const d = dueInDays(p); return d == null ? Infinity : d; };
     return r.sort((a, b) => {
       const pa = (a.paymentStatus || 'Unpaid') === 'Paid', pb = (b.paymentStatus || 'Unpaid') === 'Paid';
       if (pa !== pb) return pa ? 1 : -1; // unpaid first
-      return pa ? String(b.paymentDate || '').localeCompare(String(a.paymentDate || '')) : (dueInDays(a) - dueInDays(b));
+      if (pa) return String(b.paymentDate || '').localeCompare(String(a.paymentDate || ''));
+      const da = dueKey(a), db = dueKey(b);
+      return da === db ? 0 : (da < db ? -1 : 1);
     });
   }, [pos, payStat, asl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const TABS = [['gen', '① Generate PO'], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments']];
-  const TRACK_COLS = 11;
+  const TABS = [['gen', '① Generate PO'], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments'], ['sup', '④ Suppliers by Item']];
+  const TRACK_COLS = 14;
+  const CLOSED_COLS = 13;
 
   function dueInCell(po) {
     const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
     if (paid) return <span style={{ color: 'var(--i3)' }}>-</span>;
     const di = dueInDays(po);
+    if (di == null) return <span style={{ color: 'var(--i3)' }} title="No limit — this supplier is not held to a due date">No due date</span>;
     const color = di < 0 ? 'var(--red)' : (di <= 15 ? '#a3510a' : 'var(--g)');
     const text = di < 0 ? Math.abs(di) + 'd overdue' : (di === 0 ? 'Due today' : di + 'd left');
     return <span style={{ color, fontWeight: 700 }}>{text}</span>;
   }
+
+  const identityCells = (r) => (
+    <>
+      <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id.code || (r.empty ? '' : '—')}</td>
+      <td>{r.id.description || r.line.item}{r.line.unit ? <span style={{ color: 'var(--i3)', fontSize: 10 }}> ({r.line.unit})</span> : null}</td>
+      <td style={{ fontSize: 11 }}>{r.id.materialType || (r.empty ? '' : '—')}</td>
+      <td style={{ fontSize: 11 }}>{r.id.specialty || (r.empty ? '' : '—')}</td>
+    </>
+  );
 
   return (
     <div id="app">
@@ -444,22 +710,26 @@ export default function Purchase() {
           </div>
 
           <div className="tw">
-            <table>
+            {/* 30.09 §PU4 (RED): "Quantity and Rate: the headers and the boxes beneath
+                the header are not aligned properly." The boxes always filled their
+                columns — the HEADERS were right-aligned, so the label sat at the far
+                end of a box that starts at the left, unlike every other column. Every
+                header now starts where its box starts (the Stores GRN grid the desk
+                accepted), the boxes lose their steppers (.nospin), and a fixed layout
+                makes the declared widths hold however long a description gets. */}
+            <table style={{ tableLayout: 'fixed', minWidth: 1304 }} aria-label="PO line items">
               <thead>
-                {/* 29.09 §Purchase: the item's identity comes from the Item Master, the
-                    unit is called UOM the way it is everywhere else, and the numeric
-                    headers sit over boxes that fill their column so the two line up. */}
                 <tr>
                   <th style={{ width: 110 }}>Item Code</th>
-                  <th style={{ minWidth: 150 }}>Description</th>
+                  <th style={{ width: 200 }}>Description</th>
                   <th style={{ width: 110 }}>Material</th>
                   <th style={{ width: 110 }}>Sub-Group</th>
                   <th style={{ width: 110 }}>Speciality</th>
                   <th style={{ width: 80, textAlign: 'right' }}>Microns</th>
                   <th style={{ width: 90, textAlign: 'right' }}>Width (mm)</th>
                   <th style={{ width: 90 }}>UOM</th>
-                  <th style={{ width: 110, textAlign: 'right' }}>Qty</th>
-                  <th style={{ width: 120, textAlign: 'right' }}>Rate</th>
+                  <th style={{ width: 110 }}>Qty</th>
+                  <th style={{ width: 120 }}>Rate</th>
                   <th style={{ width: 130, textAlign: 'right' }}>Amount</th>
                   <th style={{ width: 44 }}></th>
                 </tr>
@@ -475,15 +745,15 @@ export default function Purchase() {
                         {supplierItems.map((r) => <option key={r.code} value={r.code}>{r.code}</option>)}
                       </select>
                     </td>
-                    <td style={{ fontSize: 11 }}>{it.item || '—'}</td>
+                    <td style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{it.item || '—'}</td>
                     <td style={{ fontSize: 11 }}>{it.materialType || '—'}</td>
                     <td style={{ fontSize: 11 }}>{it.subGroup || '—'}</td>
                     <td style={{ fontSize: 11 }}>{it.specialty || '—'}</td>
                     <td style={{ fontSize: 11, textAlign: 'right' }}>{it.microns || '—'}</td>
                     <td style={{ fontSize: 11, textAlign: 'right' }}>{it.widthMm || '—'}</td>
                     <td style={{ fontSize: 11 }}>{it.unit || '—'}</td>
-                    <td><input type="number" min="0" step="0.01" value={it.qty} aria-label={`Qty line ${i + 1}`} onChange={(e) => setItem(i, { qty: e.target.value })} style={{ textAlign: 'right', width: '100%' }} /></td>
-                    <td><input type="number" min="0" step="0.01" value={it.rate} aria-label={`Rate line ${i + 1}`} onChange={(e) => setItem(i, { rate: e.target.value })} style={{ textAlign: 'right', width: '100%' }} /></td>
+                    <td><input type="number" min="0" step="0.01" className="nospin" value={it.qty} aria-label={`Qty line ${i + 1}`} onChange={(e) => setItem(i, { qty: e.target.value })} style={{ width: '100%' }} /></td>
+                    <td><input type="number" min="0" step="0.01" className="nospin" value={it.rate} aria-label={`Rate line ${i + 1}`} onChange={(e) => setItem(i, { rate: e.target.value })} style={{ width: '100%' }} /></td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(num(it.qty) * num(it.rate))}</td>
                     <td style={{ textAlign: 'center' }}>
                       <button className="btn btn-s" style={{ height: 27, padding: '0 9px' }} onClick={() => removeRow(i)} disabled={items.length <= 1} title="Remove row">✕</button>
@@ -508,7 +778,15 @@ export default function Purchase() {
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={textareaStyle} placeholder="Delivery instructions, references…" />
           </div>
 
-          {genMsg && <div className={'al ' + (genMsg.t === 'g' ? 'al-g' : 'al-r')} style={{ marginTop: 10 }}>{genMsg.m}</div>}
+          {genMsg && (
+            <div className={'al ' + (genMsg.t === 'g' ? 'al-g' : 'al-r')} style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span>{genMsg.m}</span>
+              {genMsg.t === 'g' && genMsg.poNum && (
+                <button className="btn btn-s" style={{ height: 26, padding: '0 10px' }}
+                  onClick={() => { const p = pos.find((x) => x.poNum === genMsg.poNum); if (p) setDocPo(p); }}>📄 View PO</button>
+              )}
+            </div>
+          )}
           <div className="act">
             <button className="btn btn-g" onClick={createPO} disabled={busy}>{busy ? 'Saving…' : '✓ Create PO'}</button>
           </div>
@@ -518,21 +796,29 @@ export default function Purchase() {
       {/* ── 2) PO TRACKING + GRN ── */}
       {tab === 'track' && (
         <>
+          {/* 30.09 §S7c: a status filter and Material type / Speciality / Item
+              description, over BOTH cards below. */}
+          <div className="card" style={{ paddingBottom: 6 }}>
+            <PoLineFilters value={f} onChange={changeFilters} options={filterOptions} />
+          </div>
+          {trackMsg && <div className={'al ' + (trackMsg.t === 'g' ? 'al-g' : 'al-r')}>{trackMsg.m}</div>}
           <div className="card">
-            <div className="ctitle" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span>GRN Entry — Open &amp; Partially Received POs <span className="tag tgr">{openPos.length}</span></span>
-              <input placeholder="Search PO / supplier / item…" value={trackQ} onChange={(e) => setTrackQ(e.target.value)} style={{ maxWidth: 260 }} />
+            <div className="ctitle">
+              GRN Entry — Open &amp; Partially Received POs <span className="tag tgr">{openGroups.length}</span>
             </div>
-            {!openPos.length ? (
-              <div className="al al-y">{trackQ ? 'No open POs match your search.' : 'No open or partially received purchase orders.'}</div>
+            {!openGroups.length ? (
+              <div className="al al-y">{filterOn ? 'No open POs match the filters.' : 'No open or partially received purchase orders.'}</div>
             ) : (
               <div className="tw sy">
-                <table>
+                <table aria-label="Open purchase orders">
                   <thead>
                     <tr>
                       <th>PO #</th>
                       <th>Supplier</th>
-                      <th>Item</th>
+                      <th>Item Code</th>
+                      <th style={{ minWidth: 160 }}>Item Description</th>
+                      <th>Material Type</th>
+                      <th>Speciality</th>
                       <th style={{ textAlign: 'right' }}>Rate</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
                       <th style={{ textAlign: 'right' }}>PO Qty</th>
@@ -544,23 +830,29 @@ export default function Purchase() {
                     </tr>
                   </thead>
                   <tbody>
-                    {openPos.map((po) => {
-                      const list = (po.items && po.items.length) ? po.items : [{ item: '(no items)', qty: 0, rate: 0, amount: 0, receivedQty: 0 }];
+                    {openGroups.map(({ po, rows }) => {
                       const stage = stageOf(po);
                       const dd = delayDays(po);
                       return (
                         <Fragment key={po.poNum}>
-                          {list.map((it, ii) => {
+                          {rows.map((r, ii) => {
+                            const it = r.line;
                             const first = ii === 0;
                             const rq = num(it.receivedQty), oq = num(it.qty);
                             const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
                             return (
-                              <tr key={ii} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                              <tr key={r.key} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
                                 <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
-                                  {first ? (<>{po.poNum}<div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div></>) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
+                                  {first ? (
+                                    <>
+                                      {po.poNum}
+                                      <div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div>
+                                      <GrnRefs po={po} />
+                                    </>
+                                  ) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
                                 </td>
                                 <td style={{ fontSize: 11 }}>{first ? po.supplier : ''}</td>
-                                <td>{it.item}{it.unit ? <span style={{ color: 'var(--i3)', fontSize: 10 }}> ({it.unit})</span> : null}</td>
+                                {identityCells(r)}
                                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                                 <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                                 <td style={{ textAlign: 'right' }}>{qtyStr(oq)}</td>
@@ -575,7 +867,9 @@ export default function Purchase() {
                                     <>
                                       <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }}
                                         onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`} aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
-                                      <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}>📷 Receive</button>
+                                      {/* §PU2: the stores desk receives; this links the GRN it booked. */}
+                                      <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}
+                                        title="Link the GRN the stores desk booked against this PO" aria-label={`Link GRN ${po.poNum}`}>🔗 Link GRN</button>
                                     </>
                                   )}
                                 </td>
@@ -584,100 +878,8 @@ export default function Purchase() {
                           })}
 
                           {grnFor === po.poNum && (
-                            <tr>
-                              <td colSpan={TRACK_COLS} style={{ background: 'var(--bg)', padding: 14 }}>
-                                <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Receive Material — {po.poNum} · {po.supplier}</div>
-                                <div className="tw" style={{ background: 'var(--wh)' }}>
-                                  <table>
-                                    <thead>
-                                      <tr>
-                                        <th>Item</th>
-                                        <th style={{ textAlign: 'right' }}>Ordered</th>
-                                        <th style={{ textAlign: 'right' }}>Received</th>
-                                        <th style={{ textAlign: 'right' }}>Balance</th>
-                                        <th style={{ textAlign: 'right', width: 150 }}>Receive Now</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {(po.items || []).map((it, idx) => {
-                                        const bal = Math.max(0, num(it.qty) - num(it.receivedQty));
-                                        const full = bal <= 0;
-                                        return (
-                                          <tr key={idx}>
-                                            <td>{it.item}{it.unit ? ` (${it.unit})` : ''}</td>
-                                            <td style={{ textAlign: 'right' }}>{qtyStr(it.qty)}</td>
-                                            <td style={{ textAlign: 'right', color: 'var(--i3)' }}>{qtyStr(it.receivedQty)}</td>
-                                            <td style={{ textAlign: 'right', fontWeight: 700, color: full ? 'var(--g)' : 'var(--blu)' }}>{full ? '✓ Full' : qtyStr(bal)}</td>
-                                            <td style={{ textAlign: 'right' }}>
-                                              {full ? <span style={{ color: 'var(--i3)' }}>—</span> : (
-                                                <input type="number" min="0" max={bal} step="0.01" value={grnQty[idx] ?? ''} placeholder="0"
-                                                  onChange={(e) => setGrnQty((q) => ({ ...q, [idx]: e.target.value }))} style={{ width: 120, textAlign: 'right' }} />
-                                              )}
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                                <div className="g3" style={{ marginTop: 10 }}>
-                                  <div className="fg">
-                                    <label>GRN Reference</label>
-                                    {/* ¶2: the receipts the stores desk booked against THIS PO. */}
-                                    {grnsForPo(po.poNum).length ? (
-                                      <>
-                                        <select value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)}>
-                                          <option value="">— select the stores GRN —</option>
-                                          {grnRef && !grnsForPo(po.poNum).includes(grnRef) && <option value={grnRef}>{grnRef}</option>}
-                                          {grnsForPo(po.poNum).map((g) => <option key={g} value={g}>{g}</option>)}
-                                        </select>
-                                        <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>
-                                          From the stores login’s receipts against {po.poNum}.
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <input value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)} placeholder="GRN / DC number" />
-                                        <div style={{ fontSize: 10, color: '#9a5a06', marginTop: 3 }}>
-                                          The stores desk has not booked a receipt against {po.poNum} yet — type the number, or ask them to receive it first.
-                                        </div>
-                                      </>
-                                    )}
-                                  </div>
-                                  <div className="fg"><label>Receipt Date</label><input type="date" value={grnDate} readOnly title="Recorded as today's date" /></div>
-                                  <div className="fg">
-                                    <label>Receipt Photo (optional)</label>
-                                    <input type="file" accept="image/*" capture="environment" aria-label="Capture receipt photo"
-                                      onChange={(e) => { pickGrnPhoto(e.target.files && e.target.files[0]); e.target.value = ''; }} />
-                                  </div>
-                                </div>
-                                {(grnImgBusy || grnImage) && (
-                                  <div style={{ marginTop: 8 }}>
-                                    {grnImgBusy ? <span style={{ fontSize: 11, color: 'var(--i3)' }}>Processing photo…</span>
-                                      : <img src={grnImage} alt="Receipt preview" style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, border: '1px solid var(--bd)', display: 'block' }} />}
-                                  </div>
-                                )}
-                                {Array.isArray(po.receipts) && po.receipts.length > 0 && (
-                                  <div style={{ marginTop: 10 }}>
-                                    <div style={{ fontSize: 11, color: 'var(--i2)', fontWeight: 600, marginBottom: 6 }}>Previous receipts</div>
-                                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                      {po.receipts.map((r, ri) => {
-                                        const label = fmtDate(r.date) + (r.ref ? ' — ' + r.ref : '');
-                                        return r.image
-                                          ? <a key={ri} href={r.image} target="_blank" rel="noreferrer" title={label}><img src={r.image} alt={label} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bd)' }} /></a>
-                                          : <div key={ri} title={label} style={{ width: 60, height: 60, borderRadius: 6, border: '1px dashed var(--bd)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8.5, color: 'var(--i3)', textAlign: 'center', padding: 2 }}>{fmtDate(r.date)}</div>;
-                                      })}
-                                    </div>
-                                  </div>
-                                )}
-                                {grnMsg && <div className={'al ' + (grnMsg.t === 'g' ? 'al-g' : 'al-r')}>{grnMsg.m}</div>}
-                                <div className="act">
-                                  <button className="btn btn-s" onClick={closeGRN} disabled={busy}>Cancel</button>
-                                  <button className="btn btn-b" onClick={() => forceClose(po)} disabled={busy}>Force Close</button>
-                                  <button className="btn btn-g" onClick={() => saveGRN(po)} disabled={busy || grnImgBusy}>{busy ? 'Saving…' : 'Save GRN'}</button>
-                                </div>
-                              </td>
-                            </tr>
+                            <GrnLinkPanel po={po} ctx={ctx} colSpan={TRACK_COLS} loadGrns={loadStoreGrns}
+                              onLink={linkGrn} onForceClose={forceClose} onCancel={closeGRN} busy={busy} />
                           )}
                         </Fragment>
                       );
@@ -689,16 +891,22 @@ export default function Purchase() {
           </div>
 
           <div className="card">
-            <div className="ctitle">Recently Closed POs <span className="tag tgr">{closedPos.length}</span></div>
-            {!closedPos.length ? (
-              <div className="al al-y">No closed POs yet.</div>
+            <div className="ctitle">Recently Closed &amp; Cancelled POs <span className="tag tgr">{closedGroups.length}</span></div>
+            {!closedGroups.length ? (
+              <div className="al al-y">{filterOn ? 'No closed or cancelled POs match the filters.' : 'No closed POs yet.'}</div>
             ) : (
               <div className="tw sy">
-                <table>
+                <table aria-label="Closed and cancelled purchase orders">
                   <thead>
                     <tr>
                       <th>PO #</th>
                       <th>Supplier</th>
+                      <th>Item Code</th>
+                      <th style={{ minWidth: 160 }}>Item Description</th>
+                      <th>Material Type</th>
+                      <th>Speciality</th>
+                      <th style={{ textAlign: 'right' }}>PO Qty</th>
+                      <th style={{ textAlign: 'right' }}>Qty Recd</th>
                       <th style={{ textAlign: 'right' }}>Total</th>
                       <th>GRN Ref</th>
                       <th>Closed On</th>
@@ -707,23 +915,56 @@ export default function Purchase() {
                     </tr>
                   </thead>
                   <tbody>
-                    {closedPos.map((po) => {
+                    {closedGroups.map(({ po, status, rows }) => {
                       const dd = delayDays(po);
+                      const cancelled = status === 'Cancelled';
+                      const refs = linkedRefs(po);
+                      const unlinked = storeGrnsForPo(storeGrns, po.poNum).some((g) => !refs.includes(String(g.grnNo || '').trim()));
                       return (
-                        <tr key={po.poNum}>
-                          <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
-                            {po.poNum}{po.manualClosed && <span style={{ fontSize: 9, color: 'var(--red)', marginLeft: 4 }} title="Closed manually, not by full receipt match">(manual)</span>}
-                          </td>
-                          <td>{po.supplier}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupees(po.totalAmount)}</td>
-                          <td>{po.grnRef || '-'}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{po.closedDate ? fmtDate(po.closedDate) : '-'}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{dd == null ? '-' : (dd > 0 ? '+' + dd : dd)}</td>
-                          <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                            <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>📄 PO</button>
-                            <button className="btn btn-s" style={{ height: 27, padding: '0 10px' }} onClick={() => reopen(po)} disabled={busy}>↺ Reopen</button>
-                          </td>
-                        </tr>
+                        <Fragment key={po.poNum}>
+                          {rows.map((r, ii) => {
+                            const first = ii === 0;
+                            return (
+                              <tr key={r.key} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                                <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
+                                  {first ? (
+                                    <>
+                                      {po.poNum}
+                                      {cancelled
+                                        ? <div><span className="tag tr" style={{ fontSize: 9 }} title={po.cancelReason || ''}>Cancelled</span></div>
+                                        : po.manualClosed && <span style={{ fontSize: 9, color: 'var(--red)', marginLeft: 4 }} title="Closed manually, not by full receipt match">(manual)</span>}
+                                    </>
+                                  ) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
+                                </td>
+                                <td>{first ? po.supplier : ''}</td>
+                                {identityCells(r)}
+                                <td style={{ textAlign: 'right' }}>{qtyStr(r.line.qty)}</td>
+                                <td style={{ textAlign: 'right' }}>{qtyStr(r.line.receivedQty)}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{first ? rupees(po.totalAmount) : ''}</td>
+                                <td style={{ fontSize: 11 }}>{first ? (refs.length ? refs.join(', ') : (po.grnRef || '-')) : ''}</td>
+                                <td style={{ whiteSpace: 'nowrap' }}>{first ? ((cancelled ? po.cancelledDate : po.closedDate) ? fmtDate(cancelled ? po.cancelledDate : po.closedDate) : '-') : ''}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>{first ? (dd == null ? '-' : (dd > 0 ? '+' + dd : dd)) : ''}</td>
+                                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  {first && (
+                                    <>
+                                      <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }} onClick={() => setDocPo(po)} title={`PO document for ${po.poNum}`}>📄 PO</button>
+                                      {/* A PO the stores receipts closed by themselves can still have its GRN linked. */}
+                                      {!cancelled && unlinked && (
+                                        <button className="btn btn-g" style={{ height: 27, padding: '0 10px', marginRight: 4 }} onClick={() => openGRN(po)}
+                                          aria-label={`Link GRN ${po.poNum}`}>🔗 Link GRN</button>
+                                      )}
+                                      {!cancelled && <button className="btn btn-s" style={{ height: 27, padding: '0 10px' }} onClick={() => reopen(po)} disabled={busy}>↺ Reopen</button>}
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {grnFor === po.poNum && !cancelled && (
+                            <GrnLinkPanel po={po} ctx={ctx} colSpan={CLOSED_COLS} loadGrns={loadStoreGrns}
+                              onLink={linkGrn} onCancel={closeGRN} busy={busy} />
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -769,18 +1010,20 @@ export default function Purchase() {
                   {payRows.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No purchase orders match this filter.</td></tr> : payRows.map((po) => {
                     const paid = (po.paymentStatus || 'Unpaid') === 'Paid';
                     const di = dueInDays(po);
+                    const due = dueDate(po);
+                    const late = di != null && di < 0;
                     return (
                       <tr key={po.poNum}>
                         <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)' }}>{po.poNum}</td>
                         <td>{po.supplier}</td>
                         <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupees(po.totalAmount)}</td>
                         <td>{paymentTermsText(po) || '-'}</td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(dueDate(po))}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{due ? fmtDate(due) : '—'}</td>
                         <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{dueInCell(po)}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {paid
                             ? <span className="tag tg">Paid{po.paymentDate ? ` · ${fmtDate(po.paymentDate)}` : ''}</span>
-                            : <span className={'tag ' + (di < 0 ? 'tr' : 'ty')}>{di < 0 ? '⚠ Overdue' : 'Unpaid'}</span>}
+                            : <span className={'tag ' + (late ? 'tr' : 'ty')}>{late ? '⚠ Overdue' : 'Unpaid'}</span>}
                         </td>
                         <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                           {paid
@@ -796,6 +1039,9 @@ export default function Purchase() {
           )}
         </div>
       )}
+
+      {/* ── 4) SUPPLIERS BY ITEM ── */}
+      {tab === 'sup' && <SupplierFinder asl={asl} pos={pos} master={master} />}
 
       {docPo && <PurchaseOrderModal po={docPo} asl={asl} onClose={() => setDocPo(null)} />}
     </div>
