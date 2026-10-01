@@ -37,6 +37,8 @@ const ROLE_BAR = {
     links: [{ to: '/mis', label: '📋 Status' }, { to: '/production', label: '🏭 Record Actuals' }, { to: '/reports', label: '📈 Reports' }] },
   plan: { bg: '#b45309', brand: 'BLOOMFLEX', sub: 'Planning — Ready to Plan', signOut: 'Sign Out',
     links: [{ to: '/plan', label: '✅ Ready to Plan' }, { to: '/reports', label: '📈 Reports' }] },
+  // 30.09 §QC: the JSS login — one screen, the JSS editor.
+  jss: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'JSS Editor', signOut: 'Sign Out' },
 };
 
 /** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */
