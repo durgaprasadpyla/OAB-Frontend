@@ -22,6 +22,17 @@ const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
 const COLS = ['Item Code', 'Description', 'Material Type', 'Sub-Group', 'Microns', 'UOM', 'Qty per Base', 'Required'];
 
+// 30.09 §Super Admin: one column plan for EVERY department table of the PDF.
+// Each department is its own table (so it can keep together on a page), and under
+// the default auto layout each sized its columns to its own content — Printing's
+// Material Type sat at a different x than Packing's. A fixed layout over the same
+// <colgroup> makes the declared widths authoritative, so the blocks line up.
+// Description is left unsized and takes the remainder.
+const COL_WIDTHS = [90, null, 120, 120, 70, 60, 90, 110];
+const COLGROUP = '<colgroup>'
+  + COL_WIDTHS.map((w) => (w ? `<col style="width:${w}px">` : '<col>')).join('')
+  + '</colgroup>';
+
 /** Filename stem shared by both formats, e.g. BOM_SO1234_A1337_2026-09-02. */
 export function soBomFileName(row) {
   return ['BOM', safeName(row.so || 'SO'), safeName(row.spec || ''), today()].filter(Boolean).join('_');
@@ -85,12 +96,12 @@ export async function exportSoBomPDF(bom, row) {
   const blocks = groups.map((g) => {
     const body = g.items.map((m) => '<tr style="border-bottom:1px solid #eee">'
       + [m.itemCode, m.itemDescription, m.materialType, m.subGroup, m.microns, m.uom, r2(m.qtyPerBase), r2(m.required)]
-        .map((c, k) => `<td style="padding:4px 6px;text-align:${k >= 6 ? 'right' : 'left'}">${esc(c)}</td>`).join('')
+        .map((c, k) => `<td style="padding:4px 6px;word-break:break-word;text-align:${k >= 6 ? 'right' : 'left'}">${esc(c)}</td>`).join('')
       + '</tr>').join('');
     return '<div style="margin-bottom:14px;page-break-inside:avoid">'
       + `<div style="font-size:12px;font-weight:700;color:#0e6fb8;margin-bottom:4px">${esc(g.department)}`
       + `<span style="font-weight:400;color:#666"> — ${g.items.length} item(s)</span></div>`
-      + '<table style="width:100%;border-collapse:collapse;font-size:10.5px"><thead><tr style="background:#0e6fb8;color:#fff">'
+      + `<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5px">${COLGROUP}<thead><tr style="background:#0e6fb8;color:#fff">`
       + COLS.map((h, k) => `<th style="padding:5px 6px;text-align:${k >= 6 ? 'right' : 'left'}">${esc(h)}</th>`).join('')
       + `</tr></thead><tbody>${body}</tbody><tfoot><tr>`
       + `<td colspan="7" style="padding:4px 6px;text-align:right;font-weight:700">Total</td>`

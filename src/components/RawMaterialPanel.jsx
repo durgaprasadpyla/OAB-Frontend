@@ -258,35 +258,66 @@ function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
       )}
       {open && (
         <tr><td colSpan={8} style={{ padding: '8px 20px', background: 'var(--bg)' }}>
-          {groups.length ? groups.map((g) => (
-            <div key={g.department} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--b1)', marginBottom: 2 }}>
-                {g.department} <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— {g.items.length} item(s)</span>
-              </div>
-              <table style={{ width: '100%' }}>
-                {/* 28.09 §Super Admin: "only the description is not making sense so I would
-                    need the material type and subgroup and speciality also listed here." */}
-                <thead><tr><th style={{ textAlign: 'left' }}>Item Code</th><th style={{ textAlign: 'left' }}>Description</th>
-                  <th style={{ textAlign: 'left' }}>Material Type</th><th style={{ textAlign: 'left' }}>Sub-Group</th>
-                  <th style={{ textAlign: 'left' }}>Speciality</th><th style={{ textAlign: 'right' }}>Required</th></tr></thead>
-                <tbody>
-                  {g.items.map((m, i) => (
-                    <tr key={i}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.itemCode}</td>
-                      <td style={{ fontSize: 11 }}>{m.itemDescription}</td>
-                      <td style={{ fontSize: 11 }}>{m.materialType || '-'}</td>
-                      <td style={{ fontSize: 11 }}>{m.subGroup || '-'}</td>
-                      <td style={{ fontSize: 11 }}>{m.specialty || '-'}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(m.required, 2)} {m.uom || ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )) : <span style={{ color: 'var(--i3)', fontSize: 11 }}>No material rows in this BOM.</span>}
+          {groups.length ? <SoDeptBreakdown so={row.so} groups={groups} />
+            : <span style={{ color: 'var(--i3)', fontSize: 11 }}>No material rows in this BOM.</span>}
         </td></tr>
       )}
     </>
+  );
+}
+
+// 30.09 §Super Admin: "the per-department sub-tables have column headers NOT
+// aligned with the top table — must be seamless, same columns on the same line."
+// Every department used to be its own <table> under the default AUTO layout, so
+// each sized its columns to its own content and Description / Material Type /
+// Sub-Group landed at a different x per department. Worse, the global sticky
+// thead also stuck the FIRST department's header over the outer one on scroll,
+// which is the "top table" the client was comparing against. Now the breakdown
+// is ONE fixed-layout table: one header, one colgroup, the departments as row
+// groups with their own subtotal — so a column cannot drift between them.
+const DEPT_COLS = [
+  { label: 'Item Code', width: 110 },
+  { label: 'Description' },                    // takes whatever is left
+  { label: 'Material Type', width: 140 },
+  { label: 'Sub-Group', width: 140 },
+  { label: 'Speciality', width: 130 },
+  { label: 'Required', width: 130, right: true },
+];
+
+function SoDeptBreakdown({ so, groups }) {
+  const cell = { fontSize: 11, whiteSpace: 'normal', wordBreak: 'break-word' };
+  return (
+    <table className="nested-tbl" aria-label={`Material for ${so} by department`} style={{ width: '100%', tableLayout: 'fixed' }}>
+      <colgroup>{DEPT_COLS.map((c) => <col key={c.label} style={c.width ? { width: c.width } : undefined} />)}</colgroup>
+      {/* 28.09 §Super Admin: "only the description is not making sense so I would
+          need the material type and subgroup and speciality also listed here." */}
+      <thead><tr>{DEPT_COLS.map((c) => <th key={c.label} style={{ textAlign: c.right ? 'right' : 'left' }}>{c.label}</th>)}</tr></thead>
+      <tbody>
+        {groups.map((g) => (
+          <Fragment key={g.department}>
+            <tr className="dept-row">
+              <th colSpan={DEPT_COLS.length} scope="rowgroup" style={{ textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--b1)', background: 'var(--wh)', textTransform: 'none', letterSpacing: 0, padding: '7px 9px 3px', borderBottom: '1px solid var(--bd)' }}>
+                {g.department} <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— {g.items.length} item(s)</span>
+              </th>
+            </tr>
+            {g.items.map((m, i) => (
+              <tr key={g.department + '|' + i}>
+                <td style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{m.itemCode}</td>
+                <td style={cell}>{m.itemDescription}</td>
+                <td style={cell}>{m.materialType || '-'}</td>
+                <td style={cell}>{m.subGroup || '-'}</td>
+                <td style={cell}>{m.specialty || '-'}</td>
+                <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{inr(m.required, 2)} {m.uom || ''}</td>
+              </tr>
+            ))}
+            <tr className="dept-subtotal">
+              <td colSpan={DEPT_COLS.length - 1} style={{ textAlign: 'right', fontWeight: 700, fontSize: 11, color: 'var(--i2)' }}>Subtotal — {g.department}</td>
+              <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{uomTotalText(g.totals)}</td>
+            </tr>
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
