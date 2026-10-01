@@ -219,8 +219,10 @@ function CertificateEditor({ state, onCancel, onSaved, onError, save, oabModule 
         <button className="btn btn-s" onClick={() => setPreview(true)}>🖨 Preview / Download</button>
       </div>
 
+      {/* 30.09: above the sticky role bar (z-index 200) — at 60 the bar covered the
+          preview's header and its Print / Download / Close buttons. */}
       {preview && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, overflow: 'auto', padding: 20 }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflow: 'auto', padding: 20 }}>
           <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }}>
             <div className="fbar">
               <div className="ctitle" style={{ margin: 0 }}>{CERT_TYPES[type]}</div>
