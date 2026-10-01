@@ -13,6 +13,7 @@ import LeadCustomerPicker from './LeadCustomerPicker.jsx';
 import {
   repBook, deskTiersForSku, deskQuoteForSku, deskItemForSku, repTiersForSku, floorFor, saveRepQuote,
   quoteStatusOf, quotableSkus, markQuotesSent, setQuoteAccepted, despatchLocationsFor, isCustomerLead, parseMoq,
+  skuOwnerRep,
 } from '../lib/repFlow.js';
 
 // Sales Login §36-§60 — the three quotation tabs of the rep login.
@@ -169,7 +170,11 @@ export function RepQuotationsTab({ sales, save, repId }) {
   // §40: the table lists what is sent or to be sent; accepted ones sit on their own tab
   const shown = applyFilters(rows, f).filter((r) => (f.status ? true : r.status !== 'accepted'));
   const row = rows.find((r) => r.sku.id === pick) || null;
-  useEffect(() => { if (row) setTiers(row.tiers.map((t) => ({ qty: String(t.qty), price: String(t.price) }))); }, [pick]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 30.09 QT3: seeded when a SKU is picked — and again when the desk re-quotes it while
+  // it is picked (a re-read, or another login), so the slabs on screen are never the
+  // superseded desk figure reading red "below the desk".
+  const rowDeskQuoteId = row && row.deskQuote ? row.deskQuote.id : '';
+  useEffect(() => { if (row) setTiers(row.tiers.map((t) => ({ qty: String(t.qty), price: String(t.price) }))); }, [pick, rowDeskQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const step = (i, delta) => setTiers((xs) => xs.map((x, j) => {
     if (j !== i) return x;
@@ -191,11 +196,14 @@ export function RepQuotationsTab({ sales, save, repId }) {
     try {
       await save('sales', (prev) => {
         const cur = prev || {};
-        let skus = saveRepQuote(cur.skus, row.sku.id, tiers, deskTiersForSku(cur, row.sku.id), { user: user || repId });
+        let skus = saveRepQuote(cur.skus, row.sku.id, tiers, deskTiersForSku(cur, row.sku.id), { user: user || repId, deskQuote: deskQuoteForSku(cur, row.sku.id) });
         if (accept) skus = setQuoteAccepted({ ...cur, skus }, row.sku.id, true);
         return { ...cur, skus };
       }, { retry: true });
       flash('g', accept ? `✓ ${row.sku.sku_name} — quote accepted at the saved slabs. It is on the Quote Accepted tab now.` : `✓ ${row.sku.sku_name} — quotation saved. Send it from the Send Quote tab.`);
+      // QT3: an accepted quote's slabs are the PO's price (price_tiers) — the form lets
+      // go of it, so a later Save cannot rewrite the rep's slabs under that price
+      if (accept) { setPick(''); setTiers([]); }
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
 
@@ -245,9 +253,12 @@ export function RepQuotationsTab({ sales, save, repId }) {
             {row.desk.length === 0 && (
               <button className="btn btn-s" style={{ marginTop: 6 }} onClick={() => setTiers((xs) => [...xs, { qty: '', price: '' }])}>+ Add slab</button>
             )}
+            {row.status === 'accepted' && (
+              <div className="al al-b" style={{ marginTop: 6 }}>Accepted — the PO is priced at these slabs, so they are no longer edited here.</div>
+            )}
             <div className="act">
-              <button className="btn btn-g" onClick={() => doSave(false)} disabled={busy}>💾 Save</button>
-              <button className="btn btn-s" style={{ color: GREEN, fontWeight: 700 }} onClick={() => doSave(true)} disabled={busy}>✓ Quote Accepted</button>
+              <button className="btn btn-g" onClick={() => doSave(false)} disabled={busy || row.status === 'accepted'}>💾 Save</button>
+              <button className="btn btn-s" style={{ color: GREEN, fontWeight: 700 }} onClick={() => doSave(true)} disabled={busy || row.status === 'accepted'}>✓ Quote Accepted</button>
               <span className="pg-sub" style={{ margin: 0 }}>Status: <span style={pill(row.status)}>{STATUS_LABEL[row.status]}</span>{row.deskQuote ? ` · desk quotation v${row.deskQuote.version || 1} of ${fmtDate(row.deskQuote.date)}` : ''}</span>
             </div>
           </>
@@ -470,7 +481,11 @@ export function RepAcceptedTab({ sales, save, repId }) {
   const manualSkus = (sales.skus || []).filter((sk) => sk.lead_id === manual.leadId && !sk.quotation_accepted);
   // 30.09 QT5: "for already-CSA'd / accepted customers" — a SKU whose CSA is done or
   // that has been quoted, never one still waiting on QC
-  const manualOffer = manualSkus.filter((sk) => skuCsaDone(sales, sk) || (sk.quote_history || []).length > 0 || deskTiersForSku(sales, sk.id).length > 0);
+  // …and only a SKU allocated to THIS rep (QT2 / skuOwnerRep): one owned by another rep
+  // would be accepted here and then vanish from this rep's Accepted table
+  const manualOffer = manualSkus
+    .filter((sk) => skuOwnerRep(sales, sk) === String(repId || ''))
+    .filter((sk) => skuCsaDone(sales, sk) || (sk.quote_history || []).length > 0 || deskTiersForSku(sales, sk.id).length > 0);
   const manualDesk = manual.skuId ? deskTiersForSku(sales, manual.skuId) : [];
   // the desk's slabs (or its MOQ) come in with the SKU — the floor the hand-written
   // figure may not go under
@@ -491,7 +506,7 @@ export function RepAcceptedTab({ sales, save, repId }) {
       if (manual.tiers.some((t) => String(t.price).trim() !== '' && !(n(t.qty) > 0))) throw new Error('Enter the MOQ for every slab — the PO is priced by it.');
       await save('sales', (prev) => {
         const cur = prev || {};
-        const skus = saveRepQuote(cur.skus, manual.skuId, manual.tiers, deskTiersForSku(cur, manual.skuId), { user: user || repId });
+        const skus = saveRepQuote(cur.skus, manual.skuId, manual.tiers, deskTiersForSku(cur, manual.skuId), { user: user || repId, deskQuote: deskQuoteForSku(cur, manual.skuId) });
         return { ...cur, skus: setQuoteAccepted({ ...cur, skus }, manual.skuId, true) };
       }, { retry: true });
       flash('g', '✓ Quotation recorded and marked accepted.');

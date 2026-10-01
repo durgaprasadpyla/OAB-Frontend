@@ -9,6 +9,7 @@ import { RepQuotationsTab, RepSendQuoteTab, RepAcceptedTab } from '../components
 import LeadCustomerPicker from '../components/LeadCustomerPicker.jsx';
 import {
   repBook, setLeadCategories, isConvertedStage, conversionPending, requestConversion, masterRowsFor, saveErrorText,
+  isCustomerLead,
 } from '../lib/repFlow.js';
 import RepVisitTab from '../components/RepVisitTab.jsx';
 import RepPoTab from '../components/RepPoTab.jsx';
@@ -787,7 +788,7 @@ function MyCustomers({ leads, sales, save, repId, title = 'My Leads', selId = nu
                     )}
                     <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
                       {l.client_name}
-                      {l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}
+                      {isCustomerLead(l) ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}
                       {conversionPending(l) ? <span className="tag ty" style={{ fontSize: 9, marginLeft: 4 }} title="Marked Converted — waiting for the Super Admin to convert it">⏳ With Super Admin</span> : null}
                     </td>
                     <td style={{ fontSize: 11 }}>{l.group || '—'}</td>

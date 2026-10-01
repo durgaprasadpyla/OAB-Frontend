@@ -34,7 +34,8 @@ export function csaResolve(report, sales) {
     submission: (!isDirect && sku && sku.created_at) ? sku.created_at : report.created_at,
     generated: report.created_at,
     given: report.given_to_client_date || '',
-    commentsDone: report.plant_commented_at || '',
+    // reports the plant answered before 30.09 carry only plant_answered_at
+    commentsDone: report.plant_commented_at || report.plant_answered_at || '',
     quoted: report.quoted_at || '',
     status: report.status || '',
   };

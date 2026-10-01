@@ -88,14 +88,22 @@ export function kamStored(leads, customer) {
  * A customer with no lead gets a minimal one created, so the fields have
  * somewhere to live — matching how Sadmin → Manage saves categories.
  */
-export function kamApplyEdits(leads, edits, { uid = salesUid } = {}) {
+export function kamApplyEdits(leads, edits, { uid = salesUid, now = new Date() } = {}) {
   let out = arr(leads).slice();
+  const at = now.toISOString();
   Object.entries(edits || {}).forEach(([customer, fields]) => {
     const i = out.findIndex((l) => s(l.client_name) === s(customer));
     if (i >= 0) {
-      out[i] = { ...out[i], ...fields };
+      // 30.09 §SL6: the KAM screen lists Customer Master customers only, so the lead it
+      // matched by name is a customer too — flag it, the same as a created row, or the
+      // Super Admin's screens and QC's CSA → JSS list keep it on the lead side. A lead
+      // already flagged keeps its own conversion record.
+      const prev = out[i];
+      const flag = prev.converted_to_customer === true ? {} : {
+        converted_to_customer: true, converted_at: at, converted_by: 'kam', conversion_requested: false,
+      };
+      out[i] = { ...prev, ...fields, ...flag };
     } else {
-      const at = new Date().toISOString();
       out = [...out, {
         id: uid('lead'),
         client_name: customer,

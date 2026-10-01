@@ -73,6 +73,15 @@ export default function LeadsAdmin() {
    * helper feeds both screens, so they can never list different leads.
    */
   const pendingConversion = useMemo(() => conversionQueue(leads), [leads]);
+  /**
+   * 29.09's bulk ability, kept beside the queue: the leads already in the Customer Master
+   * (we have taken a PO from them) whose conversion was never recorded, and which are not
+   * in the queue. A lead the Super Admin deliberately moved back (↩ Lead wrote false) is
+   * a decision, not a backlog — it is left for a one-at-a-time convert.
+   */
+  const inMasterUnconverted = useMemo(() => leads.filter((l) => l && !isCustomerLead(l, customers)
+    && !conversionPending(l) && l.converted_to_customer !== false && inCustomerMaster(l.client_name, customers)),
+  [leads, customers]);
   const ownerNames = (l) => leadOwnerIds(l).map((id) => repName(sales.sales_users, id)).filter((x) => x && x !== '—');
   const markedBy = (l) => {
     if (l.conversion_requested && l.conversion_requested_by) return repName(sales.sales_users, l.conversion_requested_by);
@@ -158,6 +167,20 @@ export default function LeadsAdmin() {
     } catch (e) { flash('r', saveErrorText(e, 'Convert')); } finally { setBusy(false); }
   }
 
+  /** Record the conversion on every lead already in the Customer Master but never converted (29.09). */
+  async function convertInMaster() {
+    const list = inMasterUnconverted;
+    if (!list.length) return;
+    if (!window.confirm(`Convert the ${list.length} lead(s) already in the Customer Master into customers?\n\n`
+      + 'We already sell to them, but the conversion was never recorded, so every sales rep still sees them on the lead side. '
+      + 'Nothing is added to the Customer Master — they are there already.')) return;
+    setBusy(true);
+    try {
+      await convertMany(list.map((l) => l.id));
+      flash('g', `${list.length} lead(s) already in the Customer Master converted.`);
+    } catch (e) { flash('r', saveErrorText(e, 'Convert')); } finally { setBusy(false); }
+  }
+
   /** Promote: the name joins the Customer Master, so sale orders can use it. */
   async function toCustomer(l) {
     const name = norm(l.client_name);
@@ -197,6 +220,16 @@ export default function LeadsAdmin() {
         {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
         <ConversionQueue queue={pendingConversion} busy={busy} markedBy={markedBy} owners={ownerNames}
           onConvert={toCustomer} onConvertAll={convertPending} />
+        {inMasterUnconverted.length > 0 && (
+          <div className="al al-y" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ flex: 1, minWidth: 260, fontSize: 12 }}>
+              ⚠ {inMasterUnconverted.length} lead{inMasterUnconverted.length === 1 ? ' is' : 's are'} already in the Customer
+              Master but never converted, so the sales reps still see {inMasterUnconverted.length === 1 ? 'it' : 'them'} on the lead side.
+            </span>
+            <button className="btn btn-s" disabled={busy} aria-label="Convert the leads already in the Customer Master"
+              onClick={convertInMaster}>Convert the {inMasterUnconverted.length} already in the Customer Master</button>
+          </div>
+        )}
         <datalist id="lead-groups-dl">{groups.map((g) => <option key={g} value={g} />)}</datalist>
         <div className="g4">
           {COLS.map(([k, label]) => (

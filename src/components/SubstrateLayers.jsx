@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { masterApi } from '../api.js';
-import { specItems, materialOptions, micronChoices, micronChoiceHint, widthsForLayer } from '../lib/jssSpec.js';
+import { specItems, materialOptions, micronChoices, micronChoiceHint, widthsForLayer, micronValue } from '../lib/jssSpec.js';
 
 // 28.09 §Sales ¶24: "One more text field for structure — if we can have a drop-down
 // selection similar to the JSS creation page with: primary substrate micron film
@@ -46,15 +46,23 @@ export function subLayersFromStructure(text) {
   return out;
 }
 
-function Pick({ label, value, options, onChange, disabled, ariaLabel, placeholder, hint }) {
+/** Two microns as one: "35 MIC", "35mic" and "35" are the same film (micronValue). */
+const sameMicron = (a, b) => (micronValue(a) || String(a ?? '').trim()) === (micronValue(b) || String(b ?? '').trim());
+
+function Pick({ label, value, options, onChange, disabled, ariaLabel, placeholder, hint, same }) {
+  // `same` compares a saved value with the options (the micron: "35 MIC" is "35"), so
+  // a legacy value opens on its option instead of beside it as a stray one
+  const eq = same || ((a, b) => String(a) === String(b));
+  const match = value ? options.find((o) => eq(o, value)) : undefined;
+  const shown = match != null ? String(match) : (value ?? '');
   return (
     <div className="fg">
       <label>{label}</label>
-      <select value={value ?? ''} aria-label={ariaLabel || label} disabled={disabled}
+      <select value={shown} aria-label={ariaLabel || label} disabled={disabled}
         onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder || '— select —'}</option>
         {/* a value saved before the master changed stays selectable */}
-        {value && !options.some((o) => String(o) === String(value)) && <option value={value}>{value}</option>}
+        {value && match == null && <option value={value}>{value}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
       {hint ? <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>{hint}</div> : null}
@@ -83,7 +91,12 @@ export default function SubstrateLayers({ layers, onChange, max = 3, disabled = 
   const pool = useMemo(() => specItems(items), [items]);
   const materials = useMemo(() => materialOptions(items), [items]);
 
-  const rows = Array.isArray(layers) && layers.length ? layers : blankSubLayers();
+  // a micron saved from the raw Item Master text ("35 MIC") is carried as the
+  // normalised option ("35"), so the next change writes the clean value
+  const rows = (Array.isArray(layers) && layers.length ? layers : blankSubLayers()).map((l) => {
+    const mic = l && micronValue(l.microns);
+    return mic && mic !== String(l.microns) ? { ...l, microns: mic } : l;
+  });
   const setLayer = (i, patch) => onChange(rows.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 
   return (
@@ -102,7 +115,7 @@ export default function SubstrateLayers({ layers, onChange, max = 3, disabled = 
               ariaLabel={`${LAYER_LABELS[i]} Substrate`}
               placeholder={pool.length ? '— select —' : '— nothing under film or paper yet —'}
               onChange={(v) => setLayer(i, { material: v, microns: '', widthMm: '' })} />
-            <Pick label="Micron" value={l.microns} options={microns} disabled={disabled || !l.material}
+            <Pick label="Micron" value={l.microns} options={microns} disabled={disabled || !l.material} same={sameMicron}
               ariaLabel={`${LAYER_LABELS[i]} Micron`}
               placeholder={l.material && !microns.length ? '— no micron in the Item Master —' : '— select —'}
               hint={l.material && mc.basis !== 'item' ? micronChoiceHint(mc.basis, l.material, '') : ''}

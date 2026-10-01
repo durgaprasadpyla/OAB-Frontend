@@ -317,6 +317,41 @@ describe('PLAN — what is allocated AND issued to the order (30.09)', () => {
     });
   });
 
+  it('switching orders never shows the last order’s holds or cover under the new one (review A3)', async () => {
+    const user = userEvent.setup();
+    mount();
+    const base = globalThis.fetch;
+    const json = (b) => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => b, text: async () => JSON.stringify(b) });
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/stores/so-material?so=26%2F771')) {
+        return json(position({
+          lines: [matLine({ allocated: 10000, covered: 10000, open: 0, complete: true })],
+          allocations: [{ id: 1, so: '26/771', unitId: 593, itemId: 33, itemCode: 'BLM033', internalCode: 'BLMU-593', qty: 10000, uom: 'Kg',
+            source: 'PLAN', actor: 'plan1', department: 'Printing' }],
+        }));
+      }
+      // the next order's position is still on the wire
+      if (u.includes('/api/stores/so-material?so=26%2F772')) { await gate; return json({ ...position(), so: '26/772' }); }
+      return base(url, opts);
+    };
+    const p771 = await open(user, '26/771');
+    await waitFor(() => expect(within(p771).getByText('BLMU-593')).toBeInTheDocument());
+    await waitFor(() => expect(within(p771).getByLabelText('Assign BLM033 to 26/771')).toHaveTextContent('✓ BOM covered'));
+
+    await user.click(screen.getByLabelText('Material for 26/772'));
+    const p772 = await screen.findByLabelText('Material for 26/772 — Printing');
+    // 26/771's hold and its "covered" are not 26/772's
+    expect(within(p772).queryByText('BLMU-593')).toBeNull();
+    expect(screen.queryByLabelText('Release BLMU-593 from 26/771')).toBeNull();
+    expect(within(p772).getByLabelText('Assign BLM033 to 26/772')).not.toHaveTextContent('✓ BOM covered');
+    release();
+    await waitFor(() => expect(within(p772).getByLabelText('Assign BLM033 to 26/772')).toHaveTextContent(/^Assign$/));
+    expect(within(p772).queryByText('BLMU-593')).toBeNull();
+  });
+
   it('re-reads the stores position on ↻ Refresh', async () => {
     const user = userEvent.setup();
     mount();

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from './harness.jsx';
+import { csaResolve } from '../lib/salesAdmin.js';
 import SalesAdmin from '../pages/SalesAdmin.jsx';
 import {
   leadLineItems, allCategories, assignLine, bulkAssignLines, filterLineItems, UNASSIGNED,
@@ -408,5 +409,14 @@ describe('Sales Admin — Targets tab', () => {
     expect(screen.getByLabelText('New Category Targets')).toBeInTheDocument();
     // 30.09 §PE2: "Despatch" is the sales logins' spelling
     expect(screen.getByLabelText('New Despatch-Form Targets')).toBeInTheDocument();
+  });
+});
+
+/* 30.09 integration review Q9 — the CSA tracker's "comments done" date */
+describe('csaResolve — plant comments date', () => {
+  it('falls back to plant_answered_at for a report answered before 30.09', () => {
+    expect(csaResolve({ id: 'c1', plant_answered_at: '2026-09-10T00:00:00Z' }, {}).commentsDone).toBe('2026-09-10T00:00:00Z');
+    expect(csaResolve({ id: 'c2', plant_commented_at: '2026-09-12T00:00:00Z', plant_answered_at: '2026-09-10T00:00:00Z' }, {}).commentsDone).toBe('2026-09-12T00:00:00Z');
+    expect(csaResolve({ id: 'c3' }, {}).commentsDone).toBe('');
   });
 });

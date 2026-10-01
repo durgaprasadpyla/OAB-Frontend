@@ -44,8 +44,25 @@ function stageOf(po) {
 /** 29.09 ¶18: "no limit" is a supplier we do not hold to a due date — nothing ever falls due. */
 const isNoLimit = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ') === 'no limit';
 
-/** The stores GRNs this PO's receipts say were linked by the purchase desk. */
-const linkedRefs = (po) => (Array.isArray(po.receipts) ? po.receipts : []).filter((r) => r && r.linked && r.ref).map((r) => r.ref);
+const refKey = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+/**
+ * The stores GRNs this PO's receipts say were linked by the purchase desk.
+ *
+ * Pass `grnNos` (the stores desk's GRN numbers for this PO) to also count the receipts
+ * the desk recorded the old way: a server from before 30.09 has no link endpoint, and
+ * its POST /grn writes `{ date, ref }` with neither `linked` nor `source`. Such a
+ * receipt whose ref IS one of the stores GRNs is that GRN linked — otherwise the
+ * "🔗 Link GRN" button would never go away after the fallback save.
+ */
+const linkedRefs = (po, grnNos) => {
+  const known = grnNos ? new Set([...grnNos].map(refKey).filter(Boolean)) : null;
+  return (Array.isArray(po.receipts) ? po.receipts : [])
+    .filter((r) => r && r.ref && (r.linked || (known && r.source !== 'stores' && known.has(refKey(r.ref)))))
+    .map((r) => r.ref);
+};
+/** The same, as a set of comparable keys (trimmed, upper-cased). */
+const linkedSet = (po, grnNos) => new Set(linkedRefs(po, grnNos).map(refKey));
 
 const EMPTY_ROW = {
   itemCode: '', item: '', materialType: '', subGroup: '', specialty: '',
@@ -86,9 +103,9 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
   const [msg, setMsg] = useState(null);
   const loadRef = useRef(loadGrns);
   loadRef.current = loadGrns;
-  const linked = useMemo(() => new Set(linkedRefs(po)), [po]);
-  const linkedRef = useRef(linked);
-  linkedRef.current = linked;
+  const poRef = useRef(po);
+  poRef.current = po;
+  const linked = useMemo(() => linkedSet(po, (opts || []).map((g) => g.grnNo)), [po, opts]);
 
   // Once per opening: a fresh read of the stores receipts, narrowed to this PO.
   useEffect(() => {
@@ -101,7 +118,8 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
           .filter((g) => g.grnNo);
         setOpts(mine);
         // One receipt is the answer; so is the one receipt not yet linked.
-        const open = mine.filter((g) => !linkedRef.current.has(g.grnNo));
+        const done = linkedSet(poRef.current, mine.map((g) => g.grnNo));
+        const open = mine.filter((g) => !done.has(refKey(g.grnNo)));
         setGrnRef(mine.length === 1 ? mine[0].grnNo : (open.length === 1 ? open[0].grnNo : ''));
       })
       .catch((e) => {
@@ -114,15 +132,20 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
 
   const chosen = (opts || []).find((g) => g.grnNo === grnRef) || null;
   const chosenId = chosen ? chosen.id : null;
+  const hasChosen = !!chosen;
   useEffect(() => {
     setDetail(null);
-    if (chosenId == null) return undefined;
+    if (chosenId == null) {
+      // A receipt without an id cannot be opened — say so, and leave the link savable.
+      if (hasChosen) setDetail({ units: [], failed: true });
+      return undefined;
+    }
     let live = true;
     storesApi.grn(chosenId)
       .then((d) => { if (live) setDetail(d && typeof d === 'object' && !Array.isArray(d) ? d : { units: [] }); })
       .catch(() => { if (live) setDetail({ units: [], failed: true }); });
     return () => { live = false; };
-  }, [chosenId]);
+  }, [chosenId, hasChosen]);
 
   const lines = useMemo(() => flattenPoLines([po], ctx), [po, ctx]);
 
@@ -182,7 +205,7 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
             ) : (
               <select value={grnRef} aria-label="GRN Reference" onChange={(e) => setGrnRef(e.target.value)}>
                 <option value="">— select the stores GRN —</option>
-                {opts.map((g) => <option key={g.grnNo} value={g.grnNo}>{grnLabel(g, linked.has(g.grnNo))}</option>)}
+                {opts.map((g) => <option key={g.grnNo} value={g.grnNo}>{grnLabel(g, linked.has(refKey(g.grnNo)))}</option>)}
               </select>
             )}
             <div style={{ fontSize: 10, color: none ? '#9a5a06' : 'var(--i3)', marginTop: 3 }}>
@@ -275,7 +298,9 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
         <div className="act">
           <button className="btn btn-s" onClick={onCancel} disabled={busy}>Cancel</button>
           {onForceClose && <button className="btn btn-b" onClick={() => onForceClose(po)} disabled={busy}>Force Close</button>}
-          <button className="btn btn-g" onClick={save} disabled={busy || imgBusy || !grnRef || !opts || !opts.length}>
+          {/* Not before the GRN's own quantities are in: an older server records the
+              receipt with them (the legacy fallback), and an empty map would book zero. */}
+          <button className="btn btn-g" onClick={save} disabled={busy || imgBusy || !grnRef || !opts || !opts.length || !detail}>
             {busy ? 'Saving…' : '🔗 Save GRN link'}
           </button>
         </div>
@@ -285,9 +310,9 @@ function GrnLinkPanel({ po, ctx, colSpan, loadGrns, onLink, onForceClose, onCanc
 }
 
 /** Linked / still-to-link stores receipts, under a PO number. */
-function GrnRefs({ po }) {
+function GrnRefs({ po, grnNos }) {
   const receipts = Array.isArray(po.receipts) ? po.receipts : [];
-  const linked = receipts.filter((r) => r && r.linked && r.ref).map((r) => r.ref);
+  const linked = linkedRefs(po, grnNos);
   const pending = receipts.filter((r) => r && !r.linked && r.source === 'stores' && r.ref).map((r) => r.ref);
   if (!linked.length && !pending.length) return null;
   return (
@@ -847,7 +872,7 @@ export default function Purchase() {
                                     <>
                                       {po.poNum}
                                       <div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div>
-                                      <GrnRefs po={po} />
+                                      <GrnRefs po={po} grnNos={storeGrnsForPo(storeGrns, po.poNum).map((g) => g.grnNo)} />
                                     </>
                                   ) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
                                 </td>
@@ -918,8 +943,10 @@ export default function Purchase() {
                     {closedGroups.map(({ po, status, rows }) => {
                       const dd = delayDays(po);
                       const cancelled = status === 'Cancelled';
-                      const refs = linkedRefs(po);
-                      const unlinked = storeGrnsForPo(storeGrns, po.poNum).some((g) => !refs.includes(String(g.grnNo || '').trim()));
+                      const poGrns = storeGrnsForPo(storeGrns, po.poNum);
+                      const refs = linkedRefs(po, poGrns.map((g) => g.grnNo));
+                      const done = new Set(refs.map(refKey));
+                      const unlinked = poGrns.some((g) => refKey(g.grnNo) && !done.has(refKey(g.grnNo)));
                       return (
                         <Fragment key={po.poNum}>
                           {rows.map((r, ii) => {

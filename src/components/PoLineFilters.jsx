@@ -69,7 +69,9 @@ export function useItemMaster() {
   const [items, setItems] = useState([]);
   useEffect(() => {
     let live = true;
-    masterApi.listItems()
+    // includeInactive: the server lists active items only unless asked — and a PO line
+    // raised before an item was withdrawn must still read its identity from the master.
+    masterApi.listItems({ includeInactive: 1 })
       .then((r) => { if (live && Array.isArray(r)) setItems(r); })
       .catch(() => { /* identity falls back to the PO line and the ASL row */ });
     return () => { live = false; };

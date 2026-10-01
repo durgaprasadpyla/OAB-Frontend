@@ -76,6 +76,10 @@ function DespatchField({ f, csa, onChange }) {
       ) : (
         <input type="text" value={csa[f.k] ?? ''} aria-label={f.label} onChange={(e) => onChange({ [f.k]: e.target.value })} />
       )}
+      {/* a pre-30.09 requisition wrote this as free text; it is kept until re-entered */}
+      {f.k === 'per_core_qty' && String(csa.per_core || '').trim() && (csa.per_core_qty === '' || csa.per_core_qty == null) && (
+        <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>Earlier entry: “{String(csa.per_core).trim()}” — kept until you enter the figure here.</div>
+      )}
     </div>
   );
 }
@@ -118,6 +122,9 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
   const restricted = despatchOptions.length !== despatchAll.length;
   // an edit must show the SKU's own form even if the category no longer allows it
   const formOffList = !!form.dispatchForm && !despatchOptions.some((d) => d[0] === form.dispatchForm);
+  // …and its own category, after the Super Admin took it off the list — else the
+  // select reads "-- Select --" and Save fails with "Select a category."
+  const categoryOffList = !!form.category && !categories.includes(form.category);
 
   // §SK1 / §PE1: the despatch locations of THIS lead / customer — the Customer
   // Master's rows when it has the customer; only a lead not in it yet falls back to
@@ -284,6 +291,7 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
             <select value={form.category} aria-label="Category" onChange={(e) => pickCategory(e.target.value)}>
               <option value="">-- Select --</option>
               {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              {categoryOffList && <option value={form.category}>{form.category} (no longer in the list)</option>}
             </select>
           </div>
           <div className="fg"><label>Despatch Form *</label>

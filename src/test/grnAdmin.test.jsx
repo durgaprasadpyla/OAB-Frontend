@@ -44,6 +44,8 @@ const RM = [
 
 let calls;
 let grnDetail;
+// Module 6 (purchase) as the server holds it — the GRN editor's PO list reads it.
+let purchase6 = { asl: [], pos: [] };
 // 2026-09-09: set by the delete tests to make the server refuse an unforced delete,
 // the way it does for a receipt the floor has already drawn on.
 let refuseUnforcedDelete;
@@ -91,11 +93,11 @@ beforeEach(() => {
     if (u.includes('/api/stores/on-hand')) return res(200, []);
     if (u.includes('/api/master/items')) return res(200, []);
     if (u.includes('/api/stores/locations')) return res(200, []);
-    if (u.includes('/rest/v1/oab_data')) return res(200, [{ id: 6, data: JSON.stringify({ asl: [], pos: [] }), version: 1 }]);
+    if (u.includes('/rest/v1/oab_data')) return res(200, [{ id: 6, data: JSON.stringify(purchase6), version: 1 }]);
     return res(200, []);
   });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); purchase6 = { asl: [], pos: [] }; });
 
 const mount = (ui) => render(<MemoryRouter><AuthProvider><DataProvider>{ui}</DataProvider></AuthProvider></MemoryRouter>);
 
@@ -226,6 +228,77 @@ describe('Issues 2.7 §3 — Super Admin edits a booked GRN', () => {
     fireEvent.change(screen.getByLabelText('Edit supplier'), { target: { value: 'Someone else' } });
     fireEvent.click(screen.getByRole('button', { name: /Save paperwork/ }));
     await screen.findByText(/A GRN date is required/);
+  });
+});
+
+/* ── Issues 30.09 review: the PO is picked, never typed ─────────────────── */
+
+describe('Issues 30.09 — GRN Entries picks the PO from the supplier’s POs', () => {
+  const PO = (poNum, supplier, status, poDate, extra = {}) => ({
+    poNum, supplier, status, poDate, items: [{ item: 'BOPP 20mic', qty: 100, receivedQty: status === 'Closed' ? 100 : 0 }], ...extra,
+  });
+  beforeEach(() => {
+    purchase6 = {
+      asl: [],
+      pos: [
+        PO('PO-9', 'Jindal', 'Closed', '2026-08-20', { closedDate: '2026-09-01' }),   // this receipt closed it
+        PO('PO-11', 'Jindal', 'Open', '2026-09-05'),
+        PO('PO-12', 'Jindal', 'Cancelled', '2026-09-06', { cancelled: true }),
+        PO('PO-13', 'Siegwerk', 'Open', '2026-09-07'),
+        PO('PO-14', 'Jindal', 'Partial', '2026-09-08'),
+      ],
+    };
+  });
+  const options = (sel) => [...sel.options].map((o) => [o.value, o.text]);
+
+  it('is a list of the supplier’s open POs plus the PO the receipt carries — no typed box', async () => {
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Edit GRN/2026/1'));
+    const sel = await screen.findByLabelText('Edit PO number');
+    expect(sel.tagName).toBe('SELECT');
+    expect(screen.queryByRole('textbox', { name: 'Edit PO number' })).toBeNull();
+    await waitFor(() => expect(options(sel).map(([v]) => v)).toEqual(['', 'PO-14', 'PO-11', 'PO-9']));
+    expect(sel).toHaveValue('PO-9');
+    // newest first; never another supplier's, never a cancelled one; the receipt's own PO says why it is not open
+    expect(options(sel)).toEqual([
+      ['', '— no PO (direct purchase) —'], ['PO-14', 'PO-14 (part received)'], ['PO-11', 'PO-11'], ['PO-9', 'PO-9 (Closed)'],
+    ]);
+    expect(screen.getByText('2 open POs for Jindal.')).toBeInTheDocument();
+  });
+
+  it('sends the picked PO — and a blank for a direct purchase — and nothing else', async () => {
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Edit GRN/2026/1'));
+    const sel = await screen.findByLabelText('Edit PO number');
+    await waitFor(() => expect(within(sel).getByRole('option', { name: 'PO-11' })).toBeTruthy());
+    fireEvent.change(sel, { target: { value: 'PO-11' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save paperwork/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1')).toBe(true));
+    expect(calls.find((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1').body).toEqual({ poNum: 'PO-11' });
+    await screen.findByText(/updated/);
+
+    // the PO stays optional
+    calls.length = 0;
+    fireEvent.change(screen.getByLabelText('Edit PO number'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save paperwork/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1')).toBe(true));
+    expect(calls.find((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1').body).toEqual({ poNum: '' });
+  });
+
+  it('follows the supplier, and offers a PO raised after the editor opened once the list is opened', async () => {
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Edit GRN/2026/1'));
+    const sel = await screen.findByLabelText('Edit PO number');
+    await waitFor(() => expect(within(sel).getByRole('option', { name: 'PO-11' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Edit supplier'), { target: { value: 'Siegwerk' } });
+    expect(options(sel).map(([v]) => v)).toEqual(['', 'PO-13', 'PO-9']);
+    // the PO still named is Jindal's — the screen says so rather than guessing
+    expect(screen.getByText('PO-9 was raised on Jindal, not Siegwerk.')).toBeInTheDocument();
+
+    // the purchase desk raises one now; opening the list re-reads module 6
+    purchase6 = { ...purchase6, pos: [...purchase6.pos, PO('PO-15', 'Siegwerk', 'Open', '2026-09-30')] };
+    fireEvent.focus(sel);
+    await waitFor(() => expect(options(sel).map(([v]) => v)).toEqual(['', 'PO-15', 'PO-13', 'PO-9']));
   });
 });
 

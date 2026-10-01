@@ -158,7 +158,14 @@ function PendingForQuotation({ onMakeQuotation }) {
     try {
       await save('sales', (prev) => ({
         ...(prev || {}),
-        qc_reports: ((prev && prev.qc_reports) || []).map((x) => (x.id === r.id ? { ...x, needs_quote_review: false } : x)),
+        // 30.09 QT1: a report quoted before and answered again by the plant reads
+        // "Pending Quote" — reviewed means the quotation on file stands, so it is
+        // "Quoted" again and leaves the Pending list (clearing the flag alone left the
+        // row there, with no way to dismiss it short of a new quotation)
+        qc_reports: ((prev && prev.qc_reports) || []).map((x) => (x.id === r.id ? {
+          ...x, needs_quote_review: false,
+          ...(x.quoted_at && x.plant_comments ? { status: 'Quoted' } : {}),
+        } : x)),
       }), { retry: true });
       setMsg({ t: 'g', text: '✅ Marked reviewed.' });
     } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }

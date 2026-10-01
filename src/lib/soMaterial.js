@@ -50,6 +50,20 @@ export const netOut = (l) => Math.max(0, num(l && l.qtyIssued) - num(l && l.qtyR
 /** True when the line has a requirement the cap can be measured against. */
 export const hasCap = (line) => !!line && line.required != null && num(line.required) > 0;
 
+/** A unit as the server compares it (StoresService.normUom): Kg = Kgs = KG, No's = Nos. */
+export function normUom(u) {
+  const s = String(u ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return s.length > 1 && s.endsWith('s') ? s.slice(0, -1) : s;
+}
+export const sameUom = (a, b) => normUom(a) === normUom(b);
+
+/**
+ * The server's exemption: a roll counted in a different unit from the BOM line
+ * (both named) cannot be measured against it, so the cap does not apply to it.
+ */
+const otherUnit = (line, rollUom) => !!String(rollUom ?? '').trim() && !!String((line && line.uom) ?? '').trim()
+  && !sameUom(rollUom, line.uom);
+
 /** Allocated + issued net of returns — the server sends it; summed here when it does not. */
 export const coveredOf = (line) => (!line ? 0
   : line.covered != null ? num(line.covered) : num(line.allocated) + num(line.netIssued));
@@ -64,9 +78,12 @@ export const openOf = (line, pending = 0) => (hasCap(line) ? Math.max(0, num(lin
  *   increase  the NEW commitment this action adds (an allocation, or the part of an
  *             issue not drawn from this order's own hold on that roll)
  *   pending   what the slip being built already adds on top of `covered`
+ *   rollUom   the unit of the roll being added — none of the cap when it and the
+ *             line's unit are both named and differ (the server does the same)
  */
-export function bomCapBlock(line, { so, increase, pending = 0 }) {
+export function bomCapBlock(line, { so, increase, pending = 0, rollUom = '' }) {
   if (!hasCap(line) || !(num(increase) > 1e-9)) return null;
+  if (otherUnit(line, rollUom)) return null;
   const covered = coveredOf(line) + num(pending);
   if (covered + 1e-9 < num(line.required)) return null;
   const uom = line.uom ? ' ' + line.uom : '';
@@ -75,5 +92,10 @@ export function bomCapBlock(line, { so, increase, pending = 0 }) {
     + ' — no more can be allocated or issued against it.';
 }
 
-/** A BOM line is complete once what is allocated + issued (+ the slip) reaches the requirement. */
-export const isComplete = (line, pending = 0) => hasCap(line) && coveredOf(line) + num(pending) + 1e-9 >= num(line.required);
+/**
+ * A BOM line is complete once what is allocated + issued (+ the slip) reaches the
+ * requirement. With `rollUom`, asked for one roll: a roll in another unit than the
+ * line is never held back by it.
+ */
+export const isComplete = (line, pending = 0, rollUom = '') => hasCap(line) && !otherUnit(line, rollUom)
+  && coveredOf(line) + num(pending) + 1e-9 >= num(line.required);

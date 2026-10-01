@@ -95,7 +95,11 @@ function QcCsa() {
   function editReport(r) {
     const form = { ...CSA_BLANK };
     Object.keys(form).forEach((k) => { if (r[k] != null) form[k] = r[k]; });
-    setDraft({ skuId: r.sku_id || '', form, editId: r.id });
+    // 30.09 QT2: linkDirectCsa writes sku_id onto a DIRECT report once the desk quotes
+    // it — it is still a direct report (company, product, responsible person), so it
+    // opens in the direct form; read off sku_id it rebuilt as a Sales-OS report, blanked
+    // those fields and counted every untouched save as a change for the plant.
+    setDraft({ skuId: r.source === 'direct' ? '' : (r.sku_id || ''), form, editId: r.id });
     setReapprove(null);
     setMsg(null);
   }
@@ -163,6 +167,14 @@ function QcCsa() {
           // a report linked to its SKU after it was raised (a direct CSA the desk
           // quoted) keeps that link
           sku_id: x.sku_id || rebuilt.sku_id, lead_id: x.lead_id || rebuilt.lead_id,
+          // …and stays a DIRECT report: its source and the identity only it carries
+          ...(x.source === 'direct' ? {
+            source: 'direct',
+            company_name: rebuilt.company_name ?? x.company_name,
+            product_desc: rebuilt.product_desc ?? x.product_desc,
+            responsible_person: rebuilt.responsible_person ?? x.responsible_person,
+            party_kind: rebuilt.party_kind ?? x.party_kind,
+          } : {}),
           needs_pm_review: true, status: 'Pending Plant', plant_comments: '',
           // 30.09 QT1: a report the desk already quoted comes back to the desk
           // flagged "edited", so the quotation is re-checked against the change

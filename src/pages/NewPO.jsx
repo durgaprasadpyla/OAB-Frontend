@@ -27,9 +27,11 @@ function masterRowForRepPo(customers, repPo) {
   const named = (customers || []).filter((c) => sameName(c.customer, repPo.customer));
   const atLoc = named.filter((c) => sameName(c.dispatchLoc, repPo.loc));
   const wh = String(repPo.warehouse || '').trim();
-  return (wh && atLoc.find((c) => sameName(c.warehouseName, wh)))
-    || (!wh && atLoc.find((c) => !String(c.warehouseName || '').trim()))
-    || atLoc[0] || null;
+  // A warehouse the rep named that no row of the town carries (renamed, say) is NOT
+  // the town's first row — that may be the other group's (SWIGGY's), the very
+  // misattribution this fixes. No row then: the Superstar picks it.
+  if (wh) return atLoc.find((c) => sameName(c.warehouseName, wh)) || null;
+  return atLoc.find((c) => !String(c.warehouseName || '').trim()) || atLoc[0] || null;
 }
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
@@ -54,6 +56,8 @@ export default function NewPO() {
   // read back as the first, warehouse and all — so the picker keeps the row's key
   // and the warehouse is taken FROM THAT ROW rather than looked up by name again.
   const [locKey, setLocKey] = useState('');
+  // 30.09 PE3: the warehouse on the rep's PO that no Customer Master row carries
+  const [whNotice, setWhNotice] = useState('');
   const [skus, setSkus] = useState([]);           // [{...jss, checked, qty}]
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
@@ -73,7 +77,7 @@ export default function NewPO() {
   // populateCustDropdown)
   const groups = useMemo(() => custGroups(mods.customers), [mods.customers]);
   useEffect(() => {
-    if (!repPo) return;
+    if (!repPo) { setWhNotice(''); return; }
     setPoNum(repPo.poNum || '');
     if (repPo.poDate) setPoDate(repPo.poDate);
     // 28.09 §Superstar ¶1 / 30.09 PE3: the rep's PO names the WAREHOUSE as well as the
@@ -83,9 +87,14 @@ export default function NewPO() {
     const match = masterRowForRepPo(mods.customers, repPo);
     const first = (mods.customers || []).find((c) => sameName(c.customer, repPo.customer)) || null;
     const row = match || first;
+    // the rep named a warehouse the Customer Master has no row for: keep the customer,
+    // but leave the despatch row unpicked and say why
+    const wh = String(repPo.warehouse || '').trim();
+    const whMissing = !!wh && !match && !!first;
+    setWhNotice(whMissing ? wh : '');
     setGroup(row ? String(row.group || '').trim() : '');
     setCustomer(row ? String(row.customer || '').trim() : (repPo.customer || ''));
-    setLoc(match ? String(match.dispatchLoc || '') : (repPo.loc || ''));
+    setLoc(match ? String(match.dispatchLoc || '') : (whMissing ? '' : (repPo.loc || '')));
     setLocKey(match ? locRowKey(match) : '');
     setSkus([]); setStep(1);
   }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -304,6 +313,16 @@ export default function NewPO() {
       // has FG in stock. The server assigns SO numbers in item order, so
       // created[i] corresponds to selPO[i]; only map when the lengths agree so a
       // mismatch never mis-attributes an allocation.
+      if (rp && created.length !== selPO.length) {
+        // 30.09 PE3: the FG chosen on the SKU step cannot be matched to its sale order
+        // when the server made a different number of them — say so, never drop it
+        const chosen = selPO.filter((r) => r.spec && num(r.fgQty) > 0);
+        if (chosen.length) {
+          alert(`The finished goods chosen were NOT applied (${chosen.map((r) => `${r.spec} × ${num(r.fgQty)}`).join(', ')}): `
+            + `${created.length} sale order(s) came back for ${selPO.length} line(s), so they could not be matched to their sale orders. `
+            + 'Draw them down from the FG screen.');
+        }
+      }
       if (created.length === selPO.length) {
         if (rp) {
           // 30.09 PE3: from a rep's PO the FG was chosen on the SKU step — apply it
@@ -416,6 +435,12 @@ export default function NewPO() {
                 <input value={loc} aria-label="Dispatch Location" onChange={(e) => { setLoc(e.target.value); setLocKey(''); }} placeholder="Dispatch location" />
               )}
               <div style={{ fontSize: 11, color: 'var(--g)', marginTop: 3 }}>{warehouse ? '🏭 Warehouse: ' + warehouse : ''}</div>
+              {whNotice && !locKey && (
+                <div className="al al-y" style={{ marginTop: 4, fontSize: 11 }} role="status" aria-label="Rep warehouse not in the Customer Master">
+                  ⚠ The sales rep&rsquo;s warehouse &ldquo;{whNotice}&rdquo; is not in the Customer Master for {customer || (repPo && repPo.customer)}
+                  {repPo && repPo.loc ? ` at ${repPo.loc}` : ''} — pick the despatch location row it should go to.
+                </div>
+              )}
             </div>
             <div className="fg" />
           </div>

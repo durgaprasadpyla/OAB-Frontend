@@ -257,16 +257,21 @@ export function structureFromLayers(layers) {
 
 /** The layers back out of a saved spec, for editing one that already exists. */
 export function layersOfSpec(spec) {
+  // 30.09: the micron options are normalised ("35 MIC" → "35"); a layer saved from the
+  // raw Item Master text is normalised the same way when the spec is opened, so the
+  // select lands on "35" instead of offering "35 MIC (not in the master)" beside it —
+  // and the next save writes the clean value. Text with no number in it stays as is.
+  const mic = (v) => micronValue(v) || s(v);
   const at = (i) => ({
     material: s(spec && spec[`material${i}`]),
     specialty: s(spec && spec[`specialty${i}`]),
-    microns: s(spec && spec[`microns${i}`]),
+    microns: mic(spec && spec[`microns${i}`]),
   });
   const out = [at(1), at(2), at(3)];
   // A spec saved before the layers existed carries only the composed string; its
   // first layer is that text, so the form opens on what the spec actually says.
   if (!out[0].material) {
-    out[0] = { material: s(spec && spec.material).split('+')[0].trim(), specialty: '', microns: s(spec && spec.mic) };
+    out[0] = { material: s(spec && spec.material).split('+')[0].trim(), specialty: '', microns: mic(spec && spec.mic) };
   }
   return out;
 }

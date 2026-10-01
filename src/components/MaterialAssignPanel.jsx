@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { storesApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { bomMaterialForSOByDept, hasBOM, plannedBomMap, NO_DEPARTMENT } from '../lib/bom.js';
@@ -189,7 +189,12 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
   const [pick, setPick] = useState({});          // itemCode -> { unitId, qty }
   const [showAll, setShowAll] = useState(false); // rolls beyond the BOM's own items
 
+  // Only the newest read lands: a slower answer for an order the panel has moved off
+  // (or an earlier read of this one) must not overwrite the current position.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const current = () => seq === loadSeq.current;
     setErr('');
     try {
       const [m, u] = await Promise.all([
@@ -198,13 +203,17 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
       ]);
       // An older server has no /so-material: the holds alone, as before.
       const a = m ? m.allocations : await storesApi.allocations(so);
+      if (!current()) return;
       setMat(m);
       setHeld(Array.isArray(a) ? a : []);
       setIssued(m ? m.issues.filter((l) => netOut(l) > 0) : []);
       setFree(Array.isArray(u) ? u : []);
-    } catch (e) { setErr(e.message || 'Could not read the stores position'); }
+    } catch (e) { if (current()) setErr(e.message || 'Could not read the stores position'); }
   }, [so]);
+  // A different order: nothing of the last one's position stays on screen meanwhile.
+  useEffect(() => { setMat(null); setHeld([]); setIssued([]); setPick({}); }, [so]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => () => { loadSeq.current += 1; }, []);
 
   // The BOM, scaled to THIS order — its PO quantity.
   const rec = bom && bom[spec];

@@ -233,7 +233,11 @@ export default function PlanReadiness() {
           {/* 30.09: the BOM is scaled on the ORDER quantity, not the balance — what has
               been issued to an order is a lifetime figure, and the stores desk and the
               server's BOM cap measure it against the whole order too. */}
+          {/* Keyed by the order: switching orders starts a fresh panel, so the last
+              order's holds, issues and coverage never show (or disable Assign) under
+              the new one while its position loads. */}
           <MaterialAssignPanel
+            key={pickedRow.so}
             so={pickedRow.so}
             spec={pickedRow.spec}
             material={pickedRow.substrate}

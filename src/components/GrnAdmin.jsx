@@ -2,6 +2,8 @@ import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
 import { fmtDate, rupees, dash } from '../lib/format.js';
+import { isOpenPo, poStatus, PO_STATUS_LABELS } from '../lib/poLines.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 
 // Issues 2.7 — GRN Entries (Super Admin).
 //
@@ -24,6 +26,7 @@ import { fmtDate, rupees, dash } from '../lib/format.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const s = (v) => (v == null ? '' : String(v));
+const low = (v) => s(v).trim().toLowerCase();
 
 export default function GrnAdmin() {
   const [rows, setRows] = useState([]);
@@ -275,6 +278,38 @@ export function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
   }), [grn]);
   const dirty = Object.keys(original).some((k) => head[k] !== original[k]);
 
+  /*
+   * Issues 30.09 §PU2/§S7b review — the PO a receipt is booked against is PICKED here
+   * too, never typed: a typed number spelt differently from the PO is a GRN the purchase
+   * login can never find to link, and a PO that never closes itself. Offered: the POs
+   * still expected (lib/poLines isOpenPo — never a closed or cancelled one), only the
+   * supplier's once one is named, plus the value the receipt already carries (often a PO
+   * this very receipt closed) so it still reads correctly. No PO stays allowed (a direct
+   * purchase). Module 6 is re-read on open and whenever the list is opened, so a PO the
+   * purchase desk raised a minute ago is there; the server canonicalises the number and
+   * refuses a cancelled PO either way.
+   */
+  const { mods } = useData() || {};
+  const { refresh: refreshPurchase } = useFreshModule('purchase');
+  const pos = useMemo(() => (mods && mods.purchase && Array.isArray(mods.purchase.pos) ? mods.purchase.pos : []), [mods]);
+  const poOptions = useMemo(() => {
+    const sup = low(head.supplier);
+    return pos.filter((p) => p && p.poNum && isOpenPo(p) && (!sup || low(p.supplier) === sup))
+      .sort((a, b) => s(b.poDate).localeCompare(s(a.poDate)));
+  }, [pos, head.supplier]);
+  // The receipt's own PO and the one now picked stay listed even when no longer open.
+  const extraPos = [...new Set([original.poNum, head.poNum].filter((n) => n && !poOptions.some((p) => p.poNum === n)))]
+    .map((n) => ({ poNum: n, po: pos.find((p) => low(p.poNum) === low(n)) || null }));
+  const pickedPo = head.poNum ? pos.find((p) => low(p.poNum) === low(head.poNum)) || null : null;
+  const otherSupplier = !!(pickedPo && s(pickedPo.supplier).trim() && head.supplier.trim() && low(pickedPo.supplier) !== low(head.supplier));
+
+  /** Picking a PO names its supplier when the receipt has none. */
+  function pickPo(poNum) {
+    const po = pos.find((p) => p.poNum === poNum) || null;
+    const sup = po ? s(po.supplier).trim() : '';
+    setHead({ ...head, poNum, supplier: !head.supplier.trim() && sup ? sup : head.supplier });
+  }
+
   async function saveHead() {
     if (busy || !dirty) return;
     if (!head.grnDate) { flash('r', 'A GRN date is required.'); return; }
@@ -305,8 +340,28 @@ export function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
           <input value={grn.grnNo} readOnly tabIndex={-1} aria-label="GRN number"
             title="The receipt's identity — quoted on the supplier's invoice"
             style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></div>
-        <div className="fg"><label>PO Number</label>
-          <input value={head.poNum} aria-label="Edit PO number" onChange={(e) => setHead({ ...head, poNum: e.target.value })} /></div>
+        <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
+          <select value={head.poNum} aria-label="Edit PO number" onChange={(e) => pickPo(e.target.value)}
+            onFocus={() => refreshPurchase()}>
+            <option value="">— no PO (direct purchase) —</option>
+            {poOptions.map((p) => (
+              <option key={p.poNum} value={p.poNum}>
+                {p.poNum}{head.supplier.trim() ? '' : ` · ${p.supplier || '—'}`}{poStatus(p) === 'Partial' ? ' (part received)' : ''}
+              </option>
+            ))}
+            {extraPos.map(({ poNum, po }) => (
+              <option key={'x' + poNum} value={poNum}>
+                {poNum}{po ? ` (${PO_STATUS_LABELS[poStatus(po)] || poStatus(po)})` : ''}
+              </option>
+            ))}
+          </select>
+          <div className="pg-sub" style={{ margin: '3px 0 0' }}>
+            {otherSupplier
+              ? `${pickedPo.poNum} was raised on ${pickedPo.supplier}, not ${head.supplier.trim()}.`
+              : poOptions.length
+                ? `${poOptions.length} open PO${poOptions.length === 1 ? '' : 's'}${head.supplier.trim() ? ` for ${head.supplier.trim()}` : ''}.`
+                : head.supplier.trim() ? `No open PO for ${head.supplier.trim()}.` : 'No open purchase orders.'}
+          </div></div>
         <div className="fg"><label>Supplier</label>
           <input value={head.supplier} aria-label="Edit supplier" onChange={(e) => setHead({ ...head, supplier: e.target.value })} /></div>
         <div className="fg"><label>GRN Date *</label>

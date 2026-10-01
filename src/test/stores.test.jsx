@@ -34,9 +34,10 @@ const UNITS = [
     parentUnitId: 11, receivedAt: '2026-08-20T10:00:00Z' },
 ];
 
-let calls;
+let calls, extraPos;
 beforeEach(() => {
   calls = [];
+  extraPos = [];
   localStorage.clear();
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_role', 'stores');
@@ -82,7 +83,9 @@ beforeEach(() => {
               { poNum: 'BLM/PUR/2026-2027/6', poDate: '2026-08-10', supplier: 'Cosmos Films', status: 'Closed',
                 items: [{ itemCode: 'FILM-BOPP20', item: 'BOPP Film 20mic', qty: 100, unit: 'Kg', rate: 118, receivedQty: 100 }] },
               { poNum: 'BLM/PUR/2026-2027/8', poDate: '2026-08-22', supplier: 'Sun Chemical', status: 'Cancelled', cancelled: true,
-                items: [{ itemCode: 'INK-WHITE', item: 'White Ink', qty: 20, unit: 'Kg', rate: 300, receivedQty: 0 }] }],
+                items: [{ itemCode: 'INK-WHITE', item: 'White Ink', qty: 20, unit: 'Kg', rate: 300, receivedQty: 0 }] },
+              // POs Purchase raises AFTER the stores desk signed in (review P1)
+              ...extraPos],
       }), version: 1 }]);
     }
     return res(200, []);
@@ -225,6 +228,37 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     // Sun Chemical's only PO is cancelled — nothing to receive against
     expect([...screen.getByLabelText('Purchase order').options].map((o) => o.value)).toEqual(['']);
     expect(screen.getByText(/No open PO for Sun Chemical/)).toBeInTheDocument();
+  });
+
+  it('sees a PO Purchase raised after sign-in — on opening the GRN, on opening the PO list, and on the PO tab (review P1)', async () => {
+    const user = userEvent.setup();
+    const newPo = (n) => ({ poNum: `BLM/PUR/2026-2027/${n}`, poDate: '2026-09-30', supplier: 'Cosmos Films', status: 'Open',
+      items: [{ itemCode: 'FILM-BOPP20', item: 'BOPP Film 20mic', qty: 50, unit: 'Kg', rate: 120, receivedQty: 0 }] });
+    mount();
+    await screen.findByText('FILM-BOPP20');                  // signed in, module 6 loaded
+    const reads6 = () => calls.filter((c) => c.u.includes('oab_data') && c.method === 'GET').length;
+    await waitFor(() => expect(reads6()).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));            // the sign-in read has landed
+
+    // the purchase desk raises a PO while the stores desk sits on its board
+    extraPos.push(newPo(9));
+    await user.click(screen.getByText(/GRN/));
+    await screen.findByText('📥 New goods receipt');
+    const opts = () => [...screen.getByLabelText('Purchase order').options].map((o) => o.value);
+    await waitFor(() => expect(opts()).toContain('BLM/PUR/2026-2027/9'));
+
+    // …and another a minute later: opening the PO list reads module 6 again
+    extraPos.push(newPo(10));
+    expect(opts()).not.toContain('BLM/PUR/2026-2027/10');
+    fireEvent.focus(screen.getByLabelText('Purchase order'));
+    await waitFor(() => expect(opts()).toContain('BLM/PUR/2026-2027/10'));
+    fireEvent.change(screen.getByLabelText('Purchase order'), { target: { value: 'BLM/PUR/2026-2027/10' } });
+    expect(screen.getByLabelText('Supplier')).toHaveValue('Cosmos Films');
+
+    // the Purchase Orders tab re-reads it on opening too
+    extraPos.push(newPo(11));
+    await user.click(screen.getByText('📄 Purchase Orders'));
+    expect(await screen.findByText('BLM/PUR/2026-2027/11')).toBeInTheDocument();
   });
 
   it('receives a GRN with the supplier label, internal code, location, price and expiry', async () => {

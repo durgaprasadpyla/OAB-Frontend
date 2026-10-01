@@ -10,6 +10,7 @@ import { inr, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import StoresIssueHistory, { HISTORY_LIMIT } from '../components/StoresIssueHistory.jsx';
 import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
 
@@ -118,6 +119,8 @@ export function OnHand({ flash: flashProp, readOnly = false }) {
   // Admin can move it onto the code that replaced them (360 was a duplicate of 082).
   const [withdrawn, setWithdrawn] = useState([]);
   const [moveTo, setMoveTo] = useState({});   // withdrawn itemId → target itemId
+  // Moving that stock is a write: only on the Super Admin's own, writable board.
+  const canMove = role === 'superadmin' && !readOnly;
   const [q, setQ] = useState('');
   const [fMat, setFMat] = useState('');
   const [fSub, setFSub] = useState('');
@@ -335,14 +338,16 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
           material was already allocated to the other item code." Neither desk can act
           on it — only the Super Admin can move that stock — so it is now shown where
           it can actually be dealt with, and nowhere else. */}
+      {/* Issues 30.09 SA2: on the Super Admin's read-only Stock on Hand tab the warning
+          stays, but the move (a write) is not offered — it is done from /stores. */}
       {withdrawn.length > 0 && role === 'superadmin' && (
         <div className="al al-y" style={{ marginBottom: 6 }} aria-label="Withdrawn items holding stock">
           <b>{withdrawn.length} item{withdrawn.length === 1 ? '' : 's'} deleted from the Item Master still hold stock.</b>{' '}
           They are no longer offered anywhere in Stores and cannot be issued.
-          {' Move each one’s stock onto the item code that replaced it:'}
+          {canMove ? ' Move each one’s stock onto the item code that replaced it:' : ' Their stock is moved onto the replacing item code from the Stores screen.'}
           <div className="tw" style={{ marginTop: 6 }}><table>
             <thead><tr><th>Item code</th><th>Description</th><th>Material</th><th style={{ textAlign: 'right' }}>Stock</th><th style={{ textAlign: 'right' }}>Rolls</th>
-              {role === 'superadmin' && <th style={{ minWidth: 260 }}>Move stock onto</th>}</tr></thead>
+              {canMove && <th style={{ minWidth: 260 }}>Move stock onto</th>}</tr></thead>
             <tbody>
               {withdrawn.map((w) => {
                 const same = rows.filter((r) => String(r.materialType || '').trim().toLowerCase() === String(w.materialType || '').trim().toLowerCase()
@@ -354,7 +359,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                     <td style={{ fontSize: 11 }}>{[w.materialType, w.subGroup, w.specialtyName].filter(Boolean).join(' / ') || '—'}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(w.closingStock)} {w.uom || ''}</td>
                     <td style={{ textAlign: 'right' }}>{w.unitCount}</td>
-                    {role === 'superadmin' && (
+                    {canMove && (
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           <select value={moveTo[w.id] || ''} onChange={(e) => setMoveTo((m) => ({ ...m, [w.id]: e.target.value }))}
@@ -756,6 +761,11 @@ const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: ''
 
 function Grn({ flash }) {
   const { mods, reloadModule } = useData();
+  // Review P1: module 6 was read only at sign-in, so a PO Purchase raised after the
+  // stores desk signed in could not be picked here (the PO list is closed now) and
+  // the receipt went in as a direct purchase that never moved the PO. Re-read it when
+  // the tab opens, and again whenever the desk opens the PO list.
+  const { refresh: refreshPurchase } = useFreshModule('purchase');
   const [items, setItems] = useState([]);
   const [grns, setGrns] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -1090,7 +1100,7 @@ function Grn({ flash }) {
               purchase login links its GRN by this, and the PO closes itself by it. A
               receipt with no PO behind it (a direct purchase) is still allowed. */}
           <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
-            <select value={head.poNum} onChange={(e) => pickPo(e.target.value)} aria-label="Purchase order">
+            <select value={head.poNum} onChange={(e) => pickPo(e.target.value)} onFocus={() => refreshPurchase()} aria-label="Purchase order">
               <option value="">— no PO (direct purchase) —</option>
               {poOptions.map((p) => (
                 <option key={p.poNum} value={p.poNum}>
@@ -1373,6 +1383,74 @@ const blankChild = () => ({ rolls: '1', widthMm: '', weightKg: '', internalCode:
  */
 export const SO_SOURCE = 'open';
 
+/** The most issue lines one Close to Return call may name (Contract 6, StoresService.MAX_CLOSE_BATCH). */
+export const CLOSE_BATCH = 500;
+
+/**
+ * Close to Return for any number of issue lines (review H1). The server closes at most
+ * CLOSE_BATCH per call and refuses the whole request above that — and "Select every
+ * open issue line shown" ticks every open line of up to HISTORY_LIMIT rows, which is
+ * exactly the desk's big clean-up. So the ids go in slices and the answers are added
+ * up into one { closed, lines, skipped }.
+ *
+ *   bulk(slice)  the bulk close (POST /issue-lines/close)
+ *   one(id)      the 24.09 one-line close — used for every line from the first slice
+ *                on which the server says it has no bulk close (404 / 405)
+ *
+ * A slice the server refuses is reported line by line as not closed; only when nothing
+ * at all went through is that error raised, as a single call's would be.
+ */
+export async function closeLinesInSlices(ids, { bulk, one }) {
+  const out = { closed: 0, lines: [], skipped: [] };
+  let hasBulk = true;
+  let failed = null;
+  for (let i = 0; i < ids.length; i += CLOSE_BATCH) {
+    const slice = ids.slice(i, i + CLOSE_BATCH);
+    if (hasBulk) {
+      try {
+        const r = await bulk(slice);
+        const skipped = Array.isArray(r && r.skipped) ? r.skipped : [];
+        out.skipped.push(...skipped);
+        out.closed += r && r.closed != null ? num(r.closed) : slice.length - skipped.length;
+        if (r && Array.isArray(r.lines)) out.lines.push(...r.lines);
+        continue;
+      } catch (e) {
+        if (e.status !== 404 && e.status !== 405) {
+          failed = failed || e;
+          slice.forEach((id) => out.skipped.push({ txnId: id, reason: e.message || 'not closed' }));
+          continue;
+        }
+        hasBulk = false;
+      }
+    }
+    for (const id of slice) {
+      try {
+        const l = await one(id);
+        out.closed += 1;
+        out.lines.push((l && l.lineNo) || '#' + id);
+      } catch (err) { out.skipped.push({ txnId: id, reason: err.message }); }
+    }
+  }
+  if (failed && out.closed === 0) throw failed;
+  return out;
+}
+
+/**
+ * Put a roll on the slip being built. One roll is ONE line of a slip — the server
+ * refuses a slip that names the same roll twice ("combine the quantities") — so more
+ * of a roll already on it is added to that line, which keeps the hold it was issued
+ * against (or takes this one's).
+ */
+export function mergeIntoSlip(basket, row) {
+  const i = basket.findIndex((b) => String(b.unitId) === String(row.unitId));
+  if (i < 0) return [...basket, row];
+  return basket.map((b, j) => (j !== i ? b : {
+    ...b,
+    qty: +(num(b.qty) + num(row.qty)).toFixed(3),
+    ...(b.allocationId == null && row.allocationId != null ? { allocationId: row.allocationId } : {}),
+  }));
+}
+
 /**
  * Issues as on 30.09 (S3): "for a particular SO, based on the BOM quantities only, the
  * allocation should happen. The stores guy should know that according to the BOM for
@@ -1521,7 +1599,7 @@ function IssuesReturns({ flash }) {
       + `consumed and none of it is coming back, and takes the line off this list. Stock is not changed.`)) return;
     try {
       await storesApi.closeIssueLine(line.txnId, true);
-      if (String(issueLinePick) === String(line.txnId)) { setIssueLinePick(''); }
+      if (String(issueLinePick) === String(line.txnId)) dropPickedLine();
       await loadIssueLines(); await loadTxns();
       flash('g', `${line.lineNo || line.slipNo} closed — it is off the return list.`);
     } catch (e) { flash('r', e.message); }
@@ -1552,31 +1630,25 @@ function IssuesReturns({ flash }) {
       const skipped = Array.isArray(r && r.skipped) ? r.skipped : [];
       const skippedIds = new Set(skipped.map((x) => String(x.txnId)));
       const done = ids.filter((id) => !skippedIds.has(String(id)));
-      if (done.some((id) => String(id) === String(issueLinePick))) setIssueLinePick('');
+      if (done.some((id) => String(id) === String(issueLinePick))) dropPickedLine();
       await loadTxns(); await loadIssueLines();
-      const why = skipped.map((x) => `${x.lineNo || names[ids.indexOf(Number(x.txnId))] || '#' + x.txnId} (${x.reason || 'not closed'})`).join('; ');
+      const whys = skipped.map((x) => `${x.lineNo || names[ids.indexOf(Number(x.txnId))] || '#' + x.txnId} (${x.reason || 'not closed'})`);
+      const why = whys.slice(0, 15).join('; ') + (whys.length > 15 ? `; and ${whys.length - 15} more` : '');
       const n = r && r.closed != null ? num(r.closed) : done.length;
       if (n > 0) flash(skipped.length ? 'y' : 'g', `Closed ${n} line(s) — they are off the returns dropdown.${why ? ' Not closed: ' + why + '.' : ''}`);
       else flash('r', `Nothing was closed.${why ? ' ' + why + '.' : ''}`);
       return done.length ? done : null;
     } catch (e) { flash('r', e.message); return null; }
   }
-  /** The bulk call; against a backend that predates it, the 24.09 one-line call per line. */
-  async function closeLinesOnServer(ids) {
-    try {
-      return await storesApi.closeIssueLines(ids, true);
-    } catch (e) {
-      if (e.status !== 404 && e.status !== 405) throw e;
-      const out = { closed: 0, lines: [], skipped: [] };
-      for (const id of ids) {
-        try {
-          const l = await storesApi.closeIssueLine(id, true);
-          out.closed += 1;
-          out.lines.push((l && l.lineNo) || '#' + id);
-        } catch (err) { out.skipped.push({ txnId: id, reason: err.message }); }
-      }
-      return out;
-    }
+  /**
+   * The bulk call, CLOSE_BATCH lines at a time (review H1 — see closeLinesInSlices);
+   * against a backend that predates it, the 24.09 one-line call per line.
+   */
+  function closeLinesOnServer(ids) {
+    return closeLinesInSlices(ids, {
+      bulk: (slice) => storesApi.closeIssueLines(slice, true),
+      one: (id) => storesApi.closeIssueLine(id, true),
+    });
   }
   useEffect(() => { if (mode === 'return') loadIssueLines(); }, [mode, loadIssueLines]);
   const issueSlips = useMemo(() => [...new Set(issueLines.map((l) => l.slipNo).filter(Boolean))], [issueLines]);
@@ -1792,6 +1864,7 @@ function IssuesReturns({ flash }) {
   function chooseItem(id) {
     setItemId(id);
     setForm((f) => ({ ...f, unitId: '' }));
+    preselectOff.current = '';   // choosing an item (even the same one again) preselects afresh
     const it = items.find((x) => String(x.id) === String(id));
     if (it) {
       setFMat(String(it.materialType || '').trim());
@@ -1806,11 +1879,27 @@ function IssuesReturns({ flash }) {
   }, [flash]);
   useEffect(() => { loadUnits(itemId); }, [itemId, loadUnits]);
 
+  /**
+   * What picking an issue line filled in from it, so that closing that line can take it
+   * back out (review H3): left standing, the roll alone let Return book an UNLINKED
+   * return against the roll of a line that had just been closed.
+   */
+  const lineFill = useRef(null);   // { itemId, so, department } — each null when the desk set it, not the line
+
   /** A picked issue line names the roll: the item and the unit follow it. */
   function pickIssueLine(txnId) {
     setIssueLinePick(txnId);
     const l = issueLines.find((x) => String(x.txnId) === String(txnId));
     if (!l) return;
+    const prev = lineFill.current;
+    // the form keeps a value it already had (`f.so || l.so` below): it is the line's
+    // when it was empty, or when an earlier picked line had put it there
+    const fromLine = (cur, v, was) => (!cur ? (v || null) : (was && was === cur ? cur : null));
+    lineFill.current = {
+      itemId: String(l.itemId) !== String(itemId) || (prev && prev.itemId === String(itemId)) ? String(l.itemId) : null,
+      so: fromLine(form.so, l.so, prev && prev.so),
+      department: fromLine(form.department, l.department, prev && prev.department),
+    };
     if (String(l.itemId) !== String(itemId)) {
       setItemId(String(l.itemId));
       const it = items.find((x) => String(x.id) === String(l.itemId));
@@ -1818,6 +1907,21 @@ function IssuesReturns({ flash }) {
     }
     setForm((f) => ({ ...f, unitId: String(l.unitId), so: f.so || l.so || '', department: f.department || l.department || '' }));
     setChildren([blankChild()]);
+  }
+
+  /** The picked line was closed: let it go, and everything it filled in with it. */
+  function dropPickedLine() {
+    const fill = lineFill.current;
+    lineFill.current = null;
+    setIssueLinePick('');
+    setForm((f) => ({
+      ...f, unitId: '', qty: '',
+      so: fill && fill.so && f.so === fill.so ? '' : f.so,
+      department: fill && fill.department && f.department === fill.department ? '' : f.department,
+    }));
+    if (fill && fill.itemId && String(itemId) === fill.itemId) setItemId('');
+    setChildren([blankChild()]);
+    setSplit(false);
   }
 
   // Issues 30.09 S6: "by default all slips are shown" — the history read the newest 60.
@@ -1984,13 +2088,21 @@ function IssuesReturns({ flash }) {
   const chosenLine = (mode === 'issue' && soChosen && itemId) ? lineOf(itemId, (chosenItem || {}).code) : null;
   const slipAdds = chosenLine ? slipIncrease(itemId) : 0;
   const lineDone = isComplete(chosenLine, slipAdds);
+  // Review A5: the cap is the server's, and the server does not apply it to a roll
+  // counted in another unit than the BOM line — so neither do the buttons.
+  const rollDone = selectedUnit ? isComplete(chosenLine, slipAdds, selectedUnit.uom) : lineDone;
+  const otherUnitRoll = lineDone && !rollDone;
   // what this order's own hold on the picked roll still has to give — converting a
   // hold into an issue is never capped
   const ownLeft = selectedUnit ? Math.max(0, heldMine(selectedUnit.id, selectedUnit.internalCode) - inBasket(selectedUnit.id)) : 0;
-  const capReason = lineDone ? `The BOM line for ${chosenLine.itemCode} on ${form.so} is complete — no more can be allocated or issued` : '';
-  // S2: an allocated roll of the chosen item that is not on the slip yet
+  const capReason = rollDone ? `The BOM line for ${chosenLine.itemCode} on ${form.so} is complete — no more can be allocated or issued` : '';
+  // S2: an allocated roll of the chosen item that is not on the slip yet. Review A4:
+  // only a hold for the department this slip goes to (or one that names none) — a roll
+  // held for Lamination cannot go on a Printing slip, so it is nothing to issue first.
+  const slipDept = norm(form.department);
   const waitingAlloc = (mode === 'issue' && soChosen && itemId)
-    ? soAlloc.find((a) => sameItem(a, itemId, (chosenItem || {}).code) && inBasket(a.unitId) + 1e-9 < num(a.qty)) || null
+    ? soAlloc.find((a) => sameItem(a, itemId, (chosenItem || {}).code) && inBasket(a.unitId) + 1e-9 < num(a.qty)
+      && (!slipDept || !norm(a.department) || norm(a.department) === slipDept)) || null
     : null;
 
   /**
@@ -2000,12 +2112,22 @@ function IssuesReturns({ flash }) {
    * picks (or clears) by hand is left alone.
    */
   const preselectKey = useRef('');
+  // Review A2: `${so}|${itemId}` the desk has just allocated a roll of. The reload that
+  // follows changes the holds — and the preselect put the roll just allocated straight
+  // back in the picker, so a second 📌 click allocated it again. The picker stays as
+  // the desk left it until another item (or order) is chosen.
+  const preselectOff = useRef('');
   useEffect(() => {
     if (mode !== 'issue' || !soChosen || !itemId) return;
-    const key = [form.so, itemId, units.map((u) => u.id).join(','), soAlloc.map((a) => `${a.id}:${a.qty}`).join(','), basket.length].join('|');
+    const key = [form.so, itemId, units.map((u) => u.id).join(','), soAlloc.map((a) => `${a.id}:${a.qty}`).join(','),
+      basket.map((b) => `${b.unitId}:${b.qty}`).join(',')].join('|');
     if (preselectKey.current === key) return;
     preselectKey.current = key;
     if (form.unitId) return;
+    if (preselectOff.current) {
+      if (preselectOff.current === `${form.so}|${itemId}`) return;
+      preselectOff.current = '';
+    }
     const left = (u) => Math.min(heldMine(u.id, u.internalCode), num(u.qtyRemaining)) - inBasket(u.id);
     const u = units.find((x) => (x.itemId == null || String(x.itemId) === String(itemId)) && left(x) > 1e-9);
     if (!u) return;
@@ -2063,18 +2185,50 @@ function IssuesReturns({ flash }) {
       return;
     }
     // S3: the BOM cap — the server's own rule, said before the slip is sent
-    const block = chosenLine ? bomCapBlock(chosenLine, { so: form.so, increase: increaseIf(selectedUnit, q), pending: slipAdds }) : null;
+    const block = chosenLine ? bomCapBlock(chosenLine, {
+      so: form.so, increase: increaseIf(selectedUnit, q), pending: slipAdds, rollUom: selectedUnit.uom,
+    }) : null;
     if (block) { flash('r', block); return; }
     // S2: "nudge the stores guy to issue that allocated roll first and only later anything else"
     if (waitingAlloc && !isMine(selectedUnit)
       && !window.confirm(`${waitingAlloc.internalCode} is allocated to ${form.so} for ${waitingAlloc.itemCode || (chosenItem || {}).code || 'this item'} — issue it first.\n\nAdd ${selectedUnit.internalCode} instead?`)) return;
-    setBasket((b) => [...b, {
+    // Review A1: one roll is one line of the slip — the server refuses a slip naming the
+    // same roll twice — so more of a roll already on it is added to that line.
+    // A roll this order holds goes out against that hold: the line carries it, so the
+    // banner shows it on the slip and a release takes it back off.
+    const sameRoll = (a) => a.unitId != null && String(a.unitId) === String(selectedUnit.id);
+    const hold = isMine(selectedUnit)
+      ? soAlloc.find((a) => sameRoll(a) && (!slipDept || !norm(a.department) || norm(a.department) === slipDept)) || soAlloc.find(sameRoll) || null
+      : null;
+    setBasket((b) => mergeIntoSlip(b, {
       unitId: selectedUnit.id, internalCode: selectedUnit.internalCode, itemId: chosenItem ? chosenItem.id : itemId,
       itemCode: chosenItem ? chosenItem.code : '', itemName: chosenItem ? chosenItem.name : '', uom: selectedUnit.uom || (chosenItem || {}).uom || '',
       widthMm: selectedUnit.widthMm, location: selectedUnit.location, qty: q,
-    }]);
+      ...(hold ? { allocationId: hold.id } : {}),
+    }));
     setForm((f) => ({ ...f, qty: '', unitId: '' }));
   }
+
+  /**
+   * Review A1: what of a hold can still go on the slip — only what is LEFT of it (the
+   * roll may already be on the slip, picked in the Roll list), and never into what
+   * other orders hold on the roll. Nothing left = the hold is on the slip.
+   */
+  const holdLeftToTake = (a) => {
+    if (a.unitId == null) return 0;
+    const onSlip = inBasket(a.unitId);
+    const roll = units.find((u) => String(u.id) === String(a.unitId));
+    // the roll's own figure when there is one; failing that the hold itself (an older
+    // server), and then nothing is known of other orders' holds either
+    const remaining = a.unitRemaining != null ? num(a.unitRemaining) : roll ? num(roll.qtyRemaining) : num(a.qty);
+    const away = roll && (a.unitRemaining != null || roll.qtyRemaining != null) ? heldOther(roll) : 0;
+    return Math.min(
+      Math.max(0, num(a.qty) - onSlip),
+      Math.max(0, heldMine(a.unitId, a.internalCode) - onSlip),
+      remaining - away - onSlip,
+    );
+  };
+  const holdOnSlip = (a) => a.unitId != null && inBasket(a.unitId) > 1e-9 && holdLeftToTake(a) <= 1e-9;
 
   /**
    * S2: one click puts an allocated roll on the slip — what is held for the order, for
@@ -2083,9 +2237,12 @@ function IssuesReturns({ flash }) {
    */
   function takeAllocated(a) {
     if (a.unitId == null) { flash('r', `${a.internalCode} cannot be put on the slip from here — pick it in the Roll list below.`); return; }
-    const remaining = a.unitRemaining != null ? num(a.unitRemaining) : num(a.qty);
-    const q = Math.min(num(a.qty), remaining - inBasket(a.unitId));
-    if (q <= 1e-9) { flash('r', `${a.internalCode} is already on the slip.`); return; }
+    const q = holdLeftToTake(a);
+    if (q <= 1e-9) {
+      flash('r', inBasket(a.unitId) > 1e-9 ? `${a.internalCode} is already on the slip.`
+        : `Nothing of ${a.internalCode} is left to issue against this hold.`);
+      return;
+    }
     const cur = String(form.department || '').trim();
     const wanted = a.department ? [a.department] : deptsOfItem(a.itemId, a.itemCode);
     const onRoute = (d) => (routeDepts.length ? routeDepts.find((r) => norm(r) === norm(d)) : d);
@@ -2096,22 +2253,29 @@ function IssuesReturns({ flash }) {
       flash('r', `${a.internalCode} goes to ${dept}; finish this ${cur} slip first — one slip goes to one department.`);
       return;
     }
-    setBasket((b) => [...b, {
+    setBasket((b) => mergeIntoSlip(b, {
       unitId: a.unitId, internalCode: a.internalCode, itemId: a.itemId, itemCode: a.itemCode || '', itemName: a.itemName || '',
       uom: a.uom || '', widthMm: a.widthMm, location: a.location, qty: +q.toFixed(3), allocationId: a.id,
-    }]);
+    }));
     if (norm(dept) !== norm(cur)) setForm((f) => ({ ...f, department: dept }));
     if (String(form.unitId) === String(a.unitId)) setForm((f) => ({ ...f, unitId: '', qty: '' }));
   }
 
   /** P3: release a hold from here — the roll goes back to the free stock. */
   async function releaseAlloc(a) {
+    // Review A7: a roll put on the slip for this hold leaves it with the hold — issued
+    // after the release it would be a NEW commitment (capped, or refused because another
+    // order may now hold the freed roll), and nothing on screen would say so.
+    const slipRows = basket.filter((b) => b.allocationId === a.id);
     if (!window.confirm(`Release ${a.internalCode} from ${form.so}?\n\n${qty(a.qty)} ${a.uom || ''} held for this order`
-      + `${sourceLabel(a.source) ? ` (allocated by ${sourceLabel(a.source)})` : ''} goes back to the free stock, and any order can then be given it.`)) return;
+      + `${sourceLabel(a.source) ? ` (allocated by ${sourceLabel(a.source)})` : ''} goes back to the free stock, and any order can then be given it.`
+      + (slipRows.length ? `\n\nIt is on the slip being built — it comes off the slip too.` : ''))) return;
     setBusy(true);
     try {
       await storesApi.releaseAllocation(a.id);
-      flash('g', `${a.internalCode} released from ${form.so} — it is free stock again.`);
+      if (slipRows.length) setBasket((b) => b.filter((x) => x.allocationId !== a.id));
+      flash('g', `${a.internalCode} released from ${form.so} — it is free stock again.`
+        + (slipRows.length ? ` It was taken off the slip; add it again from the Roll list if it is still going out.` : ''));
       setAllocTick((t) => t + 1);
       await loadUnits(itemId);
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
@@ -2137,7 +2301,7 @@ function IssuesReturns({ flash }) {
         + (inBasket(selectedUnit.id) ? ' (some of it is on this slip)' : '') + '.');
       return;
     }
-    const block = chosenLine ? bomCapBlock(chosenLine, { so: form.so, increase: q, pending: slipAdds }) : null;
+    const block = chosenLine ? bomCapBlock(chosenLine, { so: form.so, increase: q, pending: slipAdds, rollUom: selectedUnit.uom }) : null;
     if (block) { flash('r', block); return; }
     const depts = deptsOfItem(itemId, (chosenItem || {}).code);
     setBusy(true);
@@ -2147,6 +2311,8 @@ function IssuesReturns({ flash }) {
         department: form.department || (depts.length === 1 ? depts[0] : undefined), note: form.note || undefined,
       });
       flash('g', `📌 ${selectedUnit.internalCode} · ${qty(q)} ${selectedUnit.uom || ''} allocated to ${form.so} — held for this order until it is issued or released.`);
+      // A2: the reload below must not put the roll just allocated back in the picker
+      preselectOff.current = `${form.so}|${itemId}`;
       setForm((f) => ({ ...f, unitId: '', qty: '' }));
       setAllocTick((t) => t + 1);
       await loadUnits(itemId);
@@ -2254,6 +2420,13 @@ function IssuesReturns({ flash }) {
       await loadUnits(itemId); await loadTxns(); await loadNextCodes(); await loadIssueLines();
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
+
+  // Review H2: the history is memoised and must not redraw on every keystroke in this
+  // form — so it gets callbacks that never change, which call the current handlers.
+  const historyCbs = useRef({});
+  historyCbs.current = { reprint, closeToReturn };
+  const onHistoryReprint = useCallback((no) => historyCbs.current.reprint(no), []);
+  const onHistoryClose = useCallback((rows) => historyCbs.current.closeToReturn(rows), []);
 
   const itemDesc = (chosenItem || {}).name || '';
   const basketTotal = basket.reduce((s, b) => s + num(b.qty), 0);
@@ -2389,7 +2562,10 @@ function IssuesReturns({ flash }) {
                   </tr></thead>
                   <tbody>
                     {soAlloc.map((a) => {
-                      const onSlip = basket.some((b) => b.allocationId === a.id);
+                      // Review A1: read off the slip itself — the roll may have gone on it
+                      // from the Roll list — not only off a line this button made.
+                      const onSlip = holdOnSlip(a);
+                      const partly = !onSlip && a.unitId != null && inBasket(a.unitId) > 1e-9;
                       return (
                         <tr key={a.id}>
                           <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{a.internalCode}</td>
@@ -2407,7 +2583,7 @@ function IssuesReturns({ flash }) {
                               <button className="btn btn-g" style={{ height: 24, fontSize: 11, padding: '0 8px' }}
                                 disabled={busy || onSlip || a.unitId == null} aria-label={`Put ${a.internalCode} on the slip`}
                                 title={a.unitId == null ? 'Pick this roll in the Roll list below' : undefined}
-                                onClick={() => takeAllocated(a)}>{onSlip ? '✓ on slip' : '↧ Put on slip'}</button>
+                                onClick={() => takeAllocated(a)}>{onSlip ? '✓ on slip' : partly ? '↧ Put the rest on slip' : '↧ Put on slip'}</button>
                               <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }}
                                 disabled={busy} aria-label={`Release ${a.internalCode} from ${form.so}`}
                                 onClick={() => releaseAlloc(a)}>✕ Release</button>
@@ -2518,6 +2694,7 @@ function IssuesReturns({ flash }) {
                     Needs {qty(chosenLine.required)} {chosenLine.uom || ''}; allocated {qty(chosenLine.allocated)}, issued {qty(chosenLine.netIssued)}
                     {slipAdds > 0 ? `, on this slip ${qty(slipAdds)}` : ''}.
                     {ownLeft > 0 ? ' The roll allocated to this order can still go out.' : ''}
+                    {otherUnitRoll ? ` The roll picked is counted in ${selectedUnit.uom}, not ${chosenLine.uom} — the BOM line does not cap it.` : ''}
                   </div>
                 ) : hasCap(chosenLine) ? (
                   <div>
@@ -2539,12 +2716,12 @@ function IssuesReturns({ flash }) {
               </div>
             )}
             <div className="act" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
-              <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit || (lineDone && ownLeft <= 1e-9)}
-                title={lineDone && ownLeft <= 1e-9 ? capReason : undefined}>＋ Add to slip</button>
+              <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit || (rollDone && ownLeft <= 1e-9)}
+                title={rollDone && ownLeft <= 1e-9 ? capReason : undefined}>＋ Add to slip</button>
               {/* P3: hold the roll for the order without issuing it */}
               {soChosen && (
-                <button className="btn btn-s" onClick={allocateSelected} disabled={busy || !selectedUnit || lineDone}
-                  title={lineDone ? capReason : `Hold the roll for ${form.so} until it is issued or released`}
+                <button className="btn btn-s" onClick={allocateSelected} disabled={busy || !selectedUnit || rollDone}
+                  title={rollDone ? capReason : `Hold the roll for ${form.so} until it is issued or released`}
                   aria-label={selectedUnit ? `Allocate ${selectedUnit.internalCode} to ${form.so}` : `Allocate a roll to ${form.so}`}>
                   📌 Allocate to {form.so}
                 </button>
@@ -2750,7 +2927,9 @@ function IssuesReturns({ flash }) {
             <thead><tr><th>#</th><th>Internal Code</th><th>Location</th><th style={{ textAlign: 'right' }}>Width</th><th style={{ textAlign: 'right' }}>Remaining</th><th>Held for</th><th>Received</th><th>Status</th></tr></thead>
             <tbody>
               {units.map((u, i) => (
-                <tr key={u.id} className={num(u.qtyRemaining) <= 0 ? undefined : (i === 0 ? 'hi' : undefined)} style={num(u.qtyRemaining) <= 0 ? { opacity: 0.5 } : undefined}>
+                // Review A6: the roll the picker marks ① — the oldest one actually free —
+                // not simply the first, which another order may hold in full
+                <tr key={u.id} className={num(u.qtyRemaining) > 0 && u === fifoPick ? 'hi' : undefined} style={num(u.qtyRemaining) <= 0 ? { opacity: 0.5 } : undefined}>
                   <td>{i + 1}</td>
                   <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{u.internalCode}</td>
                   <td style={{ fontSize: 11 }}>{u.location || '—'}</td>
@@ -2769,7 +2948,7 @@ function IssuesReturns({ flash }) {
 
       {/* Issues 30.09 S4-S6: every slip, filterable, with the identity columns, and
           issue lines ticked here are closed to return in one go. */}
-      <StoresIssueHistory txns={txns} masterItems={masterItems} onReprint={reprint} onCloseLines={closeToReturn} />
+      <StoresIssueHistory txns={txns} masterItems={masterItems} onReprint={onHistoryReprint} onCloseLines={onHistoryClose} />
     </>
   );
 }

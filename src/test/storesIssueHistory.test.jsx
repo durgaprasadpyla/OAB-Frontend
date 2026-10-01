@@ -42,9 +42,9 @@ const LINES = [
 ];
 const lineNoOf = (id) => (TXNS.find((t) => t.id === id) || {}).lineNo;
 
-let posted, closed, bulkStatus, skipIds;
+let posted, closed, bulkStatus, skipIds, bulkFailIf;
 beforeEach(() => {
-  posted = []; closed = new Set(); bulkStatus = 200; skipIds = new Set();
+  posted = []; closed = new Set(); bulkStatus = 200; skipIds = new Set(); bulkFailIf = null;
   vi.doMock('../data.jsx', () => ({ useData: () => ({ mods: { purchase: { asl: [], pos: [] }, oab: { OAB: { SF: [{ so: '26/656', spec: 'A1319', customer: 'AMAZON', closed: false }, { so: '26/700', spec: 'A700', customer: 'ZEPTO', closed: false }], OT: [] } } }, save: vi.fn(), reloadModule: vi.fn() }) }));
   vi.doMock('../auth.jsx', () => ({ useAuth: () => ({ role: 'stores', user: 'store' }) }));
   vi.doMock('../lib/issueSlipPdf.js', () => ({ saveIssueSlipPdf: vi.fn(() => 'x.pdf'), buildIssueSlipPdf: vi.fn(), buildReturnSlipPdf: vi.fn() }));
@@ -57,6 +57,9 @@ beforeEach(() => {
       if (u.endsWith('/api/stores/issue-lines/close')) {
         if (bulkStatus !== 200) return res({ message: 'No static resource api/stores/issue-lines/close.' }, bulkStatus);
         const ids = body.txnIds || [];
+        // the server's own cap (StoresService.MAX_CLOSE_BATCH)
+        if (ids.length > 500) return res({ message: 'At most 500 lines can be closed at once.' }, 400);
+        if (bulkFailIf && bulkFailIf(ids)) return res({ message: 'The ledger is busy — try again.' }, 400);
         const skipped = ids.filter((id) => skipIds.has(id)).map((id) => ({ txnId: id, lineNo: lineNoOf(id), reason: 'everything on it has come back' }));
         const ok = ids.filter((id) => !skipIds.has(id));
         ok.forEach((id) => closed.add(id));
@@ -224,6 +227,137 @@ describe('Recent issues & returns — Close to Return (S4)', () => {
     await waitFor(() => expect(posted.filter((p) => /\/issue-lines\/\d+\/close\?closed=true$/.test(p.u)).map((p) => p.u.match(/issue-lines\/(\d+)/)[1])).toEqual(['101', '102']));
     expect(await screen.findByText(/Closed 2 line\(s\)/)).toBeInTheDocument();
     await waitFor(() => expect(within(rowOf('ISS/2026/78.1')).getByText('Closed')).toBeInTheDocument());
+  });
+});
+
+/** Ledger ids enough for more than one close call (the server takes at most 500). */
+const idsOf = (n) => Array.from({ length: n }, (_, i) => 1000 + i);
+
+describe('Recent issues & returns — a big Close to Return (review H1)', () => {
+  // "Select every open issue line shown" ticks every open line of up to 5000 history
+  // rows; the server refuses a close call naming more than 500 (the mock above does
+  // too). The desk's own call is closeLinesInSlices over the real stores API.
+  async function closeAll(ids) {
+    const { closeLinesInSlices, CLOSE_BATCH } = await import('../pages/Stores.jsx');
+    const { storesApi } = await import('../api.js');
+    expect(CLOSE_BATCH).toBe(500);
+    return closeLinesInSlices(ids, {
+      bulk: (slice) => storesApi.closeIssueLines(slice, true),
+      one: (id) => storesApi.closeIssueLine(id, true),
+    });
+  }
+
+  it('sends more than 500 ticked lines in slices the server accepts, and adds the answers up', async () => {
+    skipIds = new Set([1003, 1700]);
+    const r = await closeAll(idsOf(1022));
+    const calls = bulkPosts().map((p) => p.body);
+    expect(calls.map((b) => b.txnIds.length)).toEqual([500, 500, 22]);
+    expect(calls.every((b) => b.closed === true)).toBe(true);
+    expect(new Set(calls.flatMap((b) => b.txnIds)).size).toBe(1022);
+    expect(r.closed).toBe(1020);
+    expect(r.skipped.map((x) => x.txnId)).toEqual([1003, 1700]);
+    expect(r.lines).toHaveLength(1020);
+    expect(closed.size).toBe(1020);
+  });
+
+  it('says which slice the server refused — what went through stays closed', async () => {
+    bulkFailIf = (ids) => ids.length < 500;          // the last slice
+    const r = await closeAll(idsOf(520));
+    expect(bulkPosts()).toHaveLength(2);
+    expect(r.closed).toBe(500);
+    expect(r.skipped).toHaveLength(20);
+    expect(r.skipped[0]).toEqual({ txnId: 1500, reason: 'The ledger is busy — try again.' });
+  });
+
+  it('raises the server’s error when nothing at all was closed', async () => {
+    bulkFailIf = () => true;
+    await expect(closeAll(idsOf(600))).rejects.toThrow('The ledger is busy — try again.');
+    expect(bulkPosts()).toHaveLength(2);
+  });
+
+  it('falls back to the one-line call for every slice against a backend without the bulk close', async () => {
+    bulkStatus = 404;
+    const r = await closeAll(idsOf(510));
+    // tried once; once the bulk close is known to be missing it is not asked again
+    expect(bulkPosts()).toHaveLength(1);
+    expect(posted.filter((p) => /\/issue-lines\/\d+\/close\?closed=true$/.test(p.u))).toHaveLength(510);
+    expect(r.closed).toBe(510);
+  });
+
+  it('a few ticked lines are still one call, through the screen', async () => {
+    await mountIssues();
+    fireEvent.click(screen.getByLabelText('Select every open issue line shown'));
+    fireEvent.click(closeBtn());
+    await waitFor(() => expect(bulkPosts()).toHaveLength(1));
+    expect(bulkPosts()[0].body.txnIds).toEqual([101, 102]);
+  });
+});
+
+describe('Recent issues & returns — closing the line being returned against (review H3)', () => {
+  async function pickLine101() {
+    fireEvent.click(screen.getByText('↙ Receive a return'));
+    const lineSel = await screen.findByLabelText('Issue line');
+    await waitFor(() => expect(optionsOf(lineSel)).toEqual(['101', '102']));
+    fireEvent.change(lineSel, { target: { value: '101' } });
+    expect(await screen.findByLabelText('Picked issue line')).toHaveTextContent('ISS/2026/77.0');
+    // the line filled the item, the order and the department
+    await waitFor(() => expect(screen.getByLabelText('Item')).toHaveValue('37'));
+    expect(screen.getByLabelText('Sale order')).toHaveValue('26/656');
+  }
+  async function returnIsRefused() {
+    // what the line filled in went with it
+    expect(screen.getByLabelText('Item')).toHaveValue('');
+    expect(screen.getByLabelText('Sale order')).toHaveValue('');
+    expect(screen.queryByLabelText('Picked issue line')).toBeNull();
+    // so Return cannot book an UNLINKED return against the roll of the closed line
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '5' } });
+    fireEvent.click(screen.getByText(/Receive return &/));
+    expect(await screen.findByText('Pick the issue line (slip and roll) the material went out on.')).toBeInTheDocument();
+    expect(posted.some((p) => p.u.includes('/api/stores/returns'))).toBe(false);
+  }
+
+  it('Close to Return in the history', async () => {
+    await mountIssues();
+    await pickLine101();
+    tick('ISS/2026/77.0');
+    fireEvent.click(closeBtn());
+    expect(await screen.findByText(/Closed 1 line\(s\)/)).toBeInTheDocument();
+    await returnIsRefused();
+  });
+
+  it('the picked line’s own close button', async () => {
+    await mountIssues();
+    await pickLine101();
+    fireEvent.click(screen.getByLabelText('Close issue line ISS/2026/77.0'));
+    expect(await screen.findByText('ISS/2026/77.0 closed — it is off the return list.')).toBeInTheDocument();
+    await returnIsRefused();
+  });
+});
+
+describe('Recent issues & returns — typing in the form above does not redraw it (review H2)', () => {
+  it('is memoised, and the desk hands it callbacks that never change', async () => {
+    const realMod = await vi.importActual('../components/StoresIssueHistory.jsx');
+    expect(realMod.default.$$typeof).toBe(Symbol.for('react.memo'));
+    const renders = [];
+    vi.doMock('../components/StoresIssueHistory.jsx', async () => {
+      const real = await vi.importActual('../components/StoresIssueHistory.jsx');
+      const { memo, createElement } = await import('react');
+      const Spy = memo((p) => { renders.push(p); return createElement(real.default, p); });
+      return { ...real, default: Spy };
+    });
+    await mountIssues();
+    const before = renders.length;
+    expect(before).toBeGreaterThan(0);
+    ['a', 'ab', 'abc'].forEach((v) => fireEvent.change(screen.getByLabelText('Note'), { target: { value: v } }));
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '12' } });
+    expect(screen.getByLabelText('Note')).toHaveValue('abc');
+    expect(renders.length).toBe(before);
+    // the callbacks it got are the same functions every time, and still work
+    expect(new Set(renders.map((p) => p.onReprint)).size).toBe(1);
+    expect(new Set(renders.map((p) => p.onCloseLines)).size).toBe(1);
+    tick('ISS/2026/77.0');
+    fireEvent.click(closeBtn());
+    await waitFor(() => expect(bulkPosts()).toHaveLength(1));
   });
 });
 

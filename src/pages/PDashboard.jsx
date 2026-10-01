@@ -1436,10 +1436,11 @@ function PriceTrends() {
   );
 
   // Per-supplier billing summary: what we billed with this supplier in the period,
-  // honouring the item filter. (purchRenderPHBilling 12805)
+  // honouring the item filter. (purchRenderPHBilling 12805) A cancelled PO is not a
+  // bill — it left payables (Issues 30.09 S7a), so it is not billed or unpaid here either.
   const billing = useMemo(() => {
     if (!supFil) return null;
-    let sp = pos.filter((p) => p.supplier === supFil);
+    let sp = pos.filter((p) => p.supplier === supFil && poStatus(p) !== 'Cancelled');
     if (cutoff) sp = sp.filter((p) => String(p.poDate || '') >= cutoff);
     const rows = [];
     sp.forEach((po) => {

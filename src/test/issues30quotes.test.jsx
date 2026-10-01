@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { useState } from 'react';
 import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -14,7 +14,7 @@ import NewPO from '../pages/NewPO.jsx';
 import {
   skuOwnerRep, linkDirectCsa, quotableSkus, deskTiersForSku, deskItemForSku, parseMoq, saveRepQuote,
   quoteStatusOf, markQuotesSent, setQuoteAccepted, repTiersForSku, deskQuoteForSku, pendingRepPos, markPosPushed,
-  buildCsaRequest, sendSkuForCsa,
+  buildCsaRequest, sendSkuForCsa, repBook,
 } from '../lib/repFlow.js';
 import { quotesToSend, quoteFollowUps } from '../lib/repPortal.js';
 import { applyQuoteSideEffects } from '../lib/sales.js';
@@ -520,7 +520,8 @@ describe('QT5 — Quote Accepted', () => {
     const { saved } = openRep(accSales());
     await tab('✅ Quote Accepted');
     const card = await screen.findByLabelText('Add quotation by hand');
-    await userEvent.selectOptions(within(card).getByLabelText('Manual quotation customer'), 'L2');
+    // the Lead/Customer picker (kind 'customer' by default) names its select after the side
+    await userEvent.selectOptions(within(card).getByLabelText('Manual Customer'), 'L2');
     const opts = [...within(card).getByLabelText('Manual quotation SKU').options].map((o) => o.textContent);
     expect(opts).toEqual(expect.arrayContaining(['CSA done pouch', 'Desk quoted pouch']));
     expect(opts).not.toContain('No CSA pouch');
@@ -796,5 +797,244 @@ describe('Quotations end to end — rep → QC → plant → quote desk → rep 
     expect(r.mods.sales.pos[0].pushed_to_oab.so).toBe('26/401');
     const so = [...r.mods.oab.OAB.SF, ...r.mods.oab.OAB.OT].find((x) => x.so === '26/401');
     expect(so).toMatchObject({ spec: 'A1', customer: 'Beta Foods', poQty: 120000, poNum: 'PO-1', dispLoc: 'Nashik' });
+  }, 30000);   // eight logins in one test: well past vitest's 5 s default
+});
+
+/* ═══════════════ integration review — the quotation chain ═══════════════ */
+describe('Q2 — a direct CSA linked by the desk stays a direct report', () => {
+  const linked = () => {
+    const report = {
+      ...buildCsaReport(
+        { company_name: 'Zeta Foods', product_desc: '1kg Zeta Bag', responsible_person: 'Ravi', party_kind: 'customer', dispatch_type: 'Pouch', substrate1: 'PET', substrate1_val: 12 },
+        { sales: {}, skuId: '', user: 'qc1', uid: () => 'd1', now: new Date('2026-09-01T00:00:00Z') },
+      ),
+      plant_comments: 'ok', status: 'Quoted', quoted_at: '2026-09-05T00:00:00Z',
+    };
+    const out = linkDirectCsa(salesModule({ qc_reports: [report] }), 'd1', { uid: (p) => p + '9' });
+    expect(out.sales.qc_reports[0].sku_id).toBe('sku9');                // the desk linked it
+    return out.sales;
+  };
+  const openQc = async (sales) => {
+    const r = renderApp(<QC />, { modules: { sales, customers: [...CUSTOMERS, { group: '', customer: 'Zeta Foods' }], masterItems: MASTER_ITEMS, jss: [] }, role: 'qc', user: 'qc1' });
+    await userEvent.click(await screen.findByText(/CSA Reports/));
+    await userEvent.click(await screen.findByLabelText('Edit CSA for 1kg Zeta Bag'));
+    return r;
+  };
+
+  it('opens in the direct form, and saving it untouched changes nothing', async () => {
+    const { saved } = await openQc(linked());
+    expect(await screen.findByText('🧪 Direct CSA report')).toBeInTheDocument();
+    expect(screen.getByLabelText('Job name')).toHaveValue('1kg Zeta Bag');
+    await userEvent.click(screen.getByText('✓ Save CSA report'));
+    expect(await screen.findByText('Nothing changed — the report is as it was.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Re-approve the CSA report')).toBeNull();
+    expect(saved.some((s) => s.key === 'sales')).toBe(false);
+  });
+
+  it('a real edit is re-approved as a direct report: source, identity and the SKU link kept', async () => {
+    const { saved } = await openQc(linked());
+    const job = await screen.findByLabelText('Job name');
+    await userEvent.clear(job);
+    await userEvent.type(job, '1kg Zeta Bag v2');
+    await userEvent.click(screen.getByText('✓ Save CSA report'));
+    await userEvent.type(await screen.findByLabelText('Re-approve comments'), 'renamed the job');
+    await userEvent.click(screen.getByText('✓ Save and send to the plant'));
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    const rep = lastSales(saved).qc_reports.find((x) => x.id === 'd1');
+    expect(rep).toMatchObject({
+      source: 'direct', sku_id: 'sku9', lead_id: 'lead9', company_name: 'Zeta Foods', product_desc: '1kg Zeta Bag v2',
+      responsible_person: 'Ravi', party_kind: 'customer', status: 'Pending Plant', needs_quote_review: true,
+    });
+  });
+});
+
+describe('Q3 — staleness by the desk quotation, not by two machines\' clocks', () => {
+  const q1 = { id: 'q1', lead_id: 'L2', version: 1, created_at: '2026-09-25T10:00:00Z', items: [{ sku_id: 'S1', moq: '1,00,000', tiers: [{ qty: 0, price_wo_gst: 2.5 }] }] };
+
+  it('a save and a send made just after the issue stand, though the desk clock reads later', () => {
+    const sales = { quotations: [q1], skus: [{ id: 'S1', sku_name: 'Pouch' }] };
+    const desk = deskTiersForSku(sales, 'S1');
+    // the rep's clock is behind the desk's: 09:59 by the rep, after the 10:00 issue
+    let skus = saveRepQuote(sales.skus, 'S1', [{ qty: 100000, price: 2.7 }], desk, { now: new Date('2026-09-25T09:59:00Z'), deskQuote: deskQuoteForSku(sales, 'S1') });
+    expect(skus[0].rep_quote).toMatchObject({ desk_quote_id: 'q1', desk_version: 1 });
+    expect(repTiersForSku(skus[0], desk, q1)).toEqual([{ qty: 100000, price: 2.7 }]);
+    skus = markQuotesSent({ ...sales, skus }, ['S1'], { now: new Date('2026-09-25T09:59:30Z') });
+    expect(skus[0].quote_history[0]).toMatchObject({ desk_quote_id: 'q1', tiers: [{ qty: 100000, price: 2.7 }] });
+    expect(quoteStatusOf({ ...sales, skus }, skus[0])).toBe('sent');
+    // the desk re-quotes — a different quotation, so both give way whatever the clocks say
+    const q2 = { ...q1, id: 'q2', version: 2, created_at: '2026-09-01T00:00:00Z', items: [{ sku_id: 'S1', moq: '100000', tiers: [{ qty: 0, price_wo_gst: 3 }] }] };
+    const later = { quotations: [q1, q2], skus };
+    expect(repTiersForSku(skus[0], deskTiersForSku(later, 'S1'), deskQuoteForSku(later, 'S1'))).toEqual([{ qty: 100000, price: 3 }]);
+    expect(quoteStatusOf(later, skus[0])).toBe('to_send');
+  });
+
+  it('the Quotations tab saves the desk quotation it worked from', async () => {
+    const { saved } = openRep();
+    await tab('💬 Quotations');
+    await userEvent.click(await screen.findByLabelText('Quote 200g Pouch'));
+    await userEvent.click(await screen.findByLabelText('Raise slab 1'));
+    await userEvent.click(screen.getByText('💾 Save'));
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    expect(lastSales(saved).skus.find((s) => s.id === 'S1').rep_quote).toMatchObject({ desk_quote_id: 'q1', desk_version: 1 });
+  });
+});
+
+describe('Q4 — ✓ Reviewed takes a re-answered, already-quoted report off the desk\'s list', () => {
+  it('restores "Quoted" and the row leaves Pending', async () => {
+    const sales = salesModule({
+      leads: [{ id: 'L1', client_name: 'Acme Dairy', categories: ['Dairy'], category_assignments: { Dairy: R1 } }],
+      skus: [{ id: 'S1', lead_id: 'L1', sku_name: 'Pouch A', category: 'Dairy', created_by: R1 }],
+      qc_reports: [{ id: 'c1', source: 'sales_os', sku_id: 'S1', lead_id: 'L1', plant_comments: 'Runs fine again', status: 'Pending Quote', quoted_at: '2026-09-20T00:00:00Z', needs_quote_review: true, created_at: '2026-09-01T00:00:00Z' }],
+    });
+    const { saved } = renderApp(<QuotationDesk />, { modules: { sales }, role: 'quote', user: 'quote' });
+    await screen.findByText('Quotation Desk');
+    await deskTab(/Pending for Quotation/);
+    await userEvent.click(await screen.findByLabelText('Mark Pouch A reviewed'));
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    expect(lastSales(saved).qc_reports[0]).toMatchObject({ status: 'Quoted', needs_quote_review: false });
+    await waitFor(() => expect(screen.queryByLabelText('Rep for Pouch A')).toBeNull());
+  });
+
+  it('a report never quoted keeps its status — it still needs a quotation', async () => {
+    const sales = salesModule({
+      leads: [{ id: 'L1', client_name: 'Acme Dairy', categories: ['Dairy'], category_assignments: { Dairy: R1 } }],
+      skus: [{ id: 'S1', lead_id: 'L1', sku_name: 'Pouch A', category: 'Dairy', created_by: R1 }],
+      qc_reports: [{ id: 'c1', source: 'sales_os', sku_id: 'S1', lead_id: 'L1', plant_comments: 'ok', status: 'Pending Quote', needs_quote_review: true, created_at: '2026-09-01T00:00:00Z' }],
+    });
+    const { saved } = renderApp(<QuotationDesk />, { modules: { sales }, role: 'quote', user: 'quote' });
+    await screen.findByText('Quotation Desk');
+    await deskTab(/Pending for Quotation/);
+    await userEvent.click(await screen.findByLabelText('Mark Pouch A reviewed'));
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    expect(lastSales(saved).qc_reports[0]).toMatchObject({ status: 'Pending Quote', needs_quote_review: false });
+    expect(screen.getByLabelText('Rep for Pouch A')).toBeInTheDocument();
+  });
+});
+
+describe('Q5 — the Quotations form follows the desk, and lets go of an accepted quote', () => {
+  it('re-seeds the slabs when the desk re-quotes the picked SKU', async () => {
+    const r = openRep();
+    await tab('💬 Quotations');
+    await userEvent.click(await screen.findByLabelText('Quote 200g Pouch'));
+    await waitFor(() => expect(screen.getByLabelText('Slab 1 price')).toHaveValue(2.5));
+    // the desk issues v2 in another login; the rep's window comes back into focus
+    r.mods.sales = {
+      ...r.mods.sales,
+      quotations: [...r.mods.sales.quotations, { id: 'q9', lead_id: 'L2', client_name: 'Beta Foods', version: 2, created_at: '2026-09-26T00:00:00Z', items: [{ sku_id: 'S1', moq: '1,00,000', tiers: [{ qty: 0, price_wo_gst: 3 }] }] }],
+    };
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByLabelText('Slab 1 price')).toHaveValue(3));
+    expect(screen.queryByText(/below the desk’s ₹/)).toBeNull();          // the red under-the-floor note
+  });
+
+  it('clears the pick once the quote is accepted', async () => {
+    const { saved } = openRep();
+    await tab('💬 Quotations');
+    await userEvent.click(await screen.findByLabelText('Quote 200g Pouch'));
+    await userEvent.click(await screen.findByText('✓ Quote Accepted'));
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    expect(lastSales(saved).skus.find((s) => s.id === 'S1')).toMatchObject({ quotation_accepted: true });
+    expect(await screen.findByText(/Quotation — pick a SKU below/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Slab 1 price')).toBeNull();
+  });
+
+  it('an accepted SKU picked again cannot be re-saved under its PO price', async () => {
+    const sales = repSales();
+    sales.skus[0] = { ...sales.skus[0], quotation_accepted: true, price_tiers: [{ qty: 100000, price: 2.5 }] };
+    openRep(sales);
+    await tab('💬 Quotations');
+    await userEvent.selectOptions(await screen.findByLabelText('Filter by quote status'), 'accepted');
+    await userEvent.click(await screen.findByLabelText('Quote 200g Pouch'));
+    expect(await screen.findByText(/no longer edited here/)).toBeInTheDocument();
+    expect(screen.getByText('💾 Save')).toBeDisabled();
+    expect(screen.getByText('✓ Quote Accepted')).toBeDisabled();
+  });
+});
+
+describe('Q6 — a quotation lands in a book that holds the lead', () => {
+  it('a split lead\'s unmapped category goes to a rep who holds the lead, not to assigned_to', () => {
+    const leads = [{ id: 'LS', client_name: 'Split', categories: ['Dairy'], category_assignments: { Dairy: R1 }, assigned_to: R2 }];
+    expect(skuOwnerRep({ leads }, { lead_id: 'LS', category: 'Oil', created_by: R2 })).toBe(R1);
+    expect(repBook({ leads }, [], R1).leads.map((l) => l.id)).toEqual(['LS']);
+    expect(repBook({ leads }, [], R2).leads).toEqual([]);
+    // two reps hold it: the SKU's creator when they are one of them, else the first
+    const two = [{ id: 'LT', categories: ['Dairy', 'Oil'], category_assignments: { Dairy: R1, Oil: R2 } }];
+    expect(skuOwnerRep({ leads: two }, { lead_id: 'LT', category: 'Ice', created_by: R2 })).toBe(R2);
+    expect(skuOwnerRep({ leads: two }, { lead_id: 'LT', category: 'Ice', created_by: 'quote' })).toBe(R1);
+    // the SKU's category is one of the lead's, unmapped: its lead-level owner holds it
+    const half = [{ id: 'LH', categories: ['Dairy', 'Oil'], category_assignments: { Dairy: R1 }, assigned_to: R2 }];
+    expect(skuOwnerRep({ leads: half }, { lead_id: 'LH', category: 'Oil', created_by: 'quote' })).toBe(R2);
+    expect(repBook({ leads: half }, [], R2).leads.map((l) => l.id)).toEqual(['LH']);
+    // no category map: the KAM, then the owner, as before
+    expect(skuOwnerRep({ leads: [{ id: 'LK', kam: R2, assigned_to: R1, category_assignments: {} }] }, { lead_id: 'LK', category: 'Ice' })).toBe(R2);
+  });
+
+  it('Quote Accepted\'s add-by-hand offers only this rep\'s SKUs of the lead', async () => {
+    openRep();
+    await tab('✅ Quote Accepted');
+    const card = await screen.findByLabelText('Add quotation by hand');
+    await userEvent.click(within(card).getByLabelText('Manual pick Lead'));
+    await userEvent.selectOptions(within(card).getByLabelText('Manual Lead'), 'L5');
+    const opts = [...within(card).getByLabelText('Manual quotation SKU').options].map((o) => o.textContent);
+    expect(opts).toContain('Split dairy');
+    expect(opts).not.toContain('Split oil');                              // Rep Two's
+  });
+});
+
+describe('Q7 / Q8 — PO → SO from a rep\'s PO', () => {
+  const KOVA = [
+    { group: 'SWIGGY', customer: 'Kova Agro', dispatchLoc: 'DHARAPURAM', warehouseName: 'DHARAPURAM' },
+    { group: '', customer: 'Kova Agro', dispatchLoc: 'DHARAPURAM', warehouseName: 'KOVAI OWN' },
+  ];
+  const jss = [{ spec: 'A50', customer: 'Kova Agro', jobName: 'Coconut water 200 ml', jobType: 'Pouch', dispatchForm: 'Pouch', status: 'Active' }];
+  const fgLedger = { A50: { prod: [{ date: '2026-09-01', qty: 300, ts: 1, id: 'p', note: '' }], alloc: [] } };
+  const open = (warehouse) => renderApp(
+    <Routes><Route path="/po-to-so" element={<PoToSo />} /><Route path="/po" element={<NewPO />} /></Routes>,
+    {
+      modules: {
+        sales: salesModule({
+          leads: [{ id: 'LK', client_name: 'KOVA AGRO', converted_to_customer: true }],
+          pos: [{ id: 'p1', po_ref: 'ref9', lead_id: 'LK', customer: 'KOVA AGRO', despatch_location: 'DHARAPURAM', warehouse_name: warehouse, po_number: 'PO-90', date: '2026-09-29', created_by: R1, created_at: '2026-09-29T10:00:00Z', sku_id: 'K1', sku_name: 'Coconut 200', jss_spec: 'A50', qty: 1000, price: 3 }],
+        }),
+        customers: KOVA, jss, fgLedger, prices: { A50: { price: 3.5 } }, oab: { OAB: { SF: [], OT: [] }, INV_REG: [], lastSO: { y: '26', n: 400 } },
+      },
+      role: 'user', route: '/po-to-so',
+    },
+  );
+  const toNewPo = async () => {
+    await userEvent.click(await screen.findByLabelText('Select PO PO-90'));
+    await userEvent.click(screen.getByLabelText('Add to OAB'));
+    expect(await screen.findByText(/From the sales rep/)).toBeInTheDocument();
+  };
+
+  it('Q7: a warehouse the Customer Master does not have lands on no row, and says so', async () => {
+    open('OLD UNIT');
+    await toNewPo();
+    expect(screen.getByLabelText('Customer')).toHaveValue('Kova Agro');
+    expect(screen.getByLabelText('Dispatch Location')).toHaveValue('');
+    expect(screen.getByLabelText('Rep warehouse not in the Customer Master')).toHaveTextContent(/“OLD UNIT” is not in the Customer Master for Kova Agro at DHARAPURAM/);
+    expect(screen.queryByText(/Warehouse: DHARAPURAM/)).toBeNull();     // never SWIGGY's row by default
+  });
+
+  it('Q8: the FG chosen is reported, not dropped, when the sale orders cannot be matched to the lines', async () => {
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const { saved } = open('KOVAI OWN');
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+      const r = await orig(url, opts);
+      if (!(String(url).includes('/api/sales-orders') && String(opts.method || 'GET').toUpperCase() === 'POST')) return r;
+      const body = await r.json();
+      const odd = { created: [...body.created, '26/999'] };              // one more SO than lines
+      return { ...r, json: async () => odd, text: async () => JSON.stringify(odd) };
+    };
+    await toNewPo();
+    await userEvent.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
+    await waitFor(() => expect(screen.getByLabelText('Select A50')).toBeChecked());
+    await userEvent.type(screen.getByLabelText('Use FG for A50'), '200');
+    await userEvent.click(screen.getByRole('button', { name: /Review →/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /🚀 Push to OAB/ }));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/finished goods chosen were NOT applied \(A50 × 200\)/)));
+    expect(saved.some((s) => s.id === 9)).toBe(false);                    // nothing drawn down against a guess
+    alert.mockRestore();
   });
 });

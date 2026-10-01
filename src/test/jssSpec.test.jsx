@@ -10,6 +10,8 @@ import {
   micronValue, micronFromName, micronChoices, micronChoiceHint, itemsForLayer, widthsForLayer,
 } from '../lib/jssSpec.js';
 import { segmentOf } from '../lib/salesHistory.js';
+import { useState } from 'react';
+import SubstrateLayers from '../components/SubstrateLayers.jsx';
 
 // JSS + QC LOGIN, 24 Sep 2026 — the job type becomes a list, the material becomes
 // the Item Master, and QC types nothing but the Job Name.
@@ -286,5 +288,38 @@ describe('QC — the spec form types nothing but the job name', () => {
     await user.click(screen.getByRole('button', { name: /Add Spec/ }));
     expect(await screen.findByText(/Still to choose: Customer, Job Name, Dispatch Form, Job Type, Primary Material/)).toBeInTheDocument();
     expect(saved.some((s) => s.id === 2)).toBe(false);
+  });
+});
+
+/* 30.09 integration review J1 — a micron saved as the raw Item Master text */
+describe('legacy layer microns open on the normalised option', () => {
+  it('layersOfSpec reads "35 MIC" as "35", and leaves a non-number alone', () => {
+    const l = layersOfSpec({ material1: 'CC PET', microns1: '35 MIC', material2: 'LDPE - NATURAL', microns2: ' 40mic ', material3: '', microns3: '' });
+    expect(l.map((x) => x.microns)).toEqual(['35', '40', '']);
+    expect(layersOfSpec({ material: 'CC PET', mic: '12 MIC' })[0].microns).toBe('12');
+    expect(layersOfSpec({ material1: 'KRAFT', microns1: 'NA' })[0].microns).toBe('NA');
+    // and the next save writes the clean value
+    expect(layerFields(layersOfSpec({ material1: 'CC PET', microns1: '12 MIC' }))).toMatchObject({ microns1: '12', mic: '12' });
+  });
+
+  function Harness({ initial }) {
+    const [layers, setLayers] = useState(initial);
+    return (
+      <div>
+        <SubstrateLayers layers={layers} onChange={setLayers} />
+        <span aria-label="layer microns">{layers.map((x) => x.microns).join('|')}</span>
+      </div>
+    );
+  }
+
+  it('SubstrateLayers opens a saved "12 MIC" with "12" selected, not as a stray option', async () => {
+    renderApp(<Harness initial={[{ material: 'CC PET', microns: '12 MIC', widthMm: '' }, { material: '', microns: '', widthMm: '' }, { material: '', microns: '', widthMm: '' }]} />, { modules: { masterItems: ITEMS } });
+    const mic = await screen.findByLabelText('Primary Micron');
+    await waitFor(() => expect([...mic.options].map((o) => o.value)).toEqual(['', '12', '15']));
+    expect(mic).toHaveValue('12');
+    expect([...mic.options].map((o) => o.textContent)).not.toContain('12 MIC');
+    // a width picked next goes out with the clean micron
+    await userEvent.selectOptions(screen.getByLabelText('Primary Film width'), '600');
+    expect(screen.getByLabelText('layer microns')).toHaveTextContent('12||');
   });
 });

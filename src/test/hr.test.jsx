@@ -4,6 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { renderApp } from './harness.jsx';
 import HR, { takeHomeOf, experienceText, netPayableOf } from '../pages/HR.jsx';
 import { landingPath, canAccess, navTabs, ROLE_LABEL } from '../lib/roles.js';
+import { today } from '../lib/format.js';
+
+// The salary sheet opens on the current month — HR.jsx `thisMonth()` is
+// `today().slice(0, 7)` — so the month these tests expect is read the same way,
+// never written in: a hard-coded '2026-09' failed the whole suite on 1 October.
+const MONTH = today().slice(0, 7);
 
 // The HR module, rebuilt to the "HR MODULE" brief (2026-09): six tabs — Overview,
 // Employee details, Salary & advances, Increments & Bonus, Leave details, Admin
@@ -54,7 +60,7 @@ const hrFixture = () => ({
     { id: 401, employeeId: 1, empCode: 'E-001', fullName: 'Asha Rao', currentTakeHome: 511000, amount: 100000, installments: 10, instalmentAmount: 10000, repaid: 30000, balance: 70000, balanceInstalments: 7, takenOn: '2026-05-01', status: 'Open' },
   ],
   payroll: {
-    month: '2026-09', runId: null, status: 'Preview',
+    month: MONTH, runId: null, status: 'Preview',
     lines: [
       { id: 1, employeeId: 1, empCode: 'E-001', fullName: 'Asha Rao', department: 'Production', designation: 'Supervisor', daysPresent: null, takeHome: 42583,
         cashPart: 5000, advanceDeduction: 10000, advanceSuggested: 10000, canteenDeduction: 0, pf: 1800, pt: 200, esi: 0, otherDeductions: 0, lopDays: 1, lopDeduction: 1419,
@@ -259,13 +265,15 @@ describe('HR — Salary & advances', () => {
     const { saved } = await openHR();
     await tab('Salary & advances');
     await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
+    expect(screen.getByLabelText('Salary month')).toHaveValue(MONTH);   // opens on the current month
     expect(screen.getByText('Preview')).toBeInTheDocument();
     // the pending bonus is highlighted for inclusion
     expect(screen.getByLabelText('Bonus included for Asha Rao')).toHaveAttribute('title', expect.stringMatching(/30,000/));
     expect(screen.getByText('1 LOP day')).toBeInTheDocument();
     await userEvent.click(screen.getByText(/Create salary run/));
     await waitFor(() => expect(saved.some((s) => s.hrPath === 'payroll' && s.method === 'POST')).toBe(true));
-    expect(saved.find((s) => s.hrPath === 'payroll').body).toEqual({ month: '2026-09' });
+    expect(saved.find((s) => s.hrPath === 'payroll').body).toEqual({ month: MONTH });
+    expect(MONTH).toMatch(/^\d{4}-\d{2}$/);
     await waitFor(() => expect(screen.getByText('Draft')).toBeInTheDocument());
 
     const canteen = screen.getByLabelText('Canteen deduction for Asha Rao');
@@ -286,7 +294,7 @@ describe('HR — Salary & advances', () => {
     const [header, first] = exported[0].rows;
     expect(header).toEqual(['Employee ID', 'Employee name', 'Account name', 'Account number', 'IFSC code', 'Branch', 'Take-home salary']);
     expect(first).toEqual(['E-001', 'Asha Rao', 'Asha Rao', '1234567890', 'HDFC0001', 'Kukatpally', 31164]);
-    expect(exported[0].name).toBe('Bank_Payments_2026-09.xlsx');
+    expect(exported[0].name).toBe(`Bank_Payments_${MONTH}.xlsx`);
   });
 
   it('finalises a run and then refuses edits', async () => {
@@ -294,7 +302,7 @@ describe('HR — Salary & advances', () => {
     await tab('Salary & advances');
     await waitFor(() => expect(screen.getByText('Asha Rao')).toBeInTheDocument());
     await userEvent.click(screen.getByText(/Create salary run/));
-    await userEvent.click(await screen.findByText(/Finalise 2026-09/));
+    await userEvent.click(await screen.findByText(`✓ Finalise ${MONTH}`));
     await waitFor(() => expect(saved.some((s) => s.hrPath === 'payroll/77/finalise')).toBe(true));
     await waitFor(() => expect(screen.getByText('Finalised')).toBeInTheDocument());
     expect(screen.getByLabelText('Canteen deduction for Asha Rao')).toBeDisabled();

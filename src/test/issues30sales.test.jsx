@@ -8,8 +8,9 @@ import LeadsAdmin from '../components/LeadsAdmin.jsx';
 import {
   repBook, isConvertedStage, conversionPending, conversionQueue, requestConversion, convertLeads, revertLead,
   customerRowsToAdd, despatchLocationRowsFor, despatchLocationsFor, buildCsaDraft, buildCsaRequest, csaDetailsOf,
-  sendSkuForCsa, DESPATCH_FIELDS, saveErrorText,
+  sendSkuForCsa, DESPATCH_FIELDS, saveErrorText, isCustomerLead,
 } from '../lib/repFlow.js';
+import { csaCandidatesForJss } from '../components/CsaToJssPanel.jsx';
 import { leadOwnerIds, repModulesOf, REP_MODULES } from '../lib/sales.js';
 import { kamApplyEdits } from '../lib/kam.js';
 import { csaPendingForQc } from '../lib/csa.js';
@@ -733,5 +734,135 @@ describe('the quote viewer on Follow-ups', () => {
     let el = close;
     while (el && !(el.style && el.style.position === 'fixed')) el = el.parentElement;
     expect(Number(el.style.zIndex)).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+/* ═══════════════ integration review — one rule for every screen ═══════════════ */
+describe('R1 — a KAM account is a customer on every screen, not only in the rep\'s book', () => {
+  it('isCustomerLead: converted, or a KAM account the Super Admin has not moved back', () => {
+    expect(isCustomerLead({ converted_to_customer: true })).toBe(true);
+    expect(isCustomerLead({ kam: REP })).toBe(true);                                   // no flag: the KAM screen made it
+    expect(isCustomerLead({ kam: REP, converted_to_customer: false })).toBe(false);    // ↩ Lead is a decision
+    expect(isCustomerLead({ kam: '  ' })).toBe(false);
+    expect(isCustomerLead({ stage: 'Converted' })).toBe(false);
+    expect(isCustomerLead(null)).toBe(false);
+  });
+
+  it('a lead the rep both owns and is KAM of sits on the customer side', () => {
+    const leads = [mk('K1', 'Gamma', { kam: REP }), mk('K2', 'Delta', { kam: 'R2' })];
+    const book = repBook({ leads }, [], REP);
+    expect(book.customers.map((l) => l.id)).toEqual(['K1', 'K2']);   // K2: another rep's KAM account is a customer too
+    expect(book.leads).toEqual([]);
+  });
+
+  it('the KAM account is never queued for conversion, and QC can make its JSS', () => {
+    const lead = mk('K1', 'Gamma', { kam: REP, stage: 'Converted' });
+    expect(conversionPending(lead)).toBe(false);
+    expect(conversionQueue([lead])).toEqual([]);
+    const sales = { leads: [lead], skus: [{ id: 'S1', lead_id: 'K1', sku_name: 'Pouch', quotation_accepted: true }], qc_reports: [] };
+    expect(csaCandidatesForJss(sales, []).map((c) => c.sku.id)).toEqual(['S1']);
+  });
+
+  it('the KAM screen flags a lead it matched by name, as well as one it creates', () => {
+    const now = new Date('2026-10-01T00:00:00Z');
+    const out = kamApplyEdits([mk('L9', 'Acme')], { Acme: { kam: 'R2', monthly_target: '5000' } }, { now });
+    expect(out[0]).toMatchObject({ kam: 'R2', monthly_target: '5000', converted_to_customer: true, converted_by: 'kam', converted_at: now.toISOString() });
+    expect(out[0].category_assignments).toEqual({ Juices: REP });
+    // a lead the Super Admin converted keeps its own conversion record
+    const kept = kamApplyEdits([mk('L1', 'Acme', { converted_to_customer: true, converted_by: 'super_admin', converted_at: 'x' })], { Acme: { kam: 'R2' } }, { now })[0];
+    expect(kept).toMatchObject({ converted_by: 'super_admin', converted_at: 'x' });
+  });
+
+  it('the Super Admin\'s Leads tab shows the KAM account as a customer', async () => {
+    renderApp(<LeadsAdmin />, { modules: { sales: salesModule({ leads: [mk('K1', 'GAMMA FOODS', { kam: REP })] }), customers: CUSTOMERS }, role: 'superadmin' });
+    const row = (await screen.findByText('GAMMA FOODS')).closest('tr');
+    expect(within(row).getByText('✓ Customer')).toBeInTheDocument();
+  });
+});
+
+describe('R2 — a deliberate ↩ Lead is not a conversion request', () => {
+  it('stage Converted with an explicit false stays out of the queue unless the rep asks again', () => {
+    const reverted = { id: 'X', stage: 'Converted', converted_to_customer: false };
+    expect(conversionPending(reverted)).toBe(false);
+    expect(conversionQueue([reverted])).toEqual([]);
+    expect(conversionPending({ ...reverted, conversion_requested: true })).toBe(true);
+    expect(conversionPending({ id: 'Y', stage: 'Converted' })).toBe(true);           // never decided: still queued
+  });
+});
+
+describe('R3 — LeadsAdmin keeps the bulk convert for leads already in the Customer Master', () => {
+  const leads = () => [
+    mk('M1', 'KOVAI AGRO FOODS', { stage: 'Hot' }),                                    // in the master, never converted
+    mk('M2', 'Baramati Agro', { stage: 'Warm', converted_to_customer: false }),        // in the master, moved back on purpose
+    mk('M3', 'SAM AGRITECH LIMITED', { stage: 'Converted', conversion_requested: true }), // in the queue
+    mk('M4', 'ZEPTO', { stage: 'Hot' }),                                               // a plain lead
+  ];
+  const custs = [...CUSTOMERS, { group: '', customer: 'BARAMATI AGRO', dispatchLoc: 'Baramati' }];
+
+  it('converts exactly the in-master unflagged leads, beside the queue', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { saved } = renderApp(<LeadsAdmin />, { modules: { sales: salesModule({ leads: leads() }), customers: custs }, role: 'superadmin' });
+    const btn = await screen.findByLabelText('Convert the leads already in the Customer Master');
+    expect(btn).toHaveTextContent('Convert the 1 already in the Customer Master');
+    // the queue keeps its own button
+    expect(screen.getByLabelText('Convert all leads marked Converted')).toBeInTheDocument();
+    // the per-row labels the 29.09 tests use are still there
+    expect(screen.getByLabelText('Convert ZEPTO to customer')).toBeInTheDocument();
+    await userEvent.click(btn);
+    await waitFor(() => expect(lastSaved(saved, 'sales')).toBeTruthy());
+    const out = lastSaved(saved, 'sales').leads;
+    expect(out.find((l) => l.id === 'M1')).toMatchObject({ converted_to_customer: true, converted_by: 'super_admin' });
+    expect(out.find((l) => l.id === 'M2').converted_to_customer).toBe(false);
+    expect(out.find((l) => l.id === 'M3').converted_to_customer).toBeUndefined();
+    expect(out.find((l) => l.id === 'M4').converted_to_customer).toBeUndefined();
+    expect(saved.some((s) => s.key === 'customers')).toBe(false);                     // already in the master
+  });
+
+  it('is not offered when nothing in the master is outstanding', async () => {
+    renderApp(<LeadsAdmin />, { modules: { sales: salesModule({ leads: [mk('M4', 'ZEPTO')] }), customers: CUSTOMERS }, role: 'superadmin' });
+    await screen.findByLabelText('Convert ZEPTO to customer');
+    expect(screen.queryByLabelText('Convert the leads already in the Customer Master')).toBeNull();
+  });
+});
+
+describe('R4 — a SKU whose category left the list still edits', () => {
+  it('shows the saved category as an option, selected', async () => {
+    const { saved } = openRep(salesModule({ skus: [{ id: 'S1', lead_id: 'L3', sku_name: 'Old Pouch', category: 'Retired Cat', dispatch_form: 'Pouch', created_by: REP }] }));
+    await tab('📦 SKUs');
+    await userEvent.click(await screen.findByLabelText('Edit Old Pouch'));
+    const cat = screen.getByLabelText('Category');
+    expect(cat).toHaveValue('Retired Cat');
+    expect(optionTexts(cat)).toContain('Retired Cat (no longer in the list)');
+    await userEvent.click(screen.getByText('✓ Save SKU'));
+    await waitFor(() => expect(lastSaved(saved, 'sales')).toBeTruthy());
+    expect(lastSaved(saved, 'sales').skus[0]).toMatchObject({ category: 'Retired Cat', sku_name: 'Old Pouch' });
+  });
+});
+
+describe('R5 — a pre-30.09 shrink roll-form per-core text survives an edit', () => {
+  const legacy = { sleeve_form: 'Roll form', core_mm: '76', per_core: '500 m per core', despatch_location: 'Pune', tentative_qty: '1000', tentative_date: '2026-11-01', target_price: '2' };
+  const sku = { id: 'S1', lead_id: 'L1', sku_name: 'Sleeve', dispatch_form: 'Shrink Sleeve' };
+  const details = () => screen.getByLabelText('Despatch details');
+
+  it('rides along in the draft and the requisition while the number is empty', () => {
+    expect(buildCsaDraft(legacy, 'Shrink Sleeve').details).toMatchObject({ sleeve_form: 'Roll form', core_mm: 76, per_core: '500 m per core' });
+    expect(buildCsaRequest(legacy, sku).details).toMatchObject({ per_core: '500 m per core' });
+    // re-entered as a basis and a number: the new fields win, the text goes
+    const typed = buildCsaDraft({ ...legacy, per_core_basis: 'Metres per core', per_core_qty: '500' }, 'Shrink Sleeve').details;
+    expect(typed).toMatchObject({ per_core_basis: 'Metres per core', per_core_qty: 500 });
+    expect(typed.per_core).toBeUndefined();
+    // a sleeve-form SKU has no per-core figure at all
+    expect(buildCsaDraft({ ...legacy, sleeve_form: 'Sleeve form' }, 'Shrink Sleeve').details.per_core).toBeUndefined();
+  });
+
+  it('the SKU edit keeps it and says what it was', async () => {
+    const request = { ...buildCsaRequest(legacy, sku, { now: new Date('2026-09-01T00:00:00Z') }), details: { sleeve_form: 'Roll form', core_mm: 76, per_core: '500 m per core' } };
+    const { saved } = openRep(salesModule({ skus: [{ ...sku, category: 'Juices', created_by: REP, csa_requested: true, csa_request: request }] }));
+    await tab('📦 SKUs');
+    await userEvent.click(await screen.findByLabelText('Edit Sleeve'));
+    expect(within(details()).getByText(/Earlier entry: “500 m per core”/)).toBeInTheDocument();
+    await userEvent.click(screen.getByText('✓ Save SKU'));
+    await waitFor(() => expect(lastSaved(saved, 'sales')).toBeTruthy());
+    expect(lastSaved(saved, 'sales').skus[0].csa_draft.details).toMatchObject({ per_core: '500 m per core', core_mm: 76 });
   });
 });

@@ -8,7 +8,7 @@
 //
 // Pure functions over the sales blob (module 12), so every screen agrees on what a
 // "customer", a "floor price" or an "open PO" is. Nothing here touches the network.
-import { salesUid, salesToday, leadsForRep, leadCategories } from './sales.js';
+import { salesUid, salesToday, leadsForRep, leadCategories, leadOwnerIds, categoryRep } from './sales.js';
 import { acceptedMinPrice } from './repPortal.js';
 
 const s = (v) => String(v == null ? '' : v).trim();
@@ -22,8 +22,9 @@ const nameKey = (v) => lower(v).replace(/\s+/g, ' ');
 
 /**
  * A lead is a CUSTOMER once the Super Admin has converted it (the Leads tab /
- * S Dashboard), or when the name is already in the Customer Master. "This
- * lead-to-customer change will only happen within the super admin login."
+ * S Dashboard), or when the Super Admin has made a rep its KAM and not moved it back
+ * to a lead. "This lead-to-customer change will only happen within the super admin
+ * login."
  */
 export function isCustomerLead(lead, customers) {   // eslint-disable-line no-unused-vars
   if (!lead) return false;
@@ -33,7 +34,14 @@ export function isCustomerLead(lead, customers) {   // eslint-disable-line no-un
   // Super Admin's own "un-convert" could never take effect, because the name still
   // matched. The conversion is the Super Admin's to make and is recorded on the lead:
   // that flag is now the only thing that decides it.
-  return lead.converted_to_customer === true;
+  if (lead.converted_to_customer === true) return true;
+  // 30.09 §SL6: the Super Admin makes a rep KAM from the Customer Master — the KAM
+  // screen lists customers, never leads — so a KAM account IS a customer unless the
+  // Super Admin has explicitly moved it back to a lead (↩ Lead writes false). Older KAM
+  // lead records carry no flag at all. This rule lives HERE, not in one screen, so the
+  // rep's book, the S Dashboard, the Leads tab, QC's CSA → JSS list and the quotation /
+  // PO checks all file the same account on the same side.
+  return !!s(lead.kam) && lead.converted_to_customer !== false;
 }
 
 /**
@@ -48,14 +56,13 @@ export function repBook(sales, customers, repId) {
   const kamOf = repId
     ? arr(sales && sales.leads).filter((l) => l && String(l.kam || '') === String(repId) && !ids.has(l.id))
     : [];
-  // 30.09: the Super Admin makes a rep KAM from the Customer Master — the KAM screen
-  // lists customers, never leads — so a KAM account is a customer unless the Super
-  // Admin has explicitly moved it back to a lead. The older code filed these on the
-  // lead side whenever the KAM screen had created the lead record without the flag.
-  const kamCustomer = (l) => l.converted_to_customer !== false;
+  // 30.09: a KAM account is a customer unless the Super Admin moved it back to a lead —
+  // decided by isCustomerLead, the rule every other screen reads, so the rep's book
+  // can never file an account on the other side from the Super Admin's screens.
+  const all = [...mine, ...kamOf];
   return {
-    leads: [...mine.filter((l) => !isCustomerLead(l, customers)), ...kamOf.filter((l) => !kamCustomer(l))],
-    customers: [...mine.filter((l) => isCustomerLead(l, customers)), ...kamOf.filter(kamCustomer)],
+    leads: all.filter((l) => !isCustomerLead(l, customers)),
+    customers: all.filter((l) => isCustomerLead(l, customers)),
   };
 }
 
@@ -77,10 +84,17 @@ export function isConvertedStage(stage) {
   return lower(stage) === 'converted';
 }
 
-/** Marked Converted (by the rep, or on the stage dropdown) but not converted yet. */
+/**
+ * Marked Converted (by the rep, or on the stage dropdown) but not converted yet.
+ *
+ * An explicit `converted_to_customer: false` is the Super Admin's decision (↩ Lead):
+ * the 28/29.09 builds wrote it and left the stage on "Converted", so a stage alone
+ * would put every deliberately reverted lead back in the queue — and one "Convert all"
+ * would re-convert it. Only a rep's fresh request (conversion_requested) queues it again.
+ */
 export function conversionPending(lead) {
   if (!lead || isCustomerLead(lead)) return false;
-  return lead.conversion_requested === true || isConvertedStage(lead.stage);
+  return lead.conversion_requested === true || (isConvertedStage(lead.stage) && lead.converted_to_customer !== false);
 }
 
 /** The leads waiting for the Super Admin to convert them, oldest request first. */
@@ -355,6 +369,11 @@ function despatchDetails(form, kind) {
     if (f.type === 'number') { if (v !== '' && v != null) details[f.k] = n(v); }
     else if (v != null && s(v)) details[f.k] = s(v);
   });
+  // A shrink roll-form requisition sent before 30.09 §SK2 carried its per-core figure as
+  // free text (`per_core`). Until the rep re-enters it as a basis + number it rides
+  // along, instead of vanishing on the first edit of the SKU.
+  if (kind === 'shrink' && s(form.per_core) && details.per_core_qty == null
+    && String(form[fields[0].k] || '') === 'Roll form') details.per_core = s(form.per_core);
   if (kind === 'bulk') Object.assign(details, bulkBagTotals(details));
   return details;
 }
@@ -470,9 +489,29 @@ export function deskTiersForSku(sales, skuId) {
 export function repTiersForSku(sku, deskTiers, deskQuote = null) {
   const rq = (sku && sku.rep_quote) || {};
   const own = arr(rq.tiers).filter((t) => t && n(t.qty) >= 0 && n(t.price) > 0);
-  const deskAt = s(deskQuote && deskQuote.created_at);
-  const stale = !!(deskAt && s(rq.saved_at) && s(rq.saved_at) < deskAt);
+  const stale = workedFromOlderDesk(rq.desk_quote_id, rq.saved_at, deskQuote);
   return own.length && !stale ? own.map((t) => ({ qty: n(t.qty), price: n(t.price) })) : deskTiers;
+}
+
+/** The id of the desk quotation the rep is working from ('' when the desk has not quoted). */
+const deskQuoteId = (deskQuote) => s(deskQuote && deskQuote.id);
+
+/**
+ * Whether something the rep did (saved slabs, sent a quote) was done against an
+ * earlier desk quotation than the current one.
+ *
+ * 30.09 QT3: this compared the rep's own clock (saved_at / sent_at) with the quote
+ * desk machine's (created_at). A desk clock running ahead made a save or send made
+ * just AFTER the desk's issue look older than it — the raised slabs silently gave way
+ * to the desk floor, or a just-sent quote kept reading "To be sent". The desk
+ * quotation the rep worked from is recorded now (`desk_quote_id`), so it is a plain
+ * "is it still the same quotation?"; the timestamps are only a fallback for records
+ * written before the id was.
+ */
+function workedFromOlderDesk(storedId, at, deskQuote) {
+  if (storedId != null) return s(storedId) !== deskQuoteId(deskQuote);
+  const deskAt = s(deskQuote && deskQuote.created_at);
+  return !!(deskAt && s(at) && s(at) < deskAt);
 }
 
 /**
@@ -496,11 +535,19 @@ export function assertTiersAboveFloor(tiers, deskTiers) {
  *
  *   1. the rep the lead's CATEGORY is assigned to (the SKU's category; for a SKU with
  *      none, the one rep all the lead's categories are assigned to)
- *   2. the lead's KAM
- *   3. the lead's owner (assigned_to)
- *   4. the rep who created the SKU
+ *   2. a lead split by category whose map does not name the SKU's category: one of
+ *      the reps whose book holds the lead (leadOwnerIds — the rule leadsForRep uses):
+ *      the category's own owner (categoryRep) when the category is one of the lead's,
+ *      else the SKU's creator when they hold it, else the first of them
+ *   3. the lead's KAM
+ *   4. the lead's owner (assigned_to)
+ *   5. the rep who created the SKU
  *
  * '' when nobody is allocated (a direct CSA for a customer no rep holds yet).
+ *
+ * Step 2 keeps the quotation in a book that has the lead: with a category map in
+ * place, leadsForRep files the lead under its category owners only, so a quote sent
+ * to assigned_to could reach a rep who cannot pick the customer on Enter PO.
  */
 export function skuOwnerRep(sales, sku) {
   if (!sku) return '';
@@ -510,6 +557,17 @@ export function skuOwnerRep(sales, sku) {
   if (!s(sku.category)) {
     const reps = [...new Set(Object.values(map).map(s).filter(Boolean))];
     if (reps.length === 1) return reps[0];
+  }
+  if (lead && Object.keys(map).length) {
+    const owners = leadOwnerIds(lead);
+    // the SKU's category is one of the lead's but unmapped: its owner by categoryRep
+    // (the lead-level owner) — exactly whose book leadsForRep files it in
+    const cat = s(sku.category);
+    const viaCat = cat && leadCategories(lead).includes(cat) ? s(categoryRep(lead, cat)) : '';
+    if (viaCat && owners.includes(viaCat)) return viaCat;
+    const by = s(sku.created_by);
+    if (by && owners.includes(by)) return by;
+    if (owners.length) return owners[0];
   }
   if (lead && s(lead.kam)) return s(lead.kam);
   if (lead && s(lead.assigned_to)) return s(lead.assigned_to);
@@ -586,8 +644,11 @@ export function floorFor(deskTiers, qty) {
  * … the sales rep cannot decrease the quoted price below the amount received from
  * the quote login per MOQ." Throws naming the slab that is under the floor.
  * A SKU with no desk quote (a manual quotation) has no floor.
+ *
+ * `deskQuote` is the desk quotation the slabs were worked from (deskQuoteForSku) — its
+ * id is kept on the save, so a later desk re-quote, and nothing else, supersedes them.
  */
-export function saveRepQuote(skus, skuId, tiers, deskTiers, { now = new Date(), user = '' } = {}) {
+export function saveRepQuote(skus, skuId, tiers, deskTiers, { now = new Date(), user = '', deskQuote } = {}) {
   const clean = arr(tiers).map((t) => ({ qty: n(t.qty), price: n(t.price) })).filter((t) => t.price > 0);
   if (!clean.length) throw new Error('Enter at least one price slab (quantity and price).');
   assertTiersAboveFloor(clean, deskTiers);
@@ -600,7 +661,10 @@ export function saveRepQuote(skus, skuId, tiers, deskTiers, { now = new Date(), 
     const changedAfterSend = !!(sk.quotation_sent && !(lastSent && same(lastSent.tiers, clean)));
     return {
       ...sk,
-      rep_quote: { tiers: clean, saved_at: now.toISOString(), saved_by: user, source: arr(deskTiers).length ? 'desk' : 'manual', changed_after_send: changedAfterSend },
+      rep_quote: {
+        tiers: clean, saved_at: now.toISOString(), saved_by: user, source: arr(deskTiers).length ? 'desk' : 'manual', changed_after_send: changedAfterSend,
+        ...(deskQuote !== undefined ? { desk_quote_id: deskQuoteId(deskQuote), desk_version: deskQuote ? (n(deskQuote.version) || 1) : 0 } : {}),
+      },
       quotation_received: sk.quotation_received || arr(deskTiers).length > 0,
       quote_status: sk.quote_status === 'accepted' ? 'accepted' : (sk.quotation_sent && !changedAfterSend ? 'sent' : 'to_send'),
     };
@@ -614,9 +678,8 @@ export function saveRepQuote(skus, skuId, tiers, deskTiers, { now = new Date(), 
 export function quoteSentStill(sales, sku) {
   if (!sku || !sku.quotation_sent) return false;
   if (sku.rep_quote && sku.rep_quote.changed_after_send) return false;
-  const desk = deskQuoteForSku(sales, sku.id);
-  const deskAt = s(desk && desk.created_at);
-  return !(deskAt && s(sku.quotation_sent_at) && deskAt > s(sku.quotation_sent_at));
+  const last = arr(sku.quote_history)[0] || {};
+  return !workedFromOlderDesk(last.desk_quote_id, sku.quotation_sent_at, deskQuoteForSku(sales, sku.id));
 }
 
 /** Where a SKU stands: 'none' (nothing to quote) · 'to_send' · 'sent' · 'accepted'. */
@@ -652,9 +715,11 @@ export function markQuotesSent(sales, skuIds, { now = new Date(), user = '' } = 
   return arr(sales && sales.skus).map((sk) => {
     if (!ids.has(sk.id)) return sk;
     const desk = deskTiersForSku(sales, sk.id);
-    const tiers = repTiersForSku(sk, desk, deskQuoteForSku(sales, sk.id));
+    const deskQuote = deskQuoteForSku(sales, sk.id);
+    const tiers = repTiersForSku(sk, desk, deskQuote);
     try { assertTiersAboveFloor(tiers, desk); } catch (e) { throw new Error(`${sk.sku_name}: ${e.message}`); }
-    const entry = { sent_at: now.toISOString(), sent_by: user, tiers, version: arr(sk.quote_history).length + 1 };
+    // the desk quotation this send was made from — what quoteSentStill checks against
+    const entry = { sent_at: now.toISOString(), sent_by: user, tiers, version: arr(sk.quote_history).length + 1, desk_quote_id: deskQuoteId(deskQuote) };
     return {
       ...sk,
       quotation_received: true,

@@ -194,6 +194,63 @@ describe('PU2 — the GRN reference is the stores desk’s, never typed', () => 
     await user.click(screen.getByRole('button', { name: `Link GRN ${PO9}` }));
     await waitFor(() => expect(screen.getByLabelText('GRN Reference')).toHaveValue('GRN/2026/5'));
   });
+
+  it('keeps Save off until the picked GRN’s own quantities have loaded', async () => {
+    const user = userEvent.setup();
+    renderApp(<Purchase />, { modules: { masterItems: MASTER, purchase: trackPurchase(), storeGrns: [GRN5] }, role: 'purchase' });
+    // hold the GRN detail read until the test lets it through
+    const base = globalThis.fetch;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    globalThis.fetch = async (url, opts) => {
+      if (/\/api\/stores\/grns\/5\b/.test(String(url))) await gate;
+      return base(url, opts);
+    };
+    await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
+    await user.click(await screen.findByRole('button', { name: `Link GRN ${PO9}` }));
+    await waitFor(() => expect(screen.getByLabelText('GRN Reference')).toHaveValue('GRN/2026/5'));
+    expect(screen.getByLabelText('GRN quantity line 1')).toHaveTextContent('…');
+    expect(screen.getByRole('button', { name: /Save GRN link/ })).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.getByLabelText('GRN quantity line 1')).toHaveTextContent('60'));
+    expect(screen.getByRole('button', { name: /Save GRN link/ })).not.toBeDisabled();
+  });
+
+  it('an older server (no link endpoint): records the receipt with the stores quantities, and counts it as linked', async () => {
+    const user = userEvent.setup();
+    // closed on the old server, nothing linked yet — the stores desk's GRN is still "to link"
+    const purchase = trackPurchase({ status: 'Closed', closedDate: daysAgo(1), receipts: [],
+      items: [{ itemCode: 'BLM031', item: '460 MM', unit: 'Kg', qty: 60, rate: 142, amount: 8520, receivedQty: 0 }] });
+    const { saved } = renderApp(<Purchase />, { modules: { masterItems: MASTER, purchase, storeGrns: [GRN5] }, role: 'purchase' });
+    const base = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => (String(url).includes('/link-grn')
+      ? { status: 404, ok: false, headers: { get: () => 'application/json' }, json: async () => ({ message: 'Not Found' }), text: async () => '{"message":"Not Found"}' }
+      : base(url, opts));
+    await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
+    const closed = await screen.findByRole('table', { name: 'Closed and cancelled purchase orders' });
+    await user.click(await within(closed).findByRole('button', { name: `Link GRN ${PO9}` }));
+    await waitFor(() => expect(screen.getByLabelText('GRN quantity line 1')).toHaveTextContent('60'));
+    await user.click(screen.getByRole('button', { name: /Save GRN link/ }));
+    expect(await screen.findByText(`✓ GRN/2026/5 linked to ${PO9}.`)).toBeInTheDocument();
+    // the legacy receipt carries the stores desk's quantities, never an empty map
+    expect(saved.find((s) => s.endpoint === '/api/purchase-orders/grn').body).toMatchObject({ poNum: PO9, grnRef: 'GRN/2026/5', qty: { 0: 60 } });
+    // …and the old server's { date, ref } receipt for that GRN reads as linked: no "Link GRN" left
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Closed and cancelled purchase orders' }))
+      .queryByRole('button', { name: `Link GRN ${PO9}` })).toBeNull());
+    expect(within(screen.getByRole('table', { name: 'Closed and cancelled purchase orders' })).getByText('GRN/2026/5')).toBeInTheDocument();
+  });
+
+  it('marks a GRN the desk recorded the old way "(linked)" and auto-picks the other one', async () => {
+    const user = userEvent.setup();
+    const two = [GRN5, { ...GRN5, id: 7, grnNo: 'GRN/2026/7', units: [] }];
+    // a receipt from the legacy POST /grn: a ref, no `linked`, no `source`
+    await openReceive(user, { purchase: trackPurchase({ receipts: [{ date: daysAgo(2), ref: 'grn/2026/5 ' }] }), storeGrns: two });
+    const sel = screen.getByLabelText('GRN Reference');
+    await waitFor(() => expect(sel).toHaveValue('GRN/2026/7'));
+    const labels = [...sel.options].map((o) => o.text);
+    expect(labels.find((t) => t.startsWith('GRN/2026/5'))).toMatch(/\(linked\)$/);
+    expect(labels.find((t) => t.startsWith('GRN/2026/7'))).not.toMatch(/\(linked\)/);
+  });
 });
 
 /* ── S7a / S7c on the purchase login ───────────────────────────────────── */
@@ -349,6 +406,25 @@ describe('S7 — the P Dashboard PO Tracking', () => {
     expect(screen.queryByText('D-CAN')).toBeNull();
     expect(screen.getByText('D-OPEN')).toBeInTheDocument();
   });
+
+  it('Price Trends "Billing — <supplier>" leaves a cancelled PO out of billed, unpaid and the rows', async () => {
+    const user = userEvent.setup();
+    const cosmo = [
+      { poNum: 'B-LIVE', poDate: daysAgo(4), supplier: 'Cosmo Films', status: 'Open', paymentStatus: 'Unpaid',
+        items: [{ itemCode: 'BLM031', item: '460 MM', unit: 'Kg', qty: 10, rate: 142, amount: 1420 }] },
+      { poNum: 'B-CAN', poDate: daysAgo(3), supplier: 'Cosmo Films', status: 'Cancelled', cancelled: true, paymentStatus: 'Unpaid',
+        items: [{ itemCode: 'BLM031', item: '460 MM', unit: 'Kg', qty: 50, rate: 142, amount: 7100 }] },
+    ];
+    renderApp(<PDashboard />, { modules: { masterItems: MASTER, purchase: { asl: ASL, pos: cosmo, priceHistory: [] } }, role: 'padmin' });
+    await user.click(screen.getByText('📈 Price Trends'));
+    fireEvent.change(screen.getByLabelText('Filter by supplier'), { target: { value: 'Cosmo Films' } });
+    const card = screen.getByText(/^Billing — Cosmo Films/).closest('.card');
+    expect(within(card).getByText('B-LIVE')).toBeInTheDocument();
+    expect(within(card).queryByText('B-CAN')).toBeNull();
+    const stat = (label) => within(card).getByText(label).closest('.stat').querySelector('.sv');
+    expect(stat('Total Billed (1 PO)')).toHaveTextContent('₹1,420');
+    expect(stat('Unpaid')).toHaveTextContent('₹1,420');
+  });
 });
 
 /* ── S7 on the stores desk (and, read-only, the PM) ─────────────────────── */
@@ -434,5 +510,33 @@ describe('S7 — the stores Purchase Orders tab', () => {
     await screen.findByText('S-OPEN');
     expect(screen.queryByLabelText(/Expected date for/)).toBeNull();
     expect(screen.getByLabelText('Expected on for 637 x 520 on S-OPEN')).toHaveTextContent('11/10/2026');
+  });
+
+  // review P1 (the tab re-reads module 6 when it opens) is in stores.test.jsx, where the
+  // tab opens from the stores desk after sign-in
+
+  it('reads the whole Item Master, withdrawn items too — an old PO line still names them (review P2)', async () => {
+    const { masterApi } = await import('../api.js');
+    const spy = vi.spyOn(masterApi, 'listItems');
+    mount();
+    await screen.findByText('S-OPEN');
+    expect(spy).toHaveBeenCalledWith({ includeInactive: 1 });
+    expect(spy).not.toHaveBeenCalledWith();
+  });
+
+  it('dates a stores revision on the desk’s own calendar, not the UTC one (review P4)', async () => {
+    const { localDateOf } = await import('../components/PurchaseOrdersTab.jsx');
+    // 00:30 on 1 Oct where the desk is — still 30 Sep in UTC east of Greenwich
+    const early = new Date(2026, 9, 1, 0, 30).toISOString();
+    expect(localDateOf(early)).toBe('2026-10-01');
+    expect(localDateOf('2026-10-01')).toBe('2026-10-01');
+    expect(localDateOf('')).toBe('');
+    expect(localDateOf(null)).toBe('');
+    renderApp(<PurchaseOrders flash={() => {}} />, {
+      modules: { masterItems: MASTER, purchase: { asl: ASL, pos }, storeEtas: [{ ...ETA, updatedAt: early }] }, role: 'stores',
+    });
+    await screen.findByText('S-OPEN');
+    await waitFor(() => expect(within(screen.getByLabelText('Expected date for Cyan Ink on S-PART').closest('td'))
+      .getByText('revised by stores · store1 · 01/10/2026')).toBeInTheDocument());
   });
 });

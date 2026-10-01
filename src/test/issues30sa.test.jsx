@@ -29,6 +29,13 @@ const ON_HAND = [
     departmentName: 'Printing', closingStock: 194.92, unitCount: 1, uom: 'Kg', msl: 50, stockValue: 25000, byStatus: {}, active: true },
 ];
 
+// An item deleted from the Item Master that still holds stock: the Super Admin sees the
+// warning on the read-only board, but the move (a write) is not offered there.
+const WITHDRAWN = [
+  { id: 360, code: 'BLM360', name: '700 MM (dup)', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: '',
+    closingStock: 40, unitCount: 1, uom: 'Kg' },
+];
+
 /** PDashboard on the shared harness, with the stores board's reads answered. */
 function mountPDashboard(role) {
   localStorage.setItem('blm_token', 't');
@@ -42,6 +49,7 @@ function mountPDashboard(role) {
     if (u.includes('/api/stores/')) {
       storesCalls.push({ u, method: (opts.method || 'GET').toUpperCase() });
       if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
+      if (u.includes('/api/stores/withdrawn')) return res(WITHDRAWN);
       return res([]);
     }
     return base(url, opts);
@@ -68,6 +76,13 @@ describe('P Dashboard — Stock on Hand sits next to the Item Master', () => {
       expect(screen.queryByLabelText('MSL for BLM306')).toBeNull();
       expect(screen.queryByText(/Set MSL from 3-month average/)).toBeNull();
       expect(screen.getByText(/read here as it stands; MSL and dispositions are set by Stores/)).toBeInTheDocument();
+      if (role === 'superadmin') {
+        // the withdrawn-stock warning stays, the move does not
+        expect(await screen.findByLabelText('Withdrawn items holding stock')).toBeInTheDocument();
+        expect(screen.getByText('BLM360')).toBeInTheDocument();
+      }
+      expect(screen.queryByRole('button', { name: /Move .* stock/ })).toBeNull();
+      expect(screen.queryByLabelText(/Move .* stock onto/)).toBeNull();
       expect(storesCalls.every((c) => c.method === 'GET')).toBe(true);
     });
   });

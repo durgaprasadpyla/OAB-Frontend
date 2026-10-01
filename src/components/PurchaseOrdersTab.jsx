@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
 import { fmtDate } from '../lib/format.js';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import {
   EMPTY_PO_FILTERS, filterPoLines, flattenPoLines, poLineContext, poLineOptions, poStatusTag, PO_STATUS_LABELS,
 } from '../lib/poLines.js';
@@ -11,13 +12,29 @@ const qty = (v) => (v == null || v === '' ? '—' : Number(v).toLocaleString('en
 const COLS = 11;
 
 /**
+ * The calendar date of an instant, where the desk is. The server sends updatedAt as a
+ * UTC Instant ('…Z'): slicing its first ten characters put a revision saved between
+ * 00:00 and 05:30 IST on the previous day. A bare 'YYYY-MM-DD' is already a date.
+ */
+export function localDateOf(v) {
+  if (v == null || v === '') return '';
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s.slice(0, 10);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
  * Where an expected date came from — said under the date, because the bare column
  * of names it replaced ("Told by") meant nothing to the desk (Issues 30.09 §S7d).
  */
 function EtaSource({ eta, po }) {
   const style = { fontSize: 10, color: 'var(--i3)', marginTop: 2, whiteSpace: 'nowrap' };
   if (eta && eta.expectedDate) {
-    const when = eta.updatedAt ? fmtDate(String(eta.updatedAt).slice(0, 10)) : '';
+    const day = localDateOf(eta.updatedAt);
+    const when = day ? fmtDate(day) : '';
     const text = ['revised by stores', eta.actor, when].filter(Boolean).join(' · ');
     return <div style={style} title={text}>{text}</div>;
   }
@@ -53,6 +70,10 @@ export function PurchaseOrders({ flash: flashProp, readOnly = false }) {
   }, []);
 
   const { mods } = useData();
+  // §PU3 / review P1: module 6 is loaded once, at sign-in — a PO Purchase raised after
+  // the stores or PM user signed in was invisible here until a browser refresh. Re-read
+  // it whenever the tab opens.
+  useFreshModule('purchase');
   const purchase = mods.purchase || {};
   const pos = useMemo(() => (Array.isArray(purchase.pos) ? purchase.pos : []), [purchase.pos]);
   const master = useItemMaster();

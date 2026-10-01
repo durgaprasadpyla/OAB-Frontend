@@ -110,8 +110,13 @@ const HistoryRow = memo(function HistoryRow({ t, mark, checked, onToggle, onRepr
  * @param onReprint     (slipOrReturnNo) => download that slip again
  * @param onCloseLines  async (rows) => the ids it closed (or null when nothing was):
  *                      confirms, calls the server and reloads — see IssuesReturns
+ *
+ * Memoised (review H2): it sits under the issue / return form, and every keystroke
+ * there re-rendered up to HISTORY_LIMIT rows and rebuilt seven option lists. Both
+ * callbacks are read through refs, so a parent handing in fresh functions does not
+ * defeat the memo; the option lists are recomputed only when the rows or filters do.
  */
-export default function StoresIssueHistory({ txns, masterItems, onReprint, onCloseLines }) {
+function StoresIssueHistory({ txns, masterItems, onReprint, onCloseLines }) {
   const [f, setF] = useState(NO_FILTERS);
   const [sel, setSel] = useState(() => new Set());
   // Lines closed from here this session: shown closed even when the ledger row comes
@@ -152,30 +157,34 @@ export default function StoresIssueHistory({ txns, masterItems, onReprint, onClo
   }), [list, master, backOf]);
 
   /** What the first cell of a row shows — see HistoryRow. */
-  const markOf = (r) => {
+  const markOf = useCallback((r) => {
     if (r.kind !== 'ISSUE') return null;
     if (r.closedAt || closedHere.has(String(r.id))) return 'closed';
     if (num(r.qty) > 0 && r.returned >= num(r.qty) - 1e-9) return 'back';
     return 'open';
-  };
+  }, [closedHere]);
 
   /** Each dropdown offers only what the other filters leave, plus its own choice. */
-  const opts = (k) => {
-    const seen = new Map();
-    rows.forEach((r) => {
-      const v = String(r[k] ?? '').trim();
-      if (v && !seen.has(norm(v)) && passes(r, f, k)) seen.set(norm(v), v);
+  const options = useMemo(() => {
+    const out = {};
+    FILTERS.forEach(({ k }) => {
+      const seen = new Map();
+      rows.forEach((r) => {
+        const v = String(r[k] ?? '').trim();
+        if (v && !seen.has(norm(v)) && passes(r, f, k)) seen.set(norm(v), v);
+      });
+      if (f[k] && !seen.has(norm(f[k]))) seen.set(norm(f[k]), f[k]);
+      out[k] = [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     });
-    if (f[k] && !seen.has(norm(f[k]))) seen.set(norm(f[k]), f[k]);
-    return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  };
+    return out;
+  }, [rows, f]);
   const visible = useMemo(() => rows.filter((r) => passes(r, f)), [rows, f]);
   const filtered = Object.values(f).some(Boolean);
 
   // Close to Return acts on what is ticked AND still on screen — a tick hidden by a
   // filter is not something the desk is looking at when it presses the button.
-  const shownClosable = visible.filter((r) => markOf(r) === 'open');
-  const picked = shownClosable.filter((r) => sel.has(r.id));
+  const shownClosable = useMemo(() => visible.filter((r) => markOf(r) === 'open'), [visible, markOf]);
+  const picked = useMemo(() => shownClosable.filter((r) => sel.has(r.id)), [shownClosable, sel]);
   const allPicked = shownClosable.length > 0 && picked.length === shownClosable.length;
 
   const setFilter = (k, v) => setF((x) => ({ ...x, [k]: v }));
@@ -185,16 +194,20 @@ export default function StoresIssueHistory({ txns, masterItems, onReprint, onClo
     shownClosable.forEach((r) => (on ? n.add(r.id) : n.delete(r.id)));
     return n;
   });
-  // the parent's reprint is a new function every render; the rows get a stable one
+  // the parent's callbacks may be new functions every render; read them through refs
+  // so the rows (and this component's memo) get stable ones
   const reprintRef = useRef(onReprint);
   reprintRef.current = onReprint;
   const reprint = useCallback((no) => { if (reprintRef.current) reprintRef.current(no); }, []);
+  const closeLinesRef = useRef(onCloseLines);
+  closeLinesRef.current = onCloseLines;
 
   async function closeToReturn() {
-    if (!picked.length || !onCloseLines) return;
+    const onClose = closeLinesRef.current;
+    if (!picked.length || !onClose) return;
     setBusy(true);
     try {
-      const done = await onCloseLines(picked);
+      const done = await onClose(picked);
       if (Array.isArray(done) && done.length) {
         setClosedHere((s) => new Set([...s, ...done.map(String)]));
         const gone = new Set(done.map(String));
@@ -215,7 +228,7 @@ export default function StoresIssueHistory({ txns, masterItems, onReprint, onClo
         {FILTERS.map(({ k, label, all }) => (
           <select key={k} value={f[k]} onChange={(e) => setFilter(k, e.target.value)} aria-label={`Filter history by ${label}`}>
             <option value="">{all}</option>
-            {opts(k).map((v) => <option key={v} value={v}>{v}</option>)}
+            {options[k].map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         ))}
         <button className="btn btn-s" onClick={() => setF(NO_FILTERS)} disabled={!filtered} aria-label="Clear history filters">✕ Clear</button>
@@ -255,3 +268,5 @@ export default function StoresIssueHistory({ txns, masterItems, onReprint, onClo
     </div>
   );
 }
+
+export default memo(StoresIssueHistory);

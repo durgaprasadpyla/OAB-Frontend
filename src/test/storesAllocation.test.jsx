@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
-import { asSoMaterial, bomCapBlock, isComplete, openOf, sourceLabel } from '../lib/soMaterial.js';
+import { asSoMaterial, bomCapBlock, isComplete, openOf, sameUom, sourceLabel } from '../lib/soMaterial.js';
 
 // Issues as on 30.09 — allocation, on the stores desk (Issues & Returns):
 //   P1  what PLAN allocated to an order is on the stores screen, with who allocated it
@@ -47,10 +47,11 @@ const line306 = (over = {}) => ({
   allocated: 194.92, issued: 0, returned: 0, netIssued: 0, covered: 194.92, open: 105.08, complete: false, onBom: true, ...over,
 });
 
-let posted, mat, legacyAllocs, slipSaved;
+let posted, mat, legacyAllocs, slipSaved, units306;
 beforeEach(() => {
   posted = []; slipSaved = [];
   legacyAllocs = null;
+  units306 = UNITS_306.map((u) => ({ ...u }));
   mat = { so: '26/656', spec: 'A1319', found: true, poQty: 25000, baseQty: 1000, lines: [line306()], allocations: [{ ...ALLOC_593 }], issues: [] };
   globalThis.fetch = vi.fn(async (url, opts = {}) => {
     const u = String(url);
@@ -80,7 +81,7 @@ beforeEach(() => {
     if (u.includes('/api/stores/so-material')) return res(legacyAllocs ? [] : mat);
     if (u.includes('/api/stores/allocations')) return res(legacyAllocs || []);
     if (u.includes('/api/stores/so-context')) return res(CTX);
-    if (u.includes('/api/stores/items/306/units')) return res(UNITS_306);
+    if (u.includes('/api/stores/items/306/units')) return res(units306);
     if (u.match(/\/api\/stores\/items\/\d+\/units/)) return res([]);
     if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
     if (u.includes('/api/stores/next-codes')) return res({ codes: [] });
@@ -329,6 +330,171 @@ describe('Stores — allocation and issue stop at what the BOM needs (S3)', () =
   });
 });
 
+/* ───────── review fixes on the desk (A1, A2, A4–A7) ───────── */
+
+// a PART hold: 100 Kg of the 300 Kg BLMU-601 is held for 26/656 (26/701 holds another 100)
+const ALLOC_601 = { id: 7, so: '26/656', unitId: 601, itemId: 306, itemCode: 'BLM306', itemName: '700 MM', internalCode: 'BLMU-601',
+  qty: 100, uom: 'Kg', location: 'AG', widthMm: 700, source: 'PLAN', actor: 'plan1', department: null, unitRemaining: 300 };
+function partialHold() {
+  mat.allocations = [{ ...ALLOC_601 }];
+  units306 = units306.map((u) => {
+    if (u.id === 593) return { ...u, allocated: 0, allocatedTo: [], holds: [] };
+    if (u.id === 601) {
+      return { ...u, allocated: 200, allocatedTo: ['26/701', '26/656'],
+        holds: [{ so: '26/701', qty: 100, source: 'STORES' }, { so: '26/656', qty: 100, source: 'PLAN' }] };
+    }
+    return u;
+  });
+}
+const putBtn = (code) => within(screen.getByLabelText('Material allocated to 26/656')).getByLabelText(`Put ${code} on the slip`);
+const slipRow = (code) => screen.getByLabelText(`Remove ${code} from the slip`).closest('tr');
+async function issueAndRead() {
+  fireEvent.click(screen.getByText(/Issue & print slip/));
+  await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/issues/batch'))).toBe(true));
+  return posted.find((p) => p.u.includes('/api/stores/issues/batch')).body;
+}
+
+describe('Stores — the slip never names a roll twice (review A1)', () => {
+  it('a held roll put on the slip from the Roll list IS on the slip — Put on slip cannot add it again', async () => {
+    partialHold();
+    await openIssues();
+    await pickItem();
+    // the part hold is preselected, with what is held for the order
+    await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('601'));
+    expect(screen.getByLabelText('Quantity')).toHaveValue(100);
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(slipRows()).toHaveLength(1);
+    // the banner reads the slip itself, not only the lines its own button made
+    expect(putBtn('BLMU-601')).toHaveTextContent('✓ on slip');
+    expect(putBtn('BLMU-601')).toBeDisabled();
+    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 100 }]);
+  });
+
+  it('puts only the REST of a part-taken hold on, onto the roll’s own line — and the picker merges too', async () => {
+    partialHold();
+    await openIssues();
+    await pickItem();
+    await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('601'));
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '40' } });
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(slipRow('BLMU-601')).toHaveTextContent('40');
+    expect(putBtn('BLMU-601')).toHaveTextContent('↧ Put the rest on slip');
+    expect(putBtn('BLMU-601')).not.toBeDisabled();
+
+    fireEvent.click(putBtn('BLMU-601'));
+    expect(slipRows()).toHaveLength(1);                 // one line of the roll, never two
+    expect(slipRow('BLMU-601')).toHaveTextContent('100');
+    expect(putBtn('BLMU-601')).toHaveTextContent('✓ on slip');
+
+    // more of the same roll from the Roll list joins that line as well
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '601' } });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '50' } });
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(slipRows()).toHaveLength(1);
+    expect(slipRow('BLMU-601')).toHaveTextContent('150');
+    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 150 }]);
+  });
+
+  it('two picks of a free roll make one line with both quantities', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await openIssues();
+    await pickItem();
+    for (const q of ['50', '30']) {
+      fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: q } });
+      fireEvent.click(screen.getByText('＋ Add to slip'));
+    }
+    expect(slipRows()).toHaveLength(1);
+    expect(slipRow('BLMU-592')).toHaveTextContent('80');
+  });
+});
+
+describe('Stores — after the desk acts (review A2, A6, A7)', () => {
+  it('leaves the picker empty after 📌 Allocate — the roll just allocated is not put straight back', async () => {
+    await openIssues();
+    await pickItem();
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '100' } });
+    const unitReads = () => globalThis.fetch.mock.calls.filter((c) => String(c[0]).includes('/api/stores/items/306/units')).length;
+    const readsBefore = unitReads();
+    fireEvent.click(screen.getByLabelText('Allocate BLMU-592 to 26/656'));
+    await waitFor(() => expect(screen.getByLabelText('Material allocated to 26/656')).toHaveTextContent('2 roll(s) are allocated'));
+    await waitFor(() => expect(unitReads()).toBeGreaterThan(readsBefore));
+    await new Promise((r) => setTimeout(r, 60));
+    // before the fix the preselect put BLMU-592 back with its 100 — a second 📌 allocated it again
+    expect(screen.getByLabelText('Roll')).toHaveValue('');
+    expect(screen.getByLabelText('Quantity')).toHaveValue(null);
+    expect(screen.getByLabelText('Allocate a roll to 26/656')).toBeDisabled();
+    // choosing the item afresh preselects as before
+    fireEvent.change(screen.getByLabelText('Item'), { target: { value: '401' } });
+    fireEvent.change(screen.getByLabelText('Item'), { target: { value: '306' } });
+    await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('592'));
+  });
+
+  it('highlights in "Rolls of this item" the roll the picker marks ① — not the oldest, held for another order', async () => {
+    await openIssues();
+    await pickItem();
+    const rolls = screen.getByText(/Rolls of this item/).closest('.card');
+    expect(optionText(592)).toMatch(/^① BLMU-592/);
+    expect(within(rolls).getByText('BLMU-592').closest('tr')).toHaveClass('hi');
+    expect(within(rolls).getByText('BLMU-600').closest('tr')).not.toHaveClass('hi');
+  });
+
+  it('takes a released roll off the slip being built, and says so', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await openIssues();
+    const banner = await screen.findByLabelText('Material allocated to 26/656');
+    fireEvent.click(within(banner).getByLabelText('Put BLMU-593 on the slip'));
+    expect(slipRows()).toHaveLength(1);
+    fireEvent.click(within(banner).getByLabelText('Release BLMU-593 from 26/656'));
+    expect(window.confirm.mock.calls.at(-1)[0]).toContain('it comes off the slip too');
+    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/1'))).toBe(true));
+    await waitFor(() => expect(slipRows()).toHaveLength(0));
+    expect(await screen.findByText(/BLMU-593 released from 26\/656 — it is free stock again\. It was taken off the slip/)).toBeInTheDocument();
+  });
+
+  it('a held roll added from the Roll list goes with its hold when that is released', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await openIssues();
+    await pickItem();
+    await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('593'));
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(slipRows()).toHaveLength(1);
+    fireEvent.click(screen.getByLabelText('Release BLMU-593 from 26/656'));
+    await waitFor(() => expect(slipRows()).toHaveLength(0));
+  });
+});
+
+describe('Stores — the department and the unit of a hold (review A4, A5)', () => {
+  it('does not nudge toward a roll held for another department — it could not go on this slip anyway', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mat.allocations = [{ ...ALLOC_593, department: 'Lamination' }];
+    await openIssues();
+    await pickItem();                                  // a Printing slip
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '50' } });
+    expect(screen.queryByText(/is allocated to 26\/656 for this item — issue it first/)).toBeNull();
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Remove BLMU-592 from the slip')).toBeInTheDocument();
+  });
+
+  it('does not cap a roll counted in another unit than the BOM line — the server does not either', async () => {
+    mat.lines = [line306({ allocated: 320, covered: 320, open: 0, complete: true })];
+    units306 = units306.map((u) => (u.id === 592 ? { ...u, uom: 'Mtrs' } : u.id === 601 ? { ...u, uom: 'KGS' } : u));
+    await openIssues();
+    await pickItem();
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+    expect(screen.getByText('＋ Add to slip')).not.toBeDisabled();
+    expect(screen.getByLabelText('Allocate BLMU-592 to 26/656')).not.toBeDisabled();
+    expect(screen.getByLabelText('BOM line for BLM306')).toHaveTextContent('counted in Mtrs, not Kg — the BOM line does not cap it');
+    // the line's own unit, however it is spelt, is still capped
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '601' } });
+    expect(screen.getByText('＋ Add to slip')).toBeDisabled();
+    expect(screen.getByLabelText('Allocate BLMU-601 to 26/656')).toBeDisabled();
+  });
+});
+
 /* ───────── the Super Admin's "material assigned" list ───────── */
 
 describe('Super Admin — an order’s material counts what was issued, not only what is held (P1)', () => {
@@ -388,6 +554,20 @@ describe('the BOM cap rule (lib/soMaterial)', () => {
     expect(bomCapBlock({ ...line, covered: 400 }, { so: '26/656', increase: 0 })).toBeNull();
     expect(bomCapBlock({ ...line, required: null }, { so: '26/656', increase: 50 })).toBeNull();
     expect(bomCapBlock({ ...line, required: 0 }, { so: '26/656', increase: 50 })).toBeNull();
+  });
+  it('exempts a roll in another unit than the line, comparing units the way the server does (review A5)', () => {
+    const full = { ...line, covered: 320 };
+    expect(sameUom('Kgs', 'KG')).toBe(true);
+    expect(sameUom("No's", 'Nos')).toBe(true);
+    expect(sameUom('Kg', 'Mtr')).toBe(false);
+    expect(bomCapBlock(full, { so: '26/656', increase: 5, rollUom: 'Mtrs' })).toBeNull();
+    expect(bomCapBlock(full, { so: '26/656', increase: 5, rollUom: 'KGS' })).toMatch(/^The BOM of 26\/656 needs 300 Kg/);
+    expect(bomCapBlock(full, { so: '26/656', increase: 5 })).toMatch(/^The BOM of 26\/656/);
+    // a unit missing on either side is no exemption
+    expect(bomCapBlock({ ...full, uom: '' }, { so: '26/656', increase: 5, rollUom: 'Mtr' })).toMatch(/^The BOM of 26\/656 needs 300 of/);
+    expect(isComplete(full)).toBe(true);
+    expect(isComplete(full, 0, 'kg')).toBe(true);
+    expect(isComplete(full, 0, 'Mtr')).toBe(false);
   });
   it('reads a /so-material response only when it is one', () => {
     expect(asSoMaterial([])).toBeNull();
