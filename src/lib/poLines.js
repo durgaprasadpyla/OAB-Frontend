@@ -62,22 +62,32 @@ export function poLineContext({ master = [], asl = [], itemsExtra = [] } = {}) {
     const code = txt(m && m.code);
     if (!code) return;
     put({ code, name: txt(m.name), materialType: txt(m.materialType), subGroup: txt(m.subGroup),
-      specialty: txt(m.specialtyName || m.specialty), uom: txt(m.uom) });
+      specialty: txt(m.specialtyName || m.specialty), uom: txt(m.uom), active: m.active !== false });
   });
   arr(itemsExtra).forEach((m) => {
     const code = txt(m && (m.itemCode || m.code));
     if (!code) return;
     put({ code, name: txt(m.specificMaterial || m.name), materialType: txt(m.materialType), subGroup: txt(m.subGroup),
-      specialty: txt(m.specialty || m.specialtyName), uom: txt(m.uom) });
+      specialty: txt(m.specialty || m.specialtyName), uom: txt(m.uom), active: m.active !== false });
   });
   // A description identifies an item only when exactly one item carries it — "500 MM"
   // is a width that several materials come in.
+  //
+  // Review F5: the master now includes WITHDRAWN items (an old line still names them by
+  // code), and a withdrawn duplicate usually carries the very description of the item
+  // that replaced it ("360 was a duplicate of 082"). Counted alongside, it made that
+  // description ambiguous, and a code-less pre-29.09 line that used to resolve to the
+  // active item resolved to nothing. So the ACTIVE items decide a description; a
+  // withdrawn one answers only for a description no active item carries.
   const byName = new Map();
-  byCode.forEach((rec) => {
+  const index = (into, rec) => {
     const k = low(rec.name);
     if (!k) return;
-    byName.set(k, byName.has(k) ? null : rec);
-  });
+    into.set(k, into.has(k) ? null : rec);
+  };
+  const inactiveByName = new Map();
+  byCode.forEach((rec) => index(rec.active === false ? inactiveByName : byName, rec));
+  inactiveByName.forEach((rec, k) => { if (!byName.has(k)) byName.set(k, rec); });
   const aslBySupplier = new Map();
   arr(asl).forEach((r) => {
     const k = low(r && r.company);

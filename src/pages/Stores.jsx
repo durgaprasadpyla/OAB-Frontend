@@ -1452,6 +1452,32 @@ export function mergeIntoSlip(basket, row) {
 }
 
 /**
+ * Review A7 with two holds of one order on one roll: a released hold takes only ITS
+ * share (`drop`) off the roll's line of the slip — a line put on for a hold, i.e. one
+ * carrying an allocationId. What is left of the line stays, under `heirId` (another of
+ * the order's holds on the roll) when the line named the released hold; a line with
+ * nothing left comes off.
+ */
+export function dropHoldShare(basket, hold, drop, heirId) {
+  let left = num(drop);
+  const out = [];
+  for (const b of basket) {
+    const linked = hold && hold.unitId != null && String(b.unitId) === String(hold.unitId) && b.allocationId != null;
+    if (!linked) { out.push(b); continue; }
+    const take = Math.min(Math.max(0, left), num(b.qty));
+    left -= take;
+    const q = +(num(b.qty) - take).toFixed(3);
+    if (q <= 1e-9) continue;
+    const row = { ...b, qty: q };
+    if (String(b.allocationId) === String(hold.id)) {
+      if (heirId != null) row.allocationId = heirId; else delete row.allocationId;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/**
  * Issues as on 30.09 (S3): "for a particular SO, based on the BOM quantities only, the
  * allocation should happen. The stores guy should know that according to the BOM for
  * that SO (say the requirement is 300 kg) he is allowed to assign only 300 kg."
@@ -1884,7 +1910,7 @@ function IssuesReturns({ flash }) {
    * back out (review H3): left standing, the roll alone let Return book an UNLINKED
    * return against the roll of a line that had just been closed.
    */
-  const lineFill = useRef(null);   // { itemId, so, department } — each null when the desk set it, not the line
+  const lineFill = useRef(null);   // { itemId, so, department, unitId } — each null when the desk set it, not the line
 
   /** A picked issue line names the roll: the item and the unit follow it. */
   function pickIssueLine(txnId) {
@@ -1899,6 +1925,7 @@ function IssuesReturns({ flash }) {
       itemId: String(l.itemId) !== String(itemId) || (prev && prev.itemId === String(itemId)) ? String(l.itemId) : null,
       so: fromLine(form.so, l.so, prev && prev.so),
       department: fromLine(form.department, l.department, prev && prev.department),
+      unitId: String(l.unitId),
     };
     if (String(l.itemId) !== String(itemId)) {
       setItemId(String(l.itemId));
@@ -1909,11 +1936,22 @@ function IssuesReturns({ flash }) {
     setChildren([blankChild()]);
   }
 
-  /** The picked line was closed: let it go, and everything it filled in with it. */
+  /**
+   * The picked line was closed: let it go, and — on a return — everything it filled in
+   * with it. Issuing, the form is the slip's (the desk switched to Issue after picking
+   * the line): its sale order, department, item and roll stay as they are, or a slip
+   * already being built for that order could go out with no sale order on it.
+   */
   function dropPickedLine() {
     const fill = lineFill.current;
     lineFill.current = null;
     setIssueLinePick('');
+    if (mode !== 'return') {
+      // issuing: the slip's order, department and item stay — but a roll the closed line
+      // put in the picker goes, or a switch back to Return would book an unlinked return
+      if (fill && fill.unitId && String(form.unitId) === fill.unitId) setForm((f) => ({ ...f, unitId: '', qty: '' }));
+      return;
+    }
     setForm((f) => ({
       ...f, unitId: '', qty: '',
       so: fill && fill.so && f.so === fill.so ? '' : f.so,
@@ -2101,7 +2139,7 @@ function IssuesReturns({ flash }) {
   // held for Lamination cannot go on a Printing slip, so it is nothing to issue first.
   const slipDept = norm(form.department);
   const waitingAlloc = (mode === 'issue' && soChosen && itemId)
-    ? soAlloc.find((a) => sameItem(a, itemId, (chosenItem || {}).code) && inBasket(a.unitId) + 1e-9 < num(a.qty)
+    ? soAlloc.find((a) => sameItem(a, itemId, (chosenItem || {}).code) && inBasket(a.unitId) + 1e-9 < heldMine(a.unitId, a.internalCode)
       && (!slipDept || !norm(a.department) || norm(a.department) === slipDept)) || null
     : null;
 
@@ -2214,6 +2252,31 @@ function IssuesReturns({ flash }) {
    * roll may already be on the slip, picked in the Roll list), and never into what
    * other orders hold on the roll. Nothing left = the hold is on the slip.
    */
+  /**
+   * This order's holds on one roll. The server keeps a row per allocation, so an order
+   * can hold the same roll twice (PLAN's 100 and the desk's top-up of 100). The holds
+   * the slip's line was put on for come first.
+   */
+  const holdsOnRoll = (unitId) => {
+    const hs = soAlloc.filter((h) => h.unitId != null && String(h.unitId) === String(unitId));
+    const named = new Set(basket.filter((b) => String(b.unitId) === String(unitId) && b.allocationId != null).map((b) => String(b.allocationId)));
+    return [...hs.filter((h) => named.has(String(h.id))), ...hs.filter((h) => !named.has(String(h.id)))];
+  };
+  /**
+   * What of the roll's line on the slip is THIS hold's: the line's quantity is spread
+   * over the order's holds on the roll in turn (one roll is one line of the slip, so a
+   * merged line carries several holds). With one hold it is simply what is on the slip.
+   */
+  const shareOnSlip = (a) => {
+    if (a.unitId == null) return 0;
+    let left = inBasket(a.unitId);
+    for (const h of holdsOnRoll(a.unitId)) {
+      const take = Math.min(num(h.qty), Math.max(0, left));
+      if (String(h.id) === String(a.id)) return take;
+      left -= take;
+    }
+    return 0;
+  };
   const holdLeftToTake = (a) => {
     if (a.unitId == null) return 0;
     const onSlip = inBasket(a.unitId);
@@ -2223,12 +2286,14 @@ function IssuesReturns({ flash }) {
     const remaining = a.unitRemaining != null ? num(a.unitRemaining) : roll ? num(roll.qtyRemaining) : num(a.qty);
     const away = roll && (a.unitRemaining != null || roll.qtyRemaining != null) ? heldOther(roll) : 0;
     return Math.min(
-      Math.max(0, num(a.qty) - onSlip),
+      // what of this hold is not on the slip yet…
+      Math.max(0, num(a.qty) - shareOnSlip(a)),
+      // …within what ALL of this order's holds on the roll leave once the slip is counted
       Math.max(0, heldMine(a.unitId, a.internalCode) - onSlip),
       remaining - away - onSlip,
     );
   };
-  const holdOnSlip = (a) => a.unitId != null && inBasket(a.unitId) > 1e-9 && holdLeftToTake(a) <= 1e-9;
+  const holdOnSlip = (a) => a.unitId != null && shareOnSlip(a) > 1e-9 && holdLeftToTake(a) <= 1e-9;
 
   /**
    * S2: one click puts an allocated roll on the slip — what is held for the order, for
@@ -2239,7 +2304,7 @@ function IssuesReturns({ flash }) {
     if (a.unitId == null) { flash('r', `${a.internalCode} cannot be put on the slip from here — pick it in the Roll list below.`); return; }
     const q = holdLeftToTake(a);
     if (q <= 1e-9) {
-      flash('r', inBasket(a.unitId) > 1e-9 ? `${a.internalCode} is already on the slip.`
+      flash('r', shareOnSlip(a) > 1e-9 ? `${a.internalCode} is already on the slip.`
         : `Nothing of ${a.internalCode} is left to issue against this hold.`);
       return;
     }
@@ -2266,16 +2331,31 @@ function IssuesReturns({ flash }) {
     // Review A7: a roll put on the slip for this hold leaves it with the hold — issued
     // after the release it would be a NEW commitment (capped, or refused because another
     // order may now hold the freed roll), and nothing on screen would say so.
-    const slipRows = basket.filter((b) => b.allocationId === a.id);
+    // Only THIS hold's share of the roll's line goes: the order may hold the same roll
+    // twice, and one line of the slip then carries both holds.
+    const linkedQty = a.unitId == null ? 0 : basket
+      .filter((b) => String(b.unitId) === String(a.unitId) && b.allocationId != null)
+      .reduce((s, b) => s + num(b.qty), 0);
+    const drop = linkedQty > 1e-9 ? Math.min(shareOnSlip(a), linkedQty) : 0;
+    const whole = drop > 1e-9 && drop >= linkedQty - 1e-9;
+    const heir = drop > 1e-9 ? holdsOnRoll(a.unitId).find((h) => String(h.id) !== String(a.id)) : null;
     if (!window.confirm(`Release ${a.internalCode} from ${form.so}?\n\n${qty(a.qty)} ${a.uom || ''} held for this order`
       + `${sourceLabel(a.source) ? ` (allocated by ${sourceLabel(a.source)})` : ''} goes back to the free stock, and any order can then be given it.`
-      + (slipRows.length ? `\n\nIt is on the slip being built — it comes off the slip too.` : ''))) return;
+      + (whole ? `\n\nIt is on the slip being built — it comes off the slip too.`
+        : drop > 1e-9 ? `\n\n${qty(drop)} ${a.uom || ''} of the roll's line on the slip being built is this allocation's — that comes off the slip too; the rest of the line stays.` : ''))) return;
     setBusy(true);
     try {
       await storesApi.releaseAllocation(a.id);
-      if (slipRows.length) setBasket((b) => b.filter((x) => x.allocationId !== a.id));
+      // Review F3: the reload re-runs the preselect while the holds on screen are still
+      // the ones from before the release — it would put the roll just released straight
+      // back in the picker with its old held quantity (the A2 pattern). And a roll the
+      // picker already showed for that hold leaves it: it is free stock now, not the order's.
+      preselectOff.current = `${form.so}|${itemId}`;
+      if (a.unitId != null && String(form.unitId) === String(a.unitId)) setForm((f) => ({ ...f, unitId: '', qty: '' }));
+      if (drop > 1e-9) setBasket((b) => dropHoldShare(b, a, drop, heir ? heir.id : null));
       flash('g', `${a.internalCode} released from ${form.so} — it is free stock again.`
-        + (slipRows.length ? ` It was taken off the slip; add it again from the Roll list if it is still going out.` : ''));
+        + (whole ? ` It was taken off the slip; add it again from the Roll list if it is still going out.`
+          : drop > 1e-9 ? ` Its ${qty(drop)} ${a.uom || ''} was taken off the roll's line on the slip.` : ''));
       setAllocTick((t) => t + 1);
       await loadUnits(itemId);
     } catch (e) { flash('r', e.message); } finally { setBusy(false); }
@@ -2565,7 +2645,7 @@ function IssuesReturns({ flash }) {
                       // Review A1: read off the slip itself — the roll may have gone on it
                       // from the Roll list — not only off a line this button made.
                       const onSlip = holdOnSlip(a);
-                      const partly = !onSlip && a.unitId != null && inBasket(a.unitId) > 1e-9;
+                      const partly = !onSlip && shareOnSlip(a) > 1e-9;
                       return (
                         <tr key={a.id}>
                           <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{a.internalCode}</td>

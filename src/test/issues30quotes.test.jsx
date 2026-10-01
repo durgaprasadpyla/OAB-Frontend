@@ -1014,6 +1014,58 @@ describe('Q7 / Q8 — PO → SO from a rep\'s PO', () => {
     expect(screen.getByLabelText('Dispatch Location')).toHaveValue('');
     expect(screen.getByLabelText('Rep warehouse not in the Customer Master')).toHaveTextContent(/“OLD UNIT” is not in the Customer Master for Kova Agro at DHARAPURAM/);
     expect(screen.queryByText(/Warehouse: DHARAPURAM/)).toBeNull();     // never SWIGGY's row by default
+    // review F7: nor SWIGGY's group — Kova Agro's rows sit under SWIGGY and under no
+    // group, so which one the PO is for is the Superstar's to say
+    expect(screen.getByLabelText('Group')).toHaveValue('');
+    expect(screen.getByLabelText('Rep warehouse not in the Customer Master')).toHaveTextContent(/under more than one group/);
+    // every row of the customer is offered, each naming its group
+    const locOpts = [...screen.getByLabelText('Dispatch Location').options].filter((o) => o.value).map((o) => o.textContent);
+    expect(locOpts).toEqual(['DHARAPURAM (DHARAPURAM) · SWIGGY', 'DHARAPURAM (KOVAI OWN) · no group']);
+  });
+
+  it('F7: the row the Superstar picks brings its group with it', async () => {
+    open('OLD UNIT');
+    await toNewPo();
+    const sel = screen.getByLabelText('Dispatch Location');
+    const swiggy = [...sel.options].find((o) => /SWIGGY/.test(o.textContent)).value;
+    await userEvent.selectOptions(sel, swiggy);
+    expect(screen.getByLabelText('Group')).toHaveValue('SWIGGY');
+    expect(screen.getByLabelText('Customer')).toHaveValue('Kova Agro');
+    expect(screen.getByText(/Warehouse: DHARAPURAM/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Rep warehouse not in the Customer Master')).toBeNull();
+    // and the picker is the group's own again
+    expect([...screen.getByLabelText('Dispatch Location').options].filter((o) => o.value).map((o) => o.textContent)).toEqual(['DHARAPURAM (DHARAPURAM)']);
+  });
+
+  it('F7: the customer’s own row leaves no group, as a customer with none', async () => {
+    open('OLD UNIT');
+    await toNewPo();
+    const sel = screen.getByLabelText('Dispatch Location');
+    await userEvent.selectOptions(sel, [...sel.options].find((o) => /no group/.test(o.textContent)).value);
+    expect(screen.getByLabelText('Group')).toHaveValue('');
+    expect(screen.getByLabelText('Customer')).toHaveValue('Kova Agro');
+    expect(screen.getByText(/Warehouse: KOVAI OWN/)).toBeInTheDocument();
+  });
+
+  it('F7: a customer under ONE group keeps that group when the warehouse is not found', async () => {
+    const r = renderApp(
+      <Routes><Route path="/po-to-so" element={<PoToSo />} /><Route path="/po" element={<NewPO />} /></Routes>,
+      {
+        modules: {
+          sales: salesModule({
+            leads: [{ id: 'LK', client_name: 'KOVA AGRO', converted_to_customer: true }],
+            pos: [{ id: 'p1', po_ref: 'ref9', lead_id: 'LK', customer: 'KOVA AGRO', despatch_location: 'DHARAPURAM', warehouse_name: 'OLD UNIT', po_number: 'PO-90', date: '2026-09-29', created_by: R1, created_at: '2026-09-29T10:00:00Z', sku_id: 'K1', sku_name: 'Coconut 200', jss_spec: 'A50', qty: 1000, price: 3 }],
+          }),
+          customers: [KOVA[0], { ...KOVA[0], warehouseName: 'TIRUPUR' }], jss, fgLedger, prices: { A50: { price: 3.5 } }, oab: { OAB: { SF: [], OT: [] }, INV_REG: [], lastSO: { y: '26', n: 400 } },
+        },
+        role: 'user', route: '/po-to-so',
+      },
+    );
+    expect(r).toBeTruthy();
+    await toNewPo();
+    expect(screen.getByLabelText('Group')).toHaveValue('SWIGGY');
+    expect(screen.getByLabelText('Dispatch Location')).toHaveValue('');
+    expect(screen.getByLabelText('Rep warehouse not in the Customer Master')).not.toHaveTextContent(/more than one group/);
   });
 
   it('Q8: the FG chosen is reported, not dropped, when the sale orders cannot be matched to the lines', async () => {

@@ -773,6 +773,17 @@ describe('R1 — a KAM account is a customer on every screen, not only in the re
     expect(kept).toMatchObject({ converted_by: 'super_admin', converted_at: 'x' });
   });
 
+  it('a lead put back with ↩ Lead stays a lead through a KAM edit of that name (review F9)', () => {
+    const now = new Date('2026-10-01T00:00:00Z');
+    const reverted = mk('L1', 'Acme', { converted_to_customer: false, stage: 'Hot' });
+    const out = kamApplyEdits([reverted], { Acme: { kam: 'R2', monthly_target: '5000', order_frequency: 'Monthly' } }, { now })[0];
+    expect(out).toMatchObject({ kam: 'R2', monthly_target: '5000', converted_to_customer: false, stage: 'Hot' });
+    expect(out.converted_by).toBeUndefined();
+    expect(out.converted_at).toBeUndefined();
+    // a lead never decided either way is still flagged, as before
+    expect(kamApplyEdits([mk('L2', 'Acme')], { Acme: { kam: 'R2' } }, { now })[0]).toMatchObject({ converted_to_customer: true, converted_by: 'kam' });
+  });
+
   it('the Super Admin\'s Leads tab shows the KAM account as a customer', async () => {
     renderApp(<LeadsAdmin />, { modules: { sales: salesModule({ leads: [mk('K1', 'GAMMA FOODS', { kam: REP })] }), customers: CUSTOMERS }, role: 'superadmin' });
     const row = (await screen.findByText('GAMMA FOODS')).closest('tr');

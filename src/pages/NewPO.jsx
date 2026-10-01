@@ -58,6 +58,12 @@ export default function NewPO() {
   const [locKey, setLocKey] = useState('');
   // 30.09 PE3: the warehouse on the rep's PO that no Customer Master row carries
   const [whNotice, setWhNotice] = useState('');
+  // Review F7: a rep's PO that lands on no Customer Master row, for a customer whose rows
+  // sit under more than one group (Kova Agro is its own customer AND SWIGGY's filler):
+  // which group it is for cannot be told, so none is taken. Until the Superstar picks,
+  // the location picker offers every row of the customer, each naming its group, and
+  // the row picked brings its group with it.
+  const [groupOpen, setGroupOpen] = useState(false);
   const [skus, setSkus] = useState([]);           // [{...jss, checked, qty}]
   const [selPO, setSelPO] = useState([]);
   const [added, setAdded] = useState(null);
@@ -85,31 +91,42 @@ export default function NewPO() {
     // the customer's spelling come FROM that row (the location list is read by exact
     // name under the group, so the rep's lead spelling would find nothing).
     const match = masterRowForRepPo(mods.customers, repPo);
-    const first = (mods.customers || []).find((c) => sameName(c.customer, repPo.customer)) || null;
+    const named = (mods.customers || []).filter((c) => sameName(c.customer, repPo.customer));
+    const first = named[0] || null;
     const row = match || first;
     // the rep named a warehouse the Customer Master has no row for: keep the customer,
     // but leave the despatch row unpicked and say why
     const wh = String(repPo.warehouse || '').trim();
     const whMissing = !!wh && !match && !!first;
     setWhNotice(whMissing ? wh : '');
-    setGroup(row ? String(row.group || '').trim() : '');
+    // no exact row: the FIRST row's group is a guess — SWIGGY's for Kova Agro, whose
+    // location list then offers only SWIGGY's rows, the very misattribution PE3 fixed
+    const open = !match && new Set(named.map((c) => String(c.group || '').trim())).size > 1;
+    setGroupOpen(open);
+    setGroup(row && !open ? String(row.group || '').trim() : '');
     setCustomer(row ? String(row.customer || '').trim() : (repPo.customer || ''));
     setLoc(match ? String(match.dispatchLoc || '') : (whMissing ? '' : (repPo.loc || '')));
     setLocKey(match ? locRowKey(match) : '');
     setSkus([]); setStep(1);
   }, [repPo, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
-  const customers = useMemo(() => (
-    (mods.customers && mods.customers.length) ? custsInGroup(mods.customers, group) : jssCustomers(mods.jss)
-  ), [mods.customers, mods.jss, group]);
+  const customers = useMemo(() => {
+    const list = (mods.customers && mods.customers.length) ? custsInGroup(mods.customers, group) : jssCustomers(mods.jss);
+    // F7: the rep's customer stays on screen while its group is still to be picked
+    return groupOpen && customer && !list.includes(customer) ? [customer, ...list] : list;
+  }, [mods.customers, mods.jss, group, groupOpen, customer]);
   // The locations of THIS customer under THIS group — no group picked means the
   // customer's own (ungrouped) rows, so a name that is also a filler for a group
   // ("Kova Agro" for Swiggy) offers only its own warehouse here.
   const locations = useMemo(() => {
-    const rows = getCustLocations(mods.customers, customer, group);
+    // F7: the group still to be picked — every row of the customer, under any group
+    const rows = getCustLocations(mods.customers, customer, groupOpen ? undefined : group);
     // identical rows (same location AND warehouse) are one choice, not two
     const seen = new Set();
-    return rows.filter((r) => { const k = locRowKey(r); if (seen.has(k)) return false; seen.add(k); return true; });
-  }, [mods.customers, customer, group]);
+    return rows.filter((r) => {
+      const k = (groupOpen ? String(r.group || '').trim() + '##' : '') + locRowKey(r);
+      if (seen.has(k)) return false; seen.add(k); return true;
+    });
+  }, [mods.customers, customer, group, groupOpen]);
   const locRow = useMemo(
     () => locations.find((r) => locRowKey(r) === locKey) || null,
     [locations, locKey],
@@ -147,12 +164,24 @@ export default function NewPO() {
   }
 
   function pickLoc(key) {
+    if (groupOpen) {
+      // the row picked names the group: it comes with it, and the picker narrows to it
+      const [g, k] = key.split('##');
+      const row = getCustLocations(mods.customers, customer).find((r) => String(r.group || '').trim() === g && locRowKey(r) === k);
+      if (!row) { setLocKey(''); setLoc(''); return; }
+      setGroupOpen(false);
+      setGroup(g);
+      setLocKey(k);
+      setLoc(String(row.dispatchLoc || ''));
+      return;
+    }
     setLocKey(key);
     const row = getCustLocations(mods.customers, customer, group).find((r) => locRowKey(r) === key);
     setLoc(row ? String(row.dispatchLoc || '') : '');
   }
 
   function onCustomer(cu) {
+    setGroupOpen(false);
     setCustomer(cu);
     setSkus([]);
     const locs = getCustLocations(mods.customers, cu, group);
@@ -166,6 +195,7 @@ export default function NewPO() {
   // Changing the group clears everything downstream — customer, location and any SKU
   // rows already built for a previous customer. (onGroupSelect)
   function onGroup(g) {
+    setGroupOpen(false);
     setGroup(g);
     setCustomer('');
     setLoc('');
@@ -427,9 +457,12 @@ export default function NewPO() {
           <div className="g2">
             <div className="fg"><label>Dispatch Location * <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(applies to all SKUs)</span></label>
               {locations.length ? (
-                <select value={locKey} aria-label="Dispatch Location" onChange={(e) => pickLoc(e.target.value)}>
+                <select value={groupOpen ? '' : locKey} aria-label="Dispatch Location" onChange={(e) => pickLoc(e.target.value)}>
                   <option value="">— Select Location —</option>
-                  {locations.map((l) => <option key={locRowKey(l)} value={locRowKey(l)}>{l.dispatchLoc}{l.warehouseName ? ` (${l.warehouseName})` : ''}</option>)}
+                  {locations.map((l) => {
+                    const k = (groupOpen ? String(l.group || '').trim() + '##' : '') + locRowKey(l);
+                    return <option key={k} value={k}>{l.dispatchLoc}{l.warehouseName ? ` (${l.warehouseName})` : ''}{groupOpen ? ` · ${String(l.group || '').trim() || 'no group'}` : ''}</option>;
+                  })}
                 </select>
               ) : (
                 <input value={loc} aria-label="Dispatch Location" onChange={(e) => { setLoc(e.target.value); setLocKey(''); }} placeholder="Dispatch location" />
@@ -439,6 +472,7 @@ export default function NewPO() {
                 <div className="al al-y" style={{ marginTop: 4, fontSize: 11 }} role="status" aria-label="Rep warehouse not in the Customer Master">
                   ⚠ The sales rep&rsquo;s warehouse &ldquo;{whNotice}&rdquo; is not in the Customer Master for {customer || (repPo && repPo.customer)}
                   {repPo && repPo.loc ? ` at ${repPo.loc}` : ''} — pick the despatch location row it should go to.
+                  {groupOpen ? ' The customer is under more than one group, so no group is taken for it: the row picked brings its group.' : ''}
                 </div>
               )}
             </div>

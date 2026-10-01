@@ -97,9 +97,11 @@ export function kamApplyEdits(leads, edits, { uid = salesUid, now = new Date() }
       // 30.09 §SL6: the KAM screen lists Customer Master customers only, so the lead it
       // matched by name is a customer too — flag it, the same as a created row, or the
       // Super Admin's screens and QC's CSA → JSS list keep it on the lead side. A lead
-      // already flagged keeps its own conversion record.
+      // already flagged keeps its own conversion record — and one explicitly put BACK to
+      // a lead (↩ Lead writes converted_to_customer:false) stays a lead (review F9): a
+      // KAM, frequency or target edit of that name is not a conversion.
       const prev = out[i];
-      const flag = prev.converted_to_customer === true ? {} : {
+      const flag = (prev.converted_to_customer === true || prev.converted_to_customer === false) ? {} : {
         converted_to_customer: true, converted_at: at, converted_by: 'kam', conversion_requested: false,
       };
       out[i] = { ...prev, ...fields, ...flag };

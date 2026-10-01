@@ -300,6 +300,37 @@ describe('Issues 30.09 — GRN Entries picks the PO from the supplier’s POs', 
     fireEvent.focus(sel);
     await waitFor(() => expect(options(sel).map(([v]) => v)).toEqual(['', 'PO-15', 'PO-13', 'PO-9']));
   });
+
+  it('reads a legacy PO number spelt in another case or with spaces as that PO — listed once (review F10)', async () => {
+    grnDetail.poNum = 'po-11 ';                       // typed into the old free-text box
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Edit GRN/2026/1'));
+    const sel = await screen.findByLabelText('Edit PO number');
+    await waitFor(() => expect(options(sel).map(([v]) => v)).toEqual(['', 'PO-14', 'PO-11']));
+    // no second 'po-11 (Open)' beside PO-11, and the receipt reads as PO-11
+    expect(sel).toHaveValue('PO-11');
+    expect(screen.getByText('2 open POs for Jindal.')).toBeInTheDocument();
+
+    // an unrelated correction sends only itself
+    fireEvent.change(screen.getByLabelText('Edit invoice number'), { target: { value: 'INV-9' } });
+    // away to another PO and back is no change to the receipt's PO either
+    fireEvent.change(sel, { target: { value: 'PO-14' } });
+    fireEvent.change(sel, { target: { value: 'PO-11' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save paperwork/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1')).toBe(true));
+    expect(calls.find((c) => c.method === 'PUT' && c.u === '/api/stores/grns/1').body).toEqual({ invoiceNo: 'INV-9' });
+  });
+
+  it('a legacy spelling of a PO no longer open is still listed once, under the receipt’s own spelling', async () => {
+    grnDetail.poNum = ' po-9';
+    mount(<GrnAdmin />);
+    fireEvent.click(await screen.findByLabelText('Edit GRN/2026/1'));
+    const sel = await screen.findByLabelText('Edit PO number');
+    await waitFor(() => expect(options(sel)).toEqual([
+      ['', '— no PO (direct purchase) —'], ['PO-14', 'PO-14 (part received)'], ['PO-11', 'PO-11'], [' po-9', 'po-9 (Closed)'],
+    ]));
+    expect(sel).toHaveValue(' po-9');
+  });
 });
 
 /* ── §4: RM prices ──────────────────────────────────────────────────────── */

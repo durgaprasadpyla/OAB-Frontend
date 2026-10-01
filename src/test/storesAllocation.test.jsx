@@ -462,6 +462,110 @@ describe('Stores — after the desk acts (review A2, A6, A7)', () => {
     expect(slipRows()).toHaveLength(1);
     fireEvent.click(screen.getByLabelText('Release BLMU-593 from 26/656'));
     await waitFor(() => expect(slipRows()).toHaveLength(0));
+    // Review F3: the slip changing re-ran the preselect against the holds from before the
+    // release, and put BLMU-593 straight back in the picker with its old 194.92 — where
+    // it then sat as a free roll with 📌 Allocate and ＋ Add enabled
+    await waitFor(() => expect(screen.getByLabelText('Material allocated to 26/656')).toHaveTextContent('Nothing is allocated to 26/656 yet'));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(screen.getByLabelText('Roll')).toHaveValue('');
+    expect(screen.getByLabelText('Quantity')).toHaveValue(null);
+  });
+});
+
+/* ───────── review F4: one order holding the same roll twice ───────── */
+
+// The server keeps a row per allocation: PLAN held 100 Kg of BLMU-601 for 26/656, and the
+// desk topped it up with another 100 Kg — two holds of one order on one 300 Kg roll.
+const HOLD_A = { ...ALLOC_601, id: 7, qty: 100, source: 'PLAN' };
+const HOLD_B = { ...ALLOC_601, id: 8, qty: 100, source: 'STORES', actor: 'store1' };
+function twoHolds() {
+  mat.allocations = [{ ...HOLD_A }, { ...HOLD_B }];
+  units306 = units306.map((u) => {
+    if (u.id === 593) return { ...u, allocated: 0, allocatedTo: [], holds: [] };
+    if (u.id === 601) {
+      return { ...u, allocated: 200, allocatedTo: ['26/656'],
+        holds: [{ so: '26/656', qty: 100, source: 'PLAN' }, { so: '26/656', qty: 100, source: 'STORES' }] };
+    }
+    return u;
+  });
+}
+const puts601 = () => within(screen.getByLabelText('Material allocated to 26/656')).getAllByLabelText('Put BLMU-601 on the slip');
+const releases601 = () => within(screen.getByLabelText('Material allocated to 26/656')).getAllByLabelText('Release BLMU-601 from 26/656');
+
+describe('Stores — two holds of one order on one roll (review F4)', () => {
+  it('one hold on the slip leaves the other still to put on — the roll’s line carries both', async () => {
+    twoHolds();
+    await openIssues();
+    await waitFor(() => expect(puts601()).toHaveLength(2));
+    fireEvent.click(puts601()[0]);
+    expect(slipRow('BLMU-601')).toHaveTextContent('100');
+    expect(puts601()[0]).toHaveTextContent('✓ on slip');
+    expect(puts601()[0]).toBeDisabled();
+    // before the fix the WHOLE roll's slip quantity was counted against each hold: B read
+    // "✓ on slip" too, with only 100 of the 200 held on the slip
+    expect(puts601()[1]).toHaveTextContent('↧ Put on slip');
+    expect(puts601()[1]).not.toBeDisabled();
+
+    fireEvent.click(puts601()[1]);
+    expect(slipRows()).toHaveLength(1);                 // one line of the roll, never two
+    expect(slipRow('BLMU-601')).toHaveTextContent('200');
+    puts601().forEach((b) => expect(b).toHaveTextContent('✓ on slip'));
+  });
+
+  it('releasing one of them takes only its share off the merged line', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    twoHolds();
+    await openIssues();
+    await waitFor(() => expect(puts601()).toHaveLength(2));
+    fireEvent.click(puts601()[0]);
+    fireEvent.click(puts601()[1]);
+    expect(slipRow('BLMU-601')).toHaveTextContent('200');
+
+    // B is the hold the line does NOT name — before the fix it left all 200 on the slip
+    fireEvent.click(releases601()[1]);
+    expect(window.confirm.mock.calls.at(-1)[0]).toContain('100 Kg of the roll\'s line on the slip being built is this allocation\'s');
+    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/8'))).toBe(true));
+    await waitFor(() => expect(slipRow('BLMU-601')).toHaveTextContent('100'));
+    expect(slipRow('BLMU-601')).not.toHaveTextContent('200');
+    await waitFor(() => expect(puts601()).toHaveLength(1));
+    expect(puts601()[0]).toHaveTextContent('✓ on slip');
+    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 100 }]);
+  });
+
+  it('the line goes on under the hold that is left when the one it names is released', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    twoHolds();
+    await openIssues();
+    await waitFor(() => expect(puts601()).toHaveLength(2));
+    fireEvent.click(puts601()[0]);
+    fireEvent.click(puts601()[1]);
+    // A — the hold the merged line names — first
+    fireEvent.click(releases601()[0]);
+    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/7'))).toBe(true));
+    await waitFor(() => expect(puts601()).toHaveLength(1));
+    expect(slipRow('BLMU-601')).toHaveTextContent('100');
+    expect(puts601()[0]).toHaveTextContent('✓ on slip');
+    // then B: what is left of the line is B's, so it comes off with it
+    fireEvent.click(releases601()[0]);
+    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/8'))).toBe(true));
+    await waitFor(() => expect(slipRows()).toHaveLength(0));
+  });
+});
+
+describe('dropHoldShare (review F4)', () => {
+  it('takes the share off the roll’s held line only, hands the line on, and drops an emptied line', async () => {
+    const { dropHoldShare } = await import('../pages/Stores.jsx');
+    const basket = [
+      { unitId: 601, qty: 200, allocationId: 7 },
+      { unitId: 592, qty: 50 },                          // a free roll: never touched
+    ];
+    expect(dropHoldShare(basket, { id: 8, unitId: 601 }, 100, 7)).toEqual([{ unitId: 601, qty: 100, allocationId: 7 }, { unitId: 592, qty: 50 }]);
+    expect(dropHoldShare(basket, { id: 7, unitId: 601 }, 100, 8)).toEqual([{ unitId: 601, qty: 100, allocationId: 8 }, { unitId: 592, qty: 50 }]);
+    expect(dropHoldShare(basket, { id: 7, unitId: 601 }, 200, null)).toEqual([{ unitId: 592, qty: 50 }]);
+    // a hold plus free stock on one line: the free part stays, no longer named for the hold
+    expect(dropHoldShare([{ unitId: 601, qty: 150, allocationId: 7 }], { id: 7, unitId: 601 }, 100, null)).toEqual([{ unitId: 601, qty: 50 }]);
+    // a line not put on for a hold is left alone
+    expect(dropHoldShare([{ unitId: 601, qty: 80 }], { id: 7, unitId: 601 }, 80, null)).toEqual([{ unitId: 601, qty: 80 }]);
   });
 });
 
@@ -568,6 +672,21 @@ describe('the BOM cap rule (lib/soMaterial)', () => {
     expect(isComplete(full)).toBe(true);
     expect(isComplete(full, 0, 'kg')).toBe(true);
     expect(isComplete(full, 0, 'Mtr')).toBe(false);
+  });
+  it('keeps only letters and decimal digits of a unit, as Java’s Character.isLetterOrDigit does (review F6)', async () => {
+    const { normUom } = await import('../lib/soMaterial.js');
+    // ² ³ ½ are numbers (No) to \p{N}, but not digits to Java: the server drops them
+    expect(normUom('m²')).toBe('m');
+    expect(sameUom('m²', 'm')).toBe(true);
+    expect(sameUom('m³', 'M')).toBe(true);
+    expect(sameUom('½ Kg', 'kg')).toBe(true);
+    // a decimal digit is kept, any script's
+    expect(normUom('M2')).toBe('m2');
+    expect(sameUom('M2', 'M')).toBe(false);
+    expect(normUom('m٢')).toBe('m٢');
+    // so the cap reads the roll as the line's own unit, as the server does
+    const full = { ...line, uom: 'm', covered: 320 };
+    expect(bomCapBlock(full, { so: '26/656', increase: 5, rollUom: 'm²' })).toMatch(/^The BOM of 26\/656 needs 300 m/);
   });
   it('reads a /so-material response only when it is one', () => {
     expect(asSoMaterial([])).toBeNull();

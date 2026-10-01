@@ -50,9 +50,13 @@ export const netOut = (l) => Math.max(0, num(l && l.qtyIssued) - num(l && l.qtyR
 /** True when the line has a requirement the cap can be measured against. */
 export const hasCap = (line) => !!line && line.required != null && num(line.required) > 0;
 
-/** A unit as the server compares it (StoresService.normUom): Kg = Kgs = KG, No's = Nos. */
+/**
+ * A unit as the server compares it (StoresService.normUom): Kg = Kgs = KG, No's = Nos.
+ * Only letters and DECIMAL digits count — Java's Character.isLetterOrDigit — so a
+ * superscript or fraction (m², ½) drops out here exactly as it does there (review F6).
+ */
 export function normUom(u) {
-  const s = String(u ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const s = String(u ?? '').toLowerCase().replace(/[^\p{L}\p{Nd}]/gu, '');
   return s.length > 1 && s.endsWith('s') ? s.slice(0, -1) : s;
 }
 export const sameUom = (a, b) => normUom(a) === normUom(b);

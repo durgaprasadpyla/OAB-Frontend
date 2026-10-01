@@ -133,6 +133,14 @@ export function DataProvider({ children }) {
   // flight when a save began must not land on top of it — it would put the
   // pre-save copy back on screen under the post-save version.
   const writeSeqRef = useRef({});
+  // How many saves of each module are on the wire right now. A read that STARTS and
+  // LANDS while one is in flight sees the same writeSeq on both ends, yet what it
+  // read may be the server copy from before that save — so it is dropped as well.
+  const inFlightRef = useRef({});
+  // A read of the module was dropped while a save was in flight: read it again, once,
+  // when the last of those saves lands (a save that failed rolls back to the copy from
+  // before it, so whatever the dropped read would have brought is fetched afresh).
+  const rereadRef = useRef({});
 
   const reload = useCallback(async () => {
     setLoading(true); setError('');
@@ -174,14 +182,23 @@ export function DataProvider({ children }) {
    * a granular endpoint write (Phase 1): the endpoint is the authority, so we pull
    * the fresh, server-updated blob rather than mutating the local copy by hand.
    */
-  const reloadModule = useCallback(async (key) => {
+  const reloadModule = useCallback(async (key, again = false) => {
     const id = KEY_TO_ID[key];
     if (!id) return;
     const seq = writeSeqRef.current[key] || 0;
     const fresh = await loadOne(id);
     const value = fresh.value != null ? fresh.value : emptyModules()[key];
-    // a save of this module started meanwhile: its result is newer than this read
-    if ((writeSeqRef.current[key] || 0) !== seq) return value;
+    // A save of this module started meanwhile, or is still on the wire: its result is
+    // newer than this read, which may be the pre-save copy. Applying it would put that
+    // copy on screen under the old version, and the next functional save — built from
+    // it — would silently overwrite the save that crossed it (a lost update).
+    if ((writeSeqRef.current[key] || 0) !== seq || (inFlightRef.current[key] || 0) > 0) {
+      // still on the wire: read again once the last of those saves has landed
+      if ((inFlightRef.current[key] || 0) > 0) { rereadRef.current[key] = true; return value; }
+      // it has landed already: one more read now, which nothing on the wire can cross
+      if (!again) return reloadModule(key, true);
+      return value;
+    }
     setMods(m => ({ ...m, [key]: value }));
     setVersions(m => ({ ...m, [key]: fresh.version }));
     if (id === 1) baseRef.current = snapshotBase(value);
@@ -206,6 +223,7 @@ export function DataProvider({ children }) {
     const prev = modsRef.current[key];                 // snapshot for rollback
     let value = typeof next === 'function' ? next(prev) : next;
     writeSeqRef.current[key] = (writeSeqRef.current[key] || 0) + 1;
+    inFlightRef.current[key] = (inFlightRef.current[key] || 0) + 1;
     setMods(m => ({ ...m, [key]: value }));   // optimistic local update
     setSaving(true);
     try {
@@ -291,9 +309,16 @@ export function DataProvider({ children }) {
     } finally {
       // bumped again on the way out, so a reload begun DURING the save is dropped too
       writeSeqRef.current[key] = (writeSeqRef.current[key] || 0) + 1;
+      inFlightRef.current[key] = Math.max(0, (inFlightRef.current[key] || 0) - 1);
       setSaving(false);
+      // a read was dropped while this module was being written: fetch it afresh now
+      // that the last save of it has landed
+      if (!inFlightRef.current[key] && rereadRef.current[key]) {
+        rereadRef.current[key] = false;
+        reloadModule(key).catch(() => { /* the loaded copy stands */ });
+      }
     }
-  }, []);
+  }, [reloadModule]);
 
   return (
     <DataCtx.Provider value={{ mods, versions, loading, error, saving, conflict, clearConflict, reload, reloadModule, save }}>

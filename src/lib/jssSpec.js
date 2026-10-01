@@ -96,7 +96,10 @@ export function micronValue(v) {
  * "320 MM"). '' when the name carries none.
  */
 export function micronFromName(name) {
-  const m = /(\d+(?:\.\d+)?)\s*(?:MICRONS?|MIC|µM?|μM?)(?![A-Z])/i.exec(s(name));
+  // the server's own rule (MasterDataService.MICRONS_IN_NAME, review F8): a letter may
+  // follow the unit only when it is S (a plural, "20 MICS") or X (the next dimension,
+  // "20MICX1200") — "MICA" is still not MIC
+  const m = /(\d+(?:\.\d+)?)\s*(?:MICRONS?|MIC|µM?|μM?)(?![A-RT-WYZ])/i.exec(s(name));
   return m ? String(Number(m[1])) : '';
 }
 
@@ -261,7 +264,10 @@ export function layersOfSpec(spec) {
   // raw Item Master text is normalised the same way when the spec is opened, so the
   // select lands on "35" instead of offering "35 MIC (not in the master)" beside it —
   // and the next save writes the clean value. Text with no number in it stays as is.
-  const mic = (v) => micronValue(v) || s(v);
+  // Review F8: so does text with MORE than one number — a legacy "12+50" or "12/50" is
+  // a laminate's two films, and reading it as "12" would truncate the spec's MIC on the
+  // next save of any field.
+  const mic = (v) => ((s(v).match(/\d+(?:\.\d+)?/g) || []).length === 1 ? micronValue(v) : s(v));
   const at = (i) => ({
     material: s(spec && spec[`material${i}`]),
     specialty: s(spec && spec[`specialty${i}`]),

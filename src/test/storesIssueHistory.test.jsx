@@ -42,9 +42,9 @@ const LINES = [
 ];
 const lineNoOf = (id) => (TXNS.find((t) => t.id === id) || {}).lineNo;
 
-let posted, closed, bulkStatus, skipIds, bulkFailIf;
+let posted, closed, bulkStatus, skipIds, bulkFailIf, bom656, units37;
 beforeEach(() => {
-  posted = []; closed = new Set(); bulkStatus = 200; skipIds = new Set(); bulkFailIf = null;
+  posted = []; closed = new Set(); bulkStatus = 200; skipIds = new Set(); bulkFailIf = null; bom656 = []; units37 = [];
   vi.doMock('../data.jsx', () => ({ useData: () => ({ mods: { purchase: { asl: [], pos: [] }, oab: { OAB: { SF: [{ so: '26/656', spec: 'A1319', customer: 'AMAZON', closed: false }, { so: '26/700', spec: 'A700', customer: 'ZEPTO', closed: false }], OT: [] } } }, save: vi.fn(), reloadModule: vi.fn() }) }));
   vi.doMock('../auth.jsx', () => ({ useAuth: () => ({ role: 'stores', user: 'store' }) }));
   vi.doMock('../lib/issueSlipPdf.js', () => ({ saveIssueSlipPdf: vi.fn(() => 'x.pdf'), buildIssueSlipPdf: vi.fn(), buildReturnSlipPdf: vi.fn() }));
@@ -71,10 +71,14 @@ beforeEach(() => {
     }
     if (u.includes('/api/stores/issue-lines')) return res(LINES.filter((l) => !closed.has(l.txnId)));
     if (u.includes('/api/stores/txns')) return res(TXNS.map((t) => (closed.has(t.id) ? { ...t, closedAt: '2026-10-01T05:00:00Z', closedBy: 'store' } : t)));
+    if (u.includes('/api/stores/items/37/units')) return res(units37);
     if (u.match(/\/api\/stores\/items\/\d+\/units/)) return res([]);
     if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
     if (u.includes('/api/stores/next-codes')) return res({ codes: ['BLMU-900'] });
-    if (u.includes('/api/stores/so-context')) return res({ found: true, route: { departments: [{ departmentName: 'Printing' }] }, bom: { items: [] } });
+    if (u.includes('/api/stores/so-context')) {
+      const so = decodeURIComponent((u.match(/so=([^&]*)/) || [])[1] || '');
+      return res({ so, found: true, route: { departments: [{ departmentName: 'Printing' }] }, bom: { items: so === '26/656' ? bom656 : [] } });
+    }
     if (u.includes('/api/master/items')) return res(ITEMS);
     if (u.includes('/api/master/departments')) return res([{ id: 1, name: 'Printing', active: true }]);
     if (u.includes('/api/planning/week')) return res({ jobs: [] });
@@ -331,6 +335,46 @@ describe('Recent issues & returns — closing the line being returned against (r
     fireEvent.click(screen.getByLabelText('Close issue line ISS/2026/77.0'));
     expect(await screen.findByText('ISS/2026/77.0 closed — it is off the return list.')).toBeInTheDocument();
     await returnIsRefused();
+  });
+
+  // Review F2: the history (and its Close to Return) is on screen in Issue mode too. A line
+  // picked on Return before the desk switched to Issue is closed there: the issue form is
+  // the slip's by then, and taking the order off it let the slip go out with no sale order.
+  it('closing it while issuing leaves the issue form and its slip alone', async () => {
+    bom656 = [{ itemId: 37, itemCode: 'BLM037', itemName: '1200 MM', departmentName: 'Printing', qtyPerBase: 1, uom: 'Kg' }];
+    units37 = [
+      { id: 592, itemId: 37, internalCode: 'BLMU-592', qtyRemaining: 0, qtyReceived: 194.92, widthMm: 1200, uom: 'Kg', location: 'AG', holds: [], allocated: 0 },
+      { id: 595, itemId: 37, internalCode: 'BLMU-595', qtyRemaining: 150, qtyReceived: 150, widthMm: 1200, uom: 'Kg', location: 'AG', holds: [], allocated: 0 },
+    ];
+    await mountIssues();
+    await pickLine101();
+    expect(screen.getByLabelText('Department')).toHaveValue('Printing');
+
+    fireEvent.click(screen.getByText('↗ Issue material'));
+    await waitFor(() => expect([...screen.getByLabelText('Roll').options].map((o) => o.value)).toContain('595'));
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '595' } });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '20' } });
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(screen.getByLabelText('Remove BLMU-595 from the slip')).toBeInTheDocument();
+
+    tick('ISS/2026/77.0');
+    fireEvent.click(closeBtn());
+    expect(await screen.findByText(/Closed 1 line\(s\)/)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 30));
+    // the order, department and item the line once filled are the slip's now: they stay
+    expect(screen.getByLabelText('Sale order')).toHaveValue('26/656');
+    expect(screen.getByLabelText('Department')).toHaveValue('Printing');
+    expect(screen.getByLabelText('Item')).toHaveValue('37');
+    expect(screen.getByLabelText('Remove BLMU-595 from the slip')).toBeInTheDocument();
+    // and the slip goes out to that order
+    fireEvent.click(screen.getByText(/Issue & print slip/));
+    await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/issues/batch'))).toBe(true));
+    expect(posted.find((p) => p.u.includes('/api/stores/issues/batch')).body)
+      .toEqual({ so: '26/656', department: 'Printing', lines: [{ unitId: 595, qty: 20 }] });
+    // back on Return, the closed line is not offered — nor still picked
+    fireEvent.click(screen.getByText('↙ Receive a return'));
+    await waitFor(() => expect(optionsOf(screen.getByLabelText('Issue line'))).toEqual(['102']));
+    expect(screen.queryByLabelText('Picked issue line')).toBeNull();
   });
 });
 

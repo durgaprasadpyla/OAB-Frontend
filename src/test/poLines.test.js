@@ -82,6 +82,33 @@ describe('lineIdentity — a PO line is never blank', () => {
     expect(lineIdentity({ supplier: 'Nobody' }, { item: '500 MM' }, ctx)).toMatchObject({ code: '', materialType: '' });
   });
 
+  it('reads a description off the ACTIVE items first — a withdrawn duplicate does not make it ambiguous (review F5)', () => {
+    const c = poLineContext({ master: [
+      { code: 'BLM082', name: '360 MM X 20 MIC', materialType: 'FILM', subGroup: 'BOPP', specialtyName: 'PLAIN', uom: 'Kg', active: true },
+      // withdrawn: "360 was a duplicate of 082" — same description
+      { code: 'BLM360', name: '360 MM X 20 MIC', materialType: 'FILM', subGroup: 'BOPP', specialtyName: 'PLAIN', uom: 'Kg', active: false },
+      // a description only a withdrawn item carries still resolves to it
+      { code: 'OLD-7', name: 'Retired core', materialType: 'CORE', subGroup: 'PAPER', specialtyName: '', active: false },
+      // two withdrawn items of one description: ambiguous, as ever
+      { code: 'OLD-8', name: 'Gone twice', materialType: 'INK', active: false },
+      { code: 'OLD-9', name: 'Gone twice', materialType: 'FILM', active: false },
+      // two ACTIVE items of one description stay ambiguous — a withdrawn one never decides it
+      { code: 'W-1', name: '700 MM', materialType: 'FILM', subGroup: 'BOPP', active: true },
+      { code: 'W-2', name: '700 MM', materialType: 'FILM', subGroup: 'PET', active: true },
+      { code: 'W-3', name: '700 MM', materialType: 'FILM', subGroup: 'CPP', active: false },
+    ], asl: [] });
+    expect(lineIdentity({ supplier: 'Nobody' }, { item: '360 mm x 20 mic' }, c)).toMatchObject({ code: 'BLM082', materialType: 'FILM', specialty: 'PLAIN' });
+    expect(lineIdentity({ supplier: 'Nobody' }, { item: 'Retired core' }, c)).toMatchObject({ code: 'OLD-7', materialType: 'CORE' });
+    expect(lineIdentity({ supplier: 'Nobody' }, { item: 'Gone twice' }, c)).toMatchObject({ code: '', materialType: '' });
+    expect(lineIdentity({ supplier: 'Nobody' }, { item: '700 MM' }, c)).toMatchObject({ code: '', materialType: '' });
+    // a line that names the withdrawn code still reads that item
+    expect(lineIdentity({ supplier: 'Nobody' }, { itemCode: 'BLM360' }, c)).toMatchObject({ code: 'BLM360', description: '360 MM X 20 MIC' });
+    // module 6's own copy can be withdrawn as well
+    const c2 = poLineContext({ master: [{ code: 'A1', name: 'Twin', materialType: 'FILM' }],
+      itemsExtra: [{ itemCode: 'A2', specificMaterial: 'Twin', materialType: 'INK', active: false }] });
+    expect(lineIdentity({}, { item: 'twin' }, c2)).toMatchObject({ code: 'A1', materialType: 'FILM' });
+  });
+
   it('uses module 6’s own item copy for codes the server master lacks', () => {
     const c2 = poLineContext({ master: [], asl: [], itemsExtra: [{ itemCode: 'X9', specificMaterial: 'Core 3in', materialType: 'CORE', subGroup: 'PAPER', specialty: 'HEAVY' }] });
     expect(lineIdentity({}, { itemCode: 'X9' }, c2)).toMatchObject({ description: 'Core 3in', materialType: 'CORE', specialty: 'HEAVY' });

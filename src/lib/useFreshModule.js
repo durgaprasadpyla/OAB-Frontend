@@ -12,8 +12,9 @@ import { useData } from '../data.jsx';
  * had done until they refreshed the browser. `trigger` re-reads when it changes (the tab
  * key). A failed read leaves the loaded copy in place.
  *
- * A read that is still on the wire when a save of the same module starts never lands on
- * top of it: the data layer drops it (data.jsx reloadModule / writeSeqRef). So `save` is
+ * A read that is still on the wire when a save of the same module starts — or that starts
+ * while one is on the wire — never lands on top of it: the data layer drops it and reads
+ * again once the save has landed (data.jsx reloadModule / writeSeqRef / inFlightRef). So `save` is
  * the data layer's own, returned here only so a screen can take both from one place.
  */
 export function useFreshModule(key, trigger) {

@@ -153,6 +153,14 @@ describe('microns — normalised, read from the name, and never an empty list', 
     expect(micronFromName('12µ PET')).toBe('12');
     expect(micronFromName('700 MM')).toBe('');
     expect(micronFromName('')).toBe('');
+    // review F8 — the server's rule: a plural S or the next dimension's X may follow
+    expect(micronFromName('20MICX1200')).toBe('20');
+    expect(micronFromName('BOPP 20 MICS')).toBe('20');
+    expect(micronFromName('PET 12 MICRONS')).toBe('12');
+    expect(micronFromName('PET 12micx700mm')).toBe('12');
+    // …but not a letter that makes another word
+    expect(micronFromName('20 MICA SHEET')).toBe('');
+    expect(micronFromName('5 MICE')).toBe('');
   });
 
   it('specItems carries the normalised micron, falling back to the name', () => {
@@ -300,6 +308,18 @@ describe('legacy layer microns open on the normalised option', () => {
     expect(layersOfSpec({ material1: 'KRAFT', microns1: 'NA' })[0].microns).toBe('NA');
     // and the next save writes the clean value
     expect(layerFields(layersOfSpec({ material1: 'CC PET', microns1: '12 MIC' }))).toMatchObject({ microns1: '12', mic: '12' });
+  });
+
+  it('keeps a composite micron as it was — only ONE number is normalised (review F8)', () => {
+    // a laminate's two films in one box: "12" would truncate it
+    expect(layersOfSpec({ material1: 'CC PET', microns1: '12+50' })[0].microns).toBe('12+50');
+    expect(layersOfSpec({ material1: 'CC PET', microns1: '12/50 MIC' })[0].microns).toBe('12/50 MIC');
+    expect(layersOfSpec({ material: 'CC PET + LDPE', mic: '12 + 50' })[0].microns).toBe('12 + 50');
+    // and a save of any other field writes it back untouched
+    expect(layerFields(layersOfSpec({ material1: 'CC PET', microns1: '12+50' }))).toMatchObject({ microns1: '12+50', mic: '12+50' });
+    // one number, decimals included, is still normalised
+    expect(layersOfSpec({ material1: 'CC PET', microns1: '12.5 mic' })[0].microns).toBe('12.5');
+    expect(layersOfSpec({ material1: 'CC PET', microns1: '035' })[0].microns).toBe('35');
   });
 
   function Harness({ initial }) {

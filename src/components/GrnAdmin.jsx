@@ -298,15 +298,26 @@ export function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
       .sort((a, b) => s(b.poDate).localeCompare(s(a.poDate)));
   }, [pos, head.supplier]);
   // The receipt's own PO and the one now picked stay listed even when no longer open.
-  const extraPos = [...new Set([original.poNum, head.poNum].filter((n) => n && !poOptions.some((p) => p.poNum === n)))]
-    .map((n) => ({ poNum: n, po: pos.find((p) => low(p.poNum) === low(n)) || null }));
+  // Review F10: PO numbers compare as the server does — case and outer spaces aside — so
+  // a legacy 'po-11 ' typed into the old free-text box is the open PO-11 above, not a
+  // second entry beside it.
+  const extraPos = [];
+  [original.poNum, head.poNum].forEach((n) => {
+    if (!n || poOptions.some((p) => low(p.poNum) === low(n)) || extraPos.some((x) => low(x.poNum) === low(n))) return;
+    extraPos.push({ poNum: n, po: pos.find((p) => low(p.poNum) === low(n)) || null });
+  });
+  // the option that stands for the receipt's PO, however it was spelt on the receipt
+  const poValue = !head.poNum ? ''
+    : ([...poOptions.map((p) => p.poNum), ...extraPos.map((x) => x.poNum)].find((n) => low(n) === low(head.poNum)) ?? head.poNum);
   const pickedPo = head.poNum ? pos.find((p) => low(p.poNum) === low(head.poNum)) || null : null;
   const otherSupplier = !!(pickedPo && s(pickedPo.supplier).trim() && head.supplier.trim() && low(pickedPo.supplier) !== low(head.supplier));
 
   /** Picking a PO names its supplier when the receipt has none. */
-  function pickPo(poNum) {
-    const po = pos.find((p) => p.poNum === poNum) || null;
+  function pickPo(picked) {
+    const po = pos.find((p) => low(p.poNum) === low(picked)) || null;
     const sup = po ? s(po.supplier).trim() : '';
+    // back on the receipt's own PO, however it was spelt there: nothing to send
+    const poNum = original.poNum && low(picked) === low(original.poNum) ? original.poNum : picked;
     setHead({ ...head, poNum, supplier: !head.supplier.trim() && sup ? sup : head.supplier });
   }
 
@@ -341,7 +352,7 @@ export function GrnEditor({ grn, busy, setBusy, flash, onSaved, onClose }) {
             title="The receipt's identity — quoted on the supplier's invoice"
             style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></div>
         <div className="fg"><label>PO Number <span style={{ fontWeight: 400, color: 'var(--i3)' }}>(optional)</span></label>
-          <select value={head.poNum} aria-label="Edit PO number" onChange={(e) => pickPo(e.target.value)}
+          <select value={poValue} aria-label="Edit PO number" onChange={(e) => pickPo(e.target.value)}
             onFocus={() => refreshPurchase()}>
             <option value="">— no PO (direct purchase) —</option>
             {poOptions.map((p) => (
