@@ -153,6 +153,28 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, out);
     }
 
+    // 30.09 §QC: POST /api/oab-rows/sync-spec — a JSS edit's identity copied onto every
+    // OAB row on that spec (trim, case-insensitive), non-blank fields only. Must sit
+    // before the generic /api/oab-rows/ branch below (substring overlap).
+    if (u.includes('/api/oab-rows/sync-spec') && method === 'POST') {
+      const oab = modules.oab || { OAB: { SF: [], OT: [] } };
+      const key = (v) => String(v == null ? '' : v).trim().toUpperCase();
+      let updated = 0;
+      ['SF', 'OT'].forEach((sh) => (((oab.OAB && oab.OAB[sh]) || [])).forEach((r) => {
+        const j = (body.specs || []).find((x) => key(x.spec) && key(x.spec) === key(r.spec));
+        if (!j) return;
+        let dirty = false;
+        ['customer', 'subBrand', 'jobName', 'dispatchForm', 'jobType'].forEach((f) => {
+          const v = String(j[f] == null ? '' : j[f]).trim();
+          if (v && r[f] !== v) { r[f] = v; dirty = true; }
+        });
+        if (dirty) updated += 1;
+      }));
+      if (updated && modules.oab) recordOab('/api/oab-rows/sync-spec', body);
+      else saved.push({ endpoint: '/api/oab-rows/sync-spec', body });
+      return res(200, { updated });
+    }
+
     if (u.includes('/api/oab-rows/')) {
       const oab = modules.oab;
       const row = findRow(oab, body.so);

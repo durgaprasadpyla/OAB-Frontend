@@ -78,3 +78,24 @@ describe('role landings — existing roles unchanged (regression)', () => {
     expect(canAccess('planner', '/reports')).toBe(true);
   });
 });
+
+// 30.09 §QC: "New login: ONLY the JSS editor functionality that exists in super admin."
+describe('role landings — the JSS login', () => {
+  it('lands on its own page, labelled JSS', () => {
+    expect(landingPath('jss')).toBe('/jss');
+    expect(ROLE_LABEL.jss).toBe('JSS');
+  });
+
+  it('reaches the JSS editor and nothing else', () => {
+    expect(canAccess('jss', '/jss')).toBe(true);
+    ['/dashboard', '/qc', '/po', '/oab', '/stores', '/pdashboard', '/master', '/plant', '/ppc', '/reports', '/projections', '/sdashboard', '/rep', '/hr']
+      .forEach((p) => expect(canAccess('jss', p)).toBe(false));
+    expect(navTabs('jss')).toHaveLength(0);
+  });
+
+  it('the Super Admin may open it too; no other login may', () => {
+    expect(canAccess('superadmin', '/jss')).toBe(true);
+    ['qc', 'user', 'padmin', 'plant', 'pm', 'stores', 'sales', 'sadmin', 'ppc', 'plan', 'mis', 'hr']
+      .forEach((r) => expect(canAccess(r, '/jss')).toBe(false));
+  });
+});

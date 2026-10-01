@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { masterApi } from '../api.js';
-import { specItems, materialOptions, micronOptions, widthsForLayer } from '../lib/jssSpec.js';
+import { specItems, materialOptions, micronChoices, micronChoiceHint, widthsForLayer } from '../lib/jssSpec.js';
 
 // 28.09 §Sales ¶24: "One more text field for structure — if we can have a drop-down
 // selection similar to the JSS creation page with: primary substrate micron film
@@ -46,7 +46,7 @@ export function subLayersFromStructure(text) {
   return out;
 }
 
-function Pick({ label, value, options, onChange, disabled, ariaLabel, placeholder }) {
+function Pick({ label, value, options, onChange, disabled, ariaLabel, placeholder, hint }) {
   return (
     <div className="fg">
       <label>{label}</label>
@@ -57,6 +57,7 @@ function Pick({ label, value, options, onChange, disabled, ariaLabel, placeholde
         {value && !options.some((o) => String(o) === String(value)) && <option value={value}>{value}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
+      {hint ? <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>{hint}</div> : null}
     </div>
   );
 }
@@ -90,7 +91,10 @@ export default function SubstrateLayers({ layers, onChange, max = 3, disabled = 
       <label>Structure <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— from the Item Master, as on the JSS page</span></label>
       {err && <div className="al al-y" style={{ marginBottom: 6 }}>{err}</div>}
       {rows.slice(0, max).map((l, i) => {
-        const microns = micronOptions(items, l.material, '');
+        // 30.09 §QC: never an empty micron list while the Item Master records one —
+        // the substrate's own microns, else every film / paper micron (said so below).
+        const mc = micronChoices(items, l.material, '');
+        const microns = mc.options;
         const widths = widthsForLayer(items, { material: l.material, specialty: '', microns: l.microns });
         return (
           <div className="g3" key={i} style={{ marginBottom: 6 }}>
@@ -100,6 +104,8 @@ export default function SubstrateLayers({ layers, onChange, max = 3, disabled = 
               onChange={(v) => setLayer(i, { material: v, microns: '', widthMm: '' })} />
             <Pick label="Micron" value={l.microns} options={microns} disabled={disabled || !l.material}
               ariaLabel={`${LAYER_LABELS[i]} Micron`}
+              placeholder={l.material && !microns.length ? '— no micron in the Item Master —' : '— select —'}
+              hint={l.material && mc.basis !== 'item' ? micronChoiceHint(mc.basis, l.material, '') : ''}
               onChange={(v) => setLayer(i, { microns: v, widthMm: '' })} />
             <Pick label="Film width (mm)" value={l.widthMm} options={widths.map(String)} disabled={disabled || !l.material}
               ariaLabel={`${LAYER_LABELS[i]} Film width`}

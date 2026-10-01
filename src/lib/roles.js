@@ -13,6 +13,9 @@ export const ROLE_LABEL = {
   // Production-planning module logins (Enhancements 2.0). Each lands on its own
   // role-specific page: PPC = planning dashboard, MIS = status board, PLAN = readiness.
   ppc: 'PPC', mis: 'MIS', plan: 'Planning',
+  // 30.09 §QC: a login that does ONE thing — edit the JSS specs (the one-time
+  // structuring of ~500 specs against the Item Master).
+  jss: 'JSS',
 };
 
 /** Where a role lands after sign-in. */
@@ -37,6 +40,8 @@ export function landingPath(role) {
     case 'ppc': return '/ppc';
     case 'mis': return '/mis';
     case 'plan': return '/plan';
+    // 30.09 §QC: the JSS login has the JSS editor and nothing else.
+    case 'jss': return '/jss';
     default: return '/po'; // user / padmin / superadmin → main workspace
   }
 }
@@ -116,5 +121,9 @@ export function canAccess(role, path) {
   if (p === '/sdashboard') return role === 'sadmin' || role === 'superadmin';
   if (p === '/quotes') return role === 'quote' || role === 'sadmin' || role === 'superadmin';
   if (p === '/rep') return role === 'sales';
+  // 30.09 §QC: "only the JSS editor functionality that exists in super admin". The
+  // jss login reaches this page and no other (it is not an ops role, so every path
+  // above is already false for it); the Super Admin may open it too.
+  if (p === '/jss') return role === 'jss' || role === 'superadmin';
   return false;
 }

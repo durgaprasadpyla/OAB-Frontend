@@ -237,6 +237,101 @@ describe('QC — CSA tab', () => {
   });
 });
 
+// 30.09 §QC (RED, image9): "Micron must be a DROPDOWN based on the item under the
+// specialty selected from the Item Master" — Third Substrate LDPE - NATURAL + GUSSET
+// still showed a number spinner, because no GUSSET item records a micron and the
+// dropdown only appeared for an exact match. Whenever the substrates come from the
+// Item Master the micron is now always a select, widening (and saying so) when the
+// exact list is empty.
+describe('Direct CSA — micron is always a dropdown from the Item Master', () => {
+  const MASTER = [
+    { code: 'L1', name: '450 MM', materialType: 'FILM', subGroup: 'LDPE - NATURAL', specialtyName: 'GUSSET', microns: '' },
+    { code: 'L2', name: '600 MM', materialType: 'FILM', subGroup: 'LDPE - NATURAL', specialtyName: 'PLAIN', microns: '50' },
+    { code: 'A1', name: '700 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: '', microns: '35 MIC' },
+    { code: 'A2', name: '500 MM', materialType: 'FILM', subGroup: 'AF BOPP', specialtyName: '', microns: '51' },
+    { code: 'C1', name: '320 MM X 12 MIC', materialType: 'FILM', subGroup: 'CC PET', specialtyName: '', microns: '' },
+    { code: 'K1', name: 'KRAFT 450', materialType: 'PAPER', subGroup: 'KRAFT', specialtyName: '', microns: '' },
+  ];
+  const openDirect = async (masterItems = MASTER) => {
+    const r = renderApp(<QC />, {
+      modules: { ...mods(), customers: [{ customer: 'Acme Foods', group: 'ACME' }], masterItems },
+      role: 'qc',
+    });
+    await userEvent.click(await screen.findByText(/CSA Reports/));
+    await userEvent.click(screen.getByText(/Direct CSA report/));
+    // the substrates are the Item Master's film / paper sub-groups
+    await waitFor(() => expect([...screen.getByLabelText('Third Substrate').options].map((o) => o.value)).toContain('LDPE - NATURAL'));
+    return r;
+  };
+  const values = (label) => [...screen.getByLabelText(label).options].map((o) => o.value);
+
+  it('LDPE - NATURAL + GUSSET (no micron on file) is a select of every LDPE - NATURAL micron, and says so', async () => {
+    await openDirect();
+    await userEvent.selectOptions(screen.getByLabelText('Third Substrate'), 'LDPE - NATURAL');
+    await userEvent.selectOptions(screen.getByLabelText('Third Speciality'), 'GUSSET');
+    const mic = screen.getByLabelText('Third Substrate Micron');
+    expect(mic.tagName).toBe('SELECT');                  // not the number spinner of image9
+    expect(mic).not.toBeDisabled();
+    expect(values('Third Substrate Micron')).toEqual(['', '50']);
+    expect(screen.getByLabelText('Third micron note')).toHaveTextContent(/showing every LDPE - NATURAL micron/);
+    expect(document.querySelector('input[type=number][aria-label$="Substrate Micron"]')).toBeNull();
+  });
+
+  it('the exact speciality list needs no note', async () => {
+    await openDirect();
+    await userEvent.selectOptions(screen.getByLabelText('Third Substrate'), 'LDPE - NATURAL');
+    await userEvent.selectOptions(screen.getByLabelText('Third Speciality'), 'PLAIN');
+    expect(values('Third Substrate Micron')).toEqual(['', '50']);
+    expect(screen.queryByLabelText('Third micron note')).toBeNull();
+  });
+
+  it('normalises "35 MIC" and reads a micron out of the item name', async () => {
+    await openDirect();
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'AF BOPP');
+    expect(values('Primary Substrate Micron')).toEqual(['', '35', '51']);
+    await userEvent.selectOptions(screen.getByLabelText('Secondary Substrate'), 'CC PET');
+    expect(values('Secondary Substrate Micron')).toEqual(['', '12']);       // "320 MM X 12 MIC"
+  });
+
+  it('a substrate with no micron anywhere offers every film / paper micron, with a note', async () => {
+    await openDirect();
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'KRAFT');
+    expect(screen.getByLabelText('Primary Substrate Micron').tagName).toBe('SELECT');
+    expect(values('Primary Substrate Micron')).toEqual(['', '12', '35', '50', '51']);
+    expect(screen.getByLabelText('Primary micron note')).toHaveTextContent(/No micron is recorded on any KRAFT item/);
+  });
+
+  it('an Item Master with no micron at all still shows a select — disabled, and why', async () => {
+    await openDirect(MASTER.map((it) => ({ ...it, microns: '', name: it.name.replace(/X 12 MIC/, '') })));
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'AF BOPP');
+    const mic = screen.getByLabelText('Primary Substrate Micron');
+    expect(mic.tagName).toBe('SELECT');
+    expect(mic).toBeDisabled();
+    expect(mic.options[0].textContent).toBe('— no micron in the Item Master —');
+    expect(screen.getByLabelText('Primary micron note')).toHaveTextContent(/Padmin fills Microns on the Item Master/);
+  });
+
+  it('saves the picked microns as numbers', async () => {
+    const { saved } = await openDirect();
+    await userEvent.selectOptions(screen.getByLabelText('Customer'), 'Acme Foods');
+    await userEvent.type(screen.getByLabelText('Job name'), 'Gusset pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Responsible person'), 'Manasa');
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'AF BOPP');
+    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate Micron'), '35');
+    await userEvent.selectOptions(screen.getByLabelText('Third Substrate'), 'LDPE - NATURAL');
+    await userEvent.selectOptions(screen.getByLabelText('Third Speciality'), 'GUSSET');
+    await userEvent.selectOptions(screen.getByLabelText('Third Substrate Micron'), '50');
+    await userEvent.click(screen.getByText(/Save CSA report/));
+
+    await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
+    const r = saved.filter((s) => s.key === 'sales').pop().data.qc_reports.at(-1);
+    expect(r).toMatchObject({
+      substrate1: 'AF BOPP', substrate1_val: 35,
+      substrate3: 'LDPE - NATURAL', substrate3_specialty: 'GUSSET', substrate3_val: 50,
+    });
+  });
+});
+
 describe('PM — CSA tab', () => {
   const openCsa = async () => {
     const r = renderApp(<PM />, { modules: mods(), role: 'pm' });

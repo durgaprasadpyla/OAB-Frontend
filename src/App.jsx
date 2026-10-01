@@ -33,6 +33,7 @@ import MisStatus from './pages/MisStatus.jsx';
 import PlanReadiness from './pages/PlanReadiness.jsx';
 import Stores from './pages/Stores.jsx';
 import Projections from './pages/Projections.jsx';
+import JssDesk from './pages/JssDesk.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -85,6 +86,8 @@ export default function App() {
         <Route path="/mis" element={<RoleRoute path="/mis"><MisStatus /></RoleRoute>} />
         <Route path="/plan" element={<RoleRoute path="/plan"><PlanReadiness /></RoleRoute>} />
         <Route path="/stores" element={<RoleRoute path="/stores"><Stores /></RoleRoute>} />
+        {/* 30.09 §QC — the JSS login: the Super Admin's JSS editor, on its own. */}
+        <Route path="/jss" element={<RoleRoute path="/jss"><JssDesk /></RoleRoute>} />
         <Route path="*" element={<Landing />} />
       </Route>
     </Routes>

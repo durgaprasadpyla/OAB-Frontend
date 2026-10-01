@@ -139,6 +139,9 @@ const TABS = [
   { k: 'po', label: '📦 PO Tracking' },
   { k: 'asl', label: '🏭 Approved Suppliers' },
   { k: 'im', label: '🗂 Item Master' },
+  // 30.09 §Super Admin (RED): "display the stock … next to the Item Master" — its
+  // own tab beside Item Master, not a fourth card at the foot of that page.
+  { k: 'stock', label: '📦 Stock on Hand' },
   { k: 'price', label: '📈 Price Trends' },
   { k: 'pay', label: '💳 Payments' },
   { k: 'scrap', label: '♻️ Scrap Details' },
@@ -159,26 +162,33 @@ export default function PDashboard() {
       {tab === 'po' && <POTracking />}
       {tab === 'asl' && <ASLEditor />}
       {tab === 'im' && <ItemMaster />}
-      {/* Some More Issues 24.09 ¶2: "display the stock that is available on the
-          PDashboard page, the same display that is there in the stores login raw
-          material on hand page, next to the item master." It IS that board — the
-          stores desk's own — read here as it stands. Under its own heading, because
-          it carries its own search and filters and must not read as part of the
-          Item Master's list above it. */}
-      {tab === 'im' && (
-        <div style={{ marginTop: 14 }} aria-label="Stock on hand">
-          <div className="ctitle" style={{ marginBottom: 6 }}>
-            📦 Stock on hand <span style={{ fontWeight: 400, color: 'var(--i3)', fontSize: 11 }}>
-              — the stores desk&rsquo;s Raw Material on Hand board, read as it stands
-            </span>
-          </div>
-          <OnHand readOnly />
-        </div>
-      )}
+      {tab === 'stock' && <StockOnHandTab />}
       {tab === 'price' && <PriceTrends />}
       {tab === 'pay' && <Payments />}
       {tab === 'scrap' && <ScrapAdmin />}
     </div>
+  );
+}
+
+/* ─────────────────────────── Stock on Hand (read-only) ─────────────────────────── */
+// Some More Issues 24.09 ¶2 / 30.09 §Super Admin: "display the stock that is
+// available on the PDashboard page, the same display that is there in the stores
+// login Raw Material on Hand page, next to the Item Master." It IS that board — the
+// stores desk's own — read here as it stands (it says so itself; MSL and
+// dispositions stay with Stores, and the Super Admin edits them from /stores). Its
+// errors land in a message bar of this tab; `flash` is built once so the board's
+// loader never sees a new one.
+function StockOnHandTab() {
+  const [msg, setMsg] = useState(null);
+  const flash = useMemo(() => (t, text) => {
+    setMsg({ t, text });
+    if (t === 'g') setTimeout(() => setMsg(null), 4000);
+  }, []);
+  return (
+    <>
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <OnHand readOnly flash={flash} />
+    </>
   );
 }
 

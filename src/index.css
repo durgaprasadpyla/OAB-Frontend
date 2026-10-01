@@ -565,3 +565,10 @@ td select { min-width: max-content; }
 #inv-doc tbody tr:hover td, #pl-doc tbody tr:hover td { background: revert !important; }
 #inv-doc input:focus, #pl-doc input:focus, #inv-doc select:focus, #pl-doc select:focus { box-shadow: none !important; }
 @media print { body { background: #fff !important; } #hdr, .ntab, .card { box-shadow: none !important; } }
+
+/* — 30.09 §Super Admin: a table NESTED in a table cell (an expanded breakdown
+ *   such as Raw Material's per-department view) must never stick its header.
+ *   The sticky thead rules above also matched the inner table, so inside a
+ *   scrolling .tw box the first nested header pinned itself at top:0 and painted
+ *   over the outer table's header — reading as a misaligned "top table". — */
+.tw td table thead tr th, table.nested-tbl thead tr th { position: static; z-index: auto; }

@@ -114,9 +114,9 @@ describe('Padmin Item Master — Specialty + Department (Enhancements 2.0 §1/§
     mount();
     await openItemMaster();
     await screen.findByText('BOPP Film');
-    // the stock-on-hand board below carries a search of its own now, so this names
-    // the Item Master's one rather than "whichever search box comes first"
-    fireEvent.change(screen.getAllByPlaceholderText(/Search item/i)[0], { target: { value: 'UV Cure' } });
+    // 30.09: the stock-on-hand board (with a search of its own) moved to its own tab,
+    // so the Item Master tab has exactly one item search again
+    fireEvent.change(screen.getByPlaceholderText(/Search item/i), { target: { value: 'UV Cure' } });
     await waitFor(() => expect(screen.queryByText('BOPP Film')).toBeNull());   // filtered out
     expect(screen.getByText('Ink Base')).toBeInTheDocument();                  // specialty match kept
   });

@@ -82,6 +82,11 @@ export const ordersApi = {
   deleteRow: (so) => api('/api/oab-rows/delete', { method: 'POST', body: { so } }),
   // Persist the packing list onto an already-saved invoice (built after Generate).
   saveInvoicePackingList: (no, packingList) => api('/api/invoices/packing-list', { method: 'POST', body: { no, packingList } }),
+  // 30.09 §QC: a JSS edit carries the spec's identity (customer, sub-brand, job name,
+  // dispatch form, job type) onto every OAB row on that spec, server-side — so the
+  // JSS login, which may neither read nor write module 1, still syncs the orders.
+  // specs: [{ spec, customer, subBrand, jobName, dispatchForm, jobType }] → { updated }
+  syncSpecIdentity: (specs) => api('/api/oab-rows/sync-spec', { method: 'POST', body: { specs } }),
 };
 
 // Granular purchase (module 6) endpoints — server assigns PO numbers, atomic GRN.
