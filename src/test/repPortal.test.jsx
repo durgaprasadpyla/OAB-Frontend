@@ -118,7 +118,7 @@ describe('buildSku', () => {
     expect(() => buildSku({}, REP)).toThrow(/Select a customer/);
     expect(() => buildSku({ leadId: 'L1' }, REP)).toThrow(/SKU name/);
     expect(() => buildSku({ leadId: 'L1', name: 'X' }, REP)).toThrow(/category/);
-    expect(() => buildSku({ leadId: 'L1', name: 'X', category: 'Dairy' }, REP)).toThrow(/dispatch form/);
+    expect(() => buildSku({ leadId: 'L1', name: 'X', category: 'Dairy' }, REP)).toThrow(/despatch form/);
   });
 
   it('starts every workflow stage off', () => {

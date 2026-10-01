@@ -6,6 +6,7 @@ import { custGroupOf } from '../lib/master.js';
 import { QuotationDoc } from '../pages/QuotationDesk.jsx';
 import { elementToPDF, printElement } from '../lib/pdf.js';
 import NegoPanel from './NegoPanel.jsx';
+import LeadCustomerPicker from './LeadCustomerPicker.jsx';
 import {
   repBook, deskTiersForSku, deskQuoteForSku, repTiersForSku, floorFor, saveRepQuote,
   quoteStatusOf, quotableSkus, markQuotesSent, setQuoteAccepted, despatchLocationsFor,
@@ -368,7 +369,6 @@ export function RepAcceptedTab({ sales, save, repId }) {
 
   // §60: a quotation entered by hand for a customer already past the CSA / already
   // quoted, when the desk's figure is not on file here.
-  const manualLeads = manual.kind === 'customer' ? book.customers : book.leads;
   const manualSkus = (sales.skus || []).filter((sk) => sk.lead_id === manual.leadId && !sk.quotation_accepted);
   async function addManual() {
     setBusy(true);
@@ -429,17 +429,11 @@ export function RepAcceptedTab({ sales, save, repId }) {
         <div className="ctitle">＋ Add a quotation for a customer already past the CSA</div>
         <div className="pg-sub" style={{ marginTop: 0 }}>For a customer whose CSA report is done, or who was quoted outside the desk: record the agreed slabs and it lands above as accepted.</div>
         <div className="g4">
-          <div className="fg"><label>Lead / Customer</label>
-            <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 4 }}>
-              {[['customer', 'Customer'], ['lead', 'Lead']].map(([v, l]) => (
-                <label key={v} className="cb"><input type="radio" name="manual-kind" checked={manual.kind === v} aria-label={`Manual ${l}`} onChange={() => setManual({ ...manual, kind: v, leadId: '', skuId: '' })} /><span>{l}</span></label>
-              ))}
-            </div>
-            <select value={manual.leadId} aria-label="Manual quotation customer" onChange={(e) => setManual({ ...manual, leadId: e.target.value, skuId: '' })}>
-              <option value="">— Select —</option>
-              {manualLeads.map((l) => <option key={l.id} value={l.id}>{l.client_name}</option>)}
-            </select>
-          </div>
+          {/* 30.09 §SL3: the same Lead / Customer control as every other rep form — the
+              radios on their own row above, the dropdown in line with the fields. */}
+          <LeadCustomerPicker book={book} kind={manual.kind} leadId={manual.leadId}
+            onKind={(k) => setManual((m) => ({ ...m, kind: k, leadId: '', skuId: '' }))}
+            onLead={(id) => setManual((m) => ({ ...m, leadId: id, skuId: '' }))} ariaPrefix="Manual" />
           <div className="fg"><label>SKU</label>
             <select value={manual.skuId} aria-label="Manual quotation SKU" onChange={(e) => setManual({ ...manual, skuId: e.target.value })}>
               <option value="">— Select —</option>

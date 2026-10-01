@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
 import { useAuth } from '../auth.jsx';
+import { useFreshModule } from '../lib/useFreshModule.js';
 import { fmtDate } from '../lib/format.js';
 import { custGroupOf } from '../lib/master.js';
 import { ddList, ddPairs } from '../lib/dropdowns.js';
 import { RepQuotationsTab, RepSendQuoteTab, RepAcceptedTab } from '../components/RepQuotesTab.jsx';
 import LeadCustomerPicker from '../components/LeadCustomerPicker.jsx';
-import { repBook, setLeadCategories } from '../lib/repFlow.js';
+import {
+  repBook, setLeadCategories, isConvertedStage, conversionPending, requestConversion, masterRowsFor, saveErrorText,
+} from '../lib/repFlow.js';
 import RepVisitTab from '../components/RepVisitTab.jsx';
 import RepPoTab from '../components/RepPoTab.jsx';
 import RepTargetsTab from '../components/RepTargetsTab.jsx';
@@ -82,10 +85,23 @@ const TABS = [
 const pill = (style) => ({ ...style, padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, display: 'inline-block' });
 
 export default function RepPortal() {
-  const { mods, save } = useData();
+  const { mods } = useData();
   const { repId, repName } = useAuth();
   const [tab, setTab] = useState('followups');
   const sales = mods.sales || {};
+
+  // 30.09 §SL6: "I have marked these customers as customers from lead, whereas in the
+  // sales rep login they are still under leads." The sales blob was read once at
+  // sign-in, so a conversion the Super Admin made while the rep was logged in never
+  // reached them until they signed in again. It is re-read on every tab change and
+  // whenever the window comes back into focus — and every save on this portal goes
+  // through the same hook, so a read can never put back the blob from before one.
+  const { refresh, save } = useFreshModule('sales');
+  useEffect(() => { refresh(); }, [tab, refresh]);
+  useEffect(() => {
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [refresh]);
 
   // The rep's book: the leads allocated to them or added by them, plus any customer
   // the Super Admin made them KAM of (repBook splits it into leads and customers).
@@ -156,11 +172,6 @@ function QuotesToSendBanner({ sales, repId, onGoToSkus }) {
       </div>
     </div>
   );
-}
-
-/** Patch the sales blob, preserving every key this screen didn't touch. */
-async function patchSales(save, patch) {
-  return save('sales', (prev) => ({ ...(prev || {}), ...patch }));
 }
 
 /**
@@ -235,7 +246,7 @@ function CategoryDispatchChecklist({ sales, categories, value, onChange }) {
   };
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--i2)', marginBottom: 4 }}>📮 Dispatch forms for each category (optional — leave blank to allow all)</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--i2)', marginBottom: 4 }}>📮 Despatch forms for each category (optional — leave blank to allow all)</div>
       {categories.map((cat) => (
         <div key={cat} style={{ marginBottom: 6, padding: '6px 8px', background: 'var(--bg)', border: '1px solid var(--bd)', borderRadius: 6 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#1a4fa0', marginBottom: 4 }}>{cat}</div>
@@ -306,7 +317,8 @@ function QuoteFollowTable({ sales, repId, onGoToPo }) {
 function QuoteDocModal({ quote, onClose }) {
   const ref = useRef(null);
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 60, overflow: 'auto', padding: 20 }}>
+    // above the sticky role bar (z-index 200), so the Print / PDF / Close bar is never hidden under it
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflow: 'auto', padding: 20 }}>
       <div style={{ background: 'var(--wh)', borderRadius: 10, padding: 16, maxWidth: 860 }}>
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>{quote.client_name} — v{quote.version || 1}</div>
@@ -363,7 +375,7 @@ function FollowUps({ leads, sales, save, repId, onGoToPo }) {
                     <td><span style={pill(STAGE_STYLE[lead.stage] || {})}>{lead.stage || '—'}</span></td>
                     <td><span style={pill(FOLLOW_UP_STYLE[st.kind])}>{st.kind === 'later' ? fmtDate(st.label) : st.label}</span></td>
                     <td>
-                      <LogTouch lead={lead} sales={sales} save={save} repId={repId} onMsg={setMsg} />
+                      <LogTouch lead={lead} save={save} repId={repId} onMsg={setMsg} />
                     </td>
                   </tr>
                 );
@@ -377,7 +389,7 @@ function FollowUps({ leads, sales, save, repId, onGoToPo }) {
 }
 
 /** Inline "I called them" form: records an interaction and re-schedules. */
-function LogTouch({ lead, sales, save, repId, onMsg }) {
+function LogTouch({ lead, save, repId, onMsg }) {
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState('');
   const [next, setNext] = useState('');
@@ -387,16 +399,17 @@ function LogTouch({ lead, sales, save, repId, onMsg }) {
     setBusy(true);
     try {
       const inter = buildInteraction(lead.id, repId, { type: 'Call', outcome, followUp: next });
-      await patchSales(save, {
-        interactions: [...(sales.interactions || []), inter],
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        interactions: [...((prev && prev.interactions) || []), inter],
         // Keep the lead's own field in step so a rep who never logs interactions
         // still sees a sensible due date.
-        leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, next_follow_up_date: next } : l)),
-      });
+        leads: ((prev && prev.leads) || []).map((l) => (l.id === lead.id ? { ...l, next_follow_up_date: next } : l)),
+      }), { retry: true });
       setOpen(false); setOutcome(''); setNext('');
       onMsg({ t: 'g', text: `✅ Logged against ${lead.client_name}.` });
     } catch (e) {
-      onMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) });
+      onMsg({ t: 'r', text: saveErrorText(e) });
     } finally { setBusy(false); }
   }
 
@@ -435,17 +448,257 @@ function LeadsWorkspace({ book, sales, save, repId }) {
 /**
  * ¶16: "In the place of My Leads we can have My Customers, where all of that
  * particular sales rep's leads that are converted as customers can be listed."
+ *
+ * 30.09 §SL2: "all leads of that rep converted to customers BY THE SUPER ADMIN listed
+ * in a table; radio selection to edit contact info etc." The tab was never reachable
+ * (the module allocation did not know it), and its form was the Add-Lead form, which
+ * cannot edit a contact. It is a customer editor now: the primary contact, payment,
+ * head office, GSTIN and categories, with the despatch locations the Super Admin keeps
+ * in the Customer Master shown read-only.
  */
 function MyCustomersTab({ book, sales, save, repId }) {
-  const [pick, setPick] = useState(null);
+  const [pick, setPick] = useState('');
+  const waiting = useMemo(() => book.leads.filter(conversionPending).length, [book]);
   return (
     <>
-      <AddCustomer sales={sales} save={save} repId={repId} book={book}
-        pickId={pick} onPicked={setPick} onDone={() => setPick(null)} />
-      <MyCustomers leads={book.customers} sales={sales} save={save} repId={repId}
-        title="My Customers" selId={pick} onSelect={setPick}
-        empty="None of your leads has been converted into a customer yet — the Super Admin converts them." />
+      <CustomerEditor book={book} sales={sales} save={save} repId={repId} pickId={pick} onPick={setPick} />
+      <CustomersList customers={book.customers} sales={sales} repId={repId}
+        selId={pick} onSelect={setPick} waiting={waiting} />
     </>
+  );
+}
+
+const blankCustomerForm = () => ({
+  leadId: '', contactName: '', designation: '', desigOther: '', phone: '', email: '',
+  paymentType: '', headOffice: '', gstin: '', categories: [], dispatchForms: {},
+});
+
+/** The contact the customer editor works on: the primary (rank 1), else the first on file. */
+function primaryContactOf(contacts, leadId) {
+  const list = contactsForLead(contacts, leadId).filter((c) => !c.rep_deleted);
+  return list.find((c) => String(c.priority) === '1' || c.is_primary === true) || list[0] || null;
+}
+
+function CustomerEditor({ book, sales, save, repId, pickId, onPick }) {
+  const { mods } = useData();
+  const [form, setForm] = useState(blankCustomerForm);
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const desigList = ddList(sales, 'designations');
+  const customers = useMemo(() => book.customers.slice().sort((a, b) => String(a.client_name).localeCompare(String(b.client_name))), [book]);
+  const lead = customers.find((l) => l.id === form.leadId) || null;
+  const despatch = lead ? masterRowsFor(lead.client_name, mods.customers || []) : [];
+
+  // The radio in the list below and the dropdown here are one selection.
+  useEffect(() => {
+    const l = book.customers.find((x) => x.id === pickId) || null;
+    if (!l) { setForm(blankCustomerForm()); return; }
+    const c = primaryContactOf(sales.contacts, l.id);
+    const desig = (c && c.designation) || '';
+    const other = !!desig && !desigList.includes(desig);
+    setForm({
+      leadId: l.id, contactName: (c && c.name) || '', designation: other ? 'Others' : desig, desigOther: other ? desig : '',
+      phone: (c && c.phone) || '', email: (c && c.email) || '',
+      paymentType: l.payment_type || '', headOffice: l.head_office || '', gstin: l.gstin || '',
+      categories: leadCategories(l), dispatchForms: l.category_dispatch_forms || {},
+    });
+    setMsg(null);
+  }, [pickId]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleCat = (c) => setForm((f) => ({ ...f, categories: f.categories.includes(c) ? f.categories.filter((x) => x !== c) : [...f.categories, c] }));
+
+  async function submit() {
+    if (!lead) { setMsg({ t: 'r', text: 'Pick a customer first — from the dropdown, or the radio in the list below.' }); return; }
+    if (!form.categories.length && repCategoriesOf(lead, repId).length) { setMsg({ t: 'r', text: 'Keep at least one category ticked.' }); return; }
+    const name = form.contactName.trim();
+    const desig = form.designation === 'Others' ? form.desigOther.trim() : form.designation;
+    const phone = form.phone.trim();
+    const email = form.email.trim();
+    const at = new Date().toISOString();
+    const newId = salesUid('contact');
+    setBusy(true);
+    try {
+      await save('sales', (prev) => {
+        const cur = prev || {};
+        let leads = cur.leads || [];
+        if (form.categories.length) leads = setLeadCategories(leads, lead.id, form.categories, repId);
+        leads = leads.map((l) => (l.id === lead.id
+          ? { ...l, payment_type: form.paymentType, head_office: form.headOffice.trim(), gstin: form.gstin.trim(), category_dispatch_forms: { ...(l.category_dispatch_forms || {}), ...form.dispatchForms } }
+          : l));
+        let contacts = (cur.contacts || []).slice();
+        const primary = primaryContactOf(contacts, lead.id);
+        const fields = { designation: desig, phone, email, priority: 1, is_primary: true, updated_at: at, updated_by: repId };
+        if (primary) {
+          contacts = contacts.map((c) => {
+            if (c.id === primary.id) return { ...c, ...fields, name: name || c.name };
+            // one primary per customer
+            return String(c.lead_id) === String(lead.id) && String(c.priority) === '1' ? { ...c, priority: '', is_primary: false } : c;
+          });
+        } else if (name || phone || email) {
+          contacts.push({
+            id: newId, lead_id: lead.id, customer: lead.client_name, group: lead.group || '',
+            categories: form.categories, category: form.categories[0] || '',
+            created_by: repId, created_at: at, name, ...fields,
+          });
+        }
+        return { ...cur, leads, contacts };
+      }, { retry: true });
+      setMsg({ t: 'g', text: `✅ ${lead.client_name} saved.` });
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="ctitle">{lead ? `✏ Customer details — ${lead.client_name}` : '🏆 Customer details'}</div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Pick one of your customers — here, or with the radio button in the list below — to update its contact information.
+        A lead you mark Converted joins this list once the Super Admin converts it.
+      </div>
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      <div className="g3">
+        <div className="fg"><label>Customer *</label>
+          <select value={form.leadId} aria-label="My customer" onChange={(e) => onPick(e.target.value)}>
+            <option value="">— pick a customer from the list below —</option>
+            {customers.map((l) => <option key={l.id} value={l.id}>{l.client_name}</option>)}
+          </select>
+        </div>
+        <div className="fg"><label>Primary contact name</label>
+          <input value={form.contactName} aria-label="Primary contact name" disabled={!lead} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
+        </div>
+        <div className="fg"><label>Designation</label>
+          <select value={form.designation} aria-label="Primary contact designation" disabled={!lead} onChange={(e) => setForm({ ...form, designation: e.target.value })}>
+            <option value="">-- Select --</option>
+            {desigList.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          {form.designation === 'Others' && <input placeholder="Enter designation" value={form.desigOther} aria-label="Primary contact other designation" style={{ marginTop: 6 }} onChange={(e) => setForm({ ...form, desigOther: e.target.value })} />}
+        </div>
+        <div className="fg"><label>Phone</label>
+          <input value={form.phone} aria-label="Primary contact phone" disabled={!lead} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+        </div>
+        <div className="fg"><label>Email</label>
+          <input value={form.email} aria-label="Primary contact email" disabled={!lead} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </div>
+        <div className="fg"><label>Payment Type</label>
+          <select value={form.paymentType} aria-label="Customer payment type" disabled={!lead} onChange={(e) => setForm({ ...form, paymentType: e.target.value })}>
+            <option value="">— Select —</option>
+            {ddPairs(sales).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+        <div className="fg"><label>Head Office Address</label>
+          <input value={form.headOffice} aria-label="Customer head office" disabled={!lead} onChange={(e) => setForm({ ...form, headOffice: e.target.value })} />
+        </div>
+        <div className="fg"><label>GST Number</label>
+          <input value={form.gstin} aria-label="Customer GSTIN" disabled={!lead} onChange={(e) => setForm({ ...form, gstin: e.target.value })} />
+        </div>
+        <div className="fg"><label>Despatch locations</label>
+          <div aria-label="Customer despatch locations" style={{ fontSize: 12, padding: '7px 0' }}>
+            {!lead ? <span style={{ color: 'var(--i3)' }}>—</span>
+              : despatch.length ? despatch.map((r, i) => (
+                <span key={i} className="tag tb" style={{ marginRight: 4 }}>{r.dispatchLoc || '—'}{r.warehouseName ? ` (${r.warehouseName})` : ''}</span>
+              ))
+                : <span style={{ color: '#c0392b' }}>None in the Customer Master yet</span>}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--i3)' }}>Read-only — the Super Admin keeps these in the Customer Master.</div>
+        </div>
+      </div>
+      {lead && (
+        <div className="fg">
+          <label>Categories</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {/* the customer's own categories stay on show even if the list has since dropped one */}
+            {[...new Set([...ddList(sales, 'categories'), ...leadCategories(lead)])].map((c) => (
+              <label key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 400 }}>
+                <input type="checkbox" checked={form.categories.includes(c)} aria-label={c} onChange={() => toggleCat(c)} />{c}
+              </label>
+            ))}
+          </div>
+          <CategoryDispatchChecklist sales={sales} categories={form.categories} value={form.dispatchForms} onChange={(v) => setForm({ ...form, dispatchForms: v })} />
+        </div>
+      )}
+      <div className="fbar">
+        <span style={{ flex: 1 }} />
+        {lead && <button className="btn btn-s" onClick={() => onPick('')}>Cancel</button>}
+        <button className="btn btn-g" onClick={submit} disabled={busy || !lead}>{busy ? 'Saving…' : '✓ Save customer details'}</button>
+      </div>
+    </div>
+  );
+}
+
+/** The rep's customers, one row each, with the radio that opens one in the editor above. */
+function CustomersList({ customers, sales, repId, selId, onSelect, waiting }) {
+  const { mods } = useData();
+  const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState(null);
+  const master = mods.customers || [];
+
+  const rows = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return customers
+      .filter((l) => !t || [l.client_name, l.group].some((v) => String(v || '').toLowerCase().includes(t)))
+      .sort((a, b) => String(a.client_name).localeCompare(String(b.client_name)));
+  }, [customers, q]);
+
+  return (
+    <div className="card">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>My Customers <span className="tag tgr">{rows.length}</span></div>
+        <input placeholder="Search customer / group…" value={q} aria-label="Search my customers" onChange={(e) => setQ(e.target.value)} />
+      </div>
+      {waiting > 0 && (
+        <div className="al al-b">⏳ {waiting} lead{waiting === 1 ? '' : 's'} you marked Converted {waiting === 1 ? 'is' : 'are'} waiting for the Super Admin to convert — {waiting === 1 ? 'it moves' : 'they move'} here once converted.</div>
+      )}
+      <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
+        <table>
+          <thead><tr>
+            <th style={{ width: 34, textAlign: 'center' }}>Edit</th>
+            <th style={{ minWidth: 180 }}>Customer</th><th>Group</th><th>My categories</th>
+            <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th>Primary contact</th><th>Phone</th>
+            <th>Despatch locations</th><th style={{ width: 100 }}>Converted on</th><th style={{ width: 70 }}></th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+                None of your leads has been converted into a customer yet — the Super Admin converts them.
+              </td></tr>
+            ) : rows.map((l) => {
+              const c = primaryContactOf(sales.contacts, l.id);
+              const group = l.group || custGroupOf(l.client_name, master);
+              const locs = masterRowsFor(l.client_name, master);
+              const open = openId === l.id;
+              return (
+                <FragmentRow key={l.id}>
+                  <tr className={selId === l.id ? 'hi' : undefined}>
+                    <td className="rowsel" style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                      <input type="radio" name="customer-edit-sel" checked={selId === l.id} style={{ margin: 0, verticalAlign: 'middle' }}
+                        aria-label={`Edit customer ${l.client_name}`} onChange={() => onSelect(l.id)} />
+                    </td>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{l.client_name}</td>
+                    <td style={{ fontSize: 11 }}>{group && group !== l.client_name ? group : '—'}</td>
+                    <td style={{ fontSize: 11 }}>{repCategoriesOf(l, repId).join(', ') || '—'}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {l.payment_type ? <span style={{ ...pill(PAY_STYLE[l.payment_type] || {}), borderRadius: '50%', padding: '2px 7px', fontSize: 10 }}>{l.payment_type}</span> : '—'}
+                    </td>
+                    <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{c ? `${c.name || '—'}${c.designation ? ' · ' + c.designation : ''}` : <span style={{ color: 'var(--i3)' }}>No contact on file</span>}</td>
+                    <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{(c && c.phone) || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{locs.length ? locs.map((r) => (r.dispatchLoc || '—') + (r.warehouseName ? ` (${r.warehouseName})` : '')).join(', ') : '—'}</td>
+                    <td style={{ fontSize: 11 }}>{l.converted_at ? fmtDate(String(l.converted_at).slice(0, 10)) : (String(l.kam || '') === String(repId) ? 'KAM' : '—')}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <button className="btn btn-s" aria-label={`${open ? 'Hide' : 'View'} ${l.client_name}`} onClick={() => setOpenId(open ? null : l.id)}>{open ? 'Hide' : 'View'}</button>
+                    </td>
+                  </tr>
+                  {open && (
+                    <tr><td colSpan={10} style={{ background: 'var(--bg)', padding: 14 }}>
+                      <LeadDetail lead={l} sales={sales} repId={repId} />
+                    </td></tr>
+                  )}
+                </FragmentRow>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -465,13 +718,31 @@ function MyCustomers({ leads, sales, save, repId, title = 'My Leads', selId = nu
     });
   }, [leads, q, stage]);
 
+  /**
+   * 30.09 §SL5: "leads marked Converted should be sent to the Super Admin for
+   * conversion; once the Super Admin converts, they move to the customers list."
+   * Choosing Converted here is that request — the lead waits in the Super Admin's
+   * queue and moves to My Customers when it is converted there. Any other stage
+   * withdraws a request still waiting.
+   */
   async function setStageOf(lead, next) {
     if (!next || next === lead.stage) return;
     setBusy(true);
     try {
-      await patchSales(save, { leads: (sales.leads || []).map((l) => (l.id === lead.id ? { ...l, stage: next } : l)) });
-      setMsg({ t: 'g', text: `✅ ${lead.client_name} → ${next}.` });
-    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+      if (isConvertedStage(next)) {
+        await save('sales', (prev) => ({ ...(prev || {}), leads: requestConversion((prev && prev.leads) || [], lead.id, repId) }), { retry: true });
+        setMsg({ t: 'g', text: `✅ ${lead.client_name} marked Converted — sent to the Super Admin to convert. It moves to My Customers once converted.` });
+      } else {
+        const at = new Date().toISOString();
+        await save('sales', (prev) => ({
+          ...(prev || {}),
+          leads: ((prev && prev.leads) || []).map((l) => (l.id === lead.id
+            ? { ...l, stage: next, stage_updated_at: at, stage_updated_by: repId, conversion_requested: false }
+            : l)),
+        }), { retry: true });
+        setMsg({ t: 'g', text: `✅ ${lead.client_name} → ${next}.` });
+      }
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
     finally { setBusy(false); }
   }
 
@@ -504,12 +775,18 @@ function MyCustomers({ leads, sales, save, repId, title = 'My Leads', selId = nu
                 <FragmentRow key={l.id} open={open}>
                   <tr>
                     {onSelect && (
-                      <td style={{ textAlign: 'center', verticalAlign: 'top' }}>
-                        <input type="radio" name="lead-edit-sel" checked={selId === l.id}
+                      /* 30.09 §SL1: on the row's middle line, level with the name — the
+                         28.09 top alignment left it 10px above the name beside it. */
+                      <td className="rowsel" style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                        <input type="radio" name="lead-edit-sel" checked={selId === l.id} style={{ margin: 0, verticalAlign: 'middle' }}
                           aria-label={`Edit ${l.client_name}`} onChange={() => onSelect(l.id)} />
                       </td>
                     )}
-                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{l.client_name}{l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}</td>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {l.client_name}
+                      {l.converted_to_customer ? <span className="tag tg" style={{ fontSize: 9, marginLeft: 4 }}>customer</span> : null}
+                      {conversionPending(l) ? <span className="tag ty" style={{ fontSize: 9, marginLeft: 4 }} title="Marked Converted — waiting for the Super Admin to convert it">⏳ With Super Admin</span> : null}
+                    </td>
                     <td style={{ fontSize: 11 }}>{l.group || '—'}</td>
                     <td style={{ fontSize: 11 }}>{repCategoriesOf(l, repId).join(', ') || '—'}</td>
                     <td style={{ textAlign: 'center' }}>
@@ -698,26 +975,33 @@ function MyContacts({ leads, book, sales, save, repId }) {
         name, designation: desig, phone: form.phone, email: form.email,
         priority: form.rank ? Number(form.rank) : '', is_primary: form.rank === '1',
       };
-      let contacts = (sales.contacts || []).slice();
-      if (editing) contacts = contacts.map((c) => (c.id === editing ? { ...c, ...fields } : c));
-      else contacts = contacts.concat([{ id: salesUid('contact'), created_by: repId, created_at: new Date().toISOString(), ...fields }]);
-      // Enforce a single holder per rank within the same customer.
-      if (form.rank) {
-        const keepId = editing || contacts[contacts.length - 1].id;
-        contacts = contacts.map((c) => {
-          const sameCust = (leadId && c.lead_id === leadId) || (customer && c.customer === customer);
-          return (sameCust && c.id !== keepId && String(c.priority) === form.rank) ? { ...c, priority: '', is_primary: false } : c;
-        });
-      }
-      const patch = { contacts };
+      const newId = salesUid('contact');
+      const at = new Date().toISOString();
       const desp = form.dispatchForms;
-      if (lead && Object.keys(desp).some((k) => (desp[k] || []).length)) {
-        patch.leads = allLeads.map((l) => (l.id === lead.id ? { ...l, category_dispatch_forms: { ...(l.category_dispatch_forms || {}), ...desp } } : l));
-      }
-      await patchSales(save, patch);
+      // Built over the blob as the server has it now, so a save that crosses another
+      // writer's never puts back a contact list from before theirs.
+      await save('sales', (prev) => {
+        const cur = prev || {};
+        let contacts = (cur.contacts || []).slice();
+        if (editing) contacts = contacts.map((c) => (c.id === editing ? { ...c, ...fields } : c));
+        else contacts = contacts.concat([{ id: newId, created_by: repId, created_at: at, ...fields }]);
+        // Enforce a single holder per rank within the same customer.
+        if (form.rank) {
+          const keepId = editing || newId;
+          contacts = contacts.map((c) => {
+            const sameCust = (leadId && c.lead_id === leadId) || (customer && c.customer === customer);
+            return (sameCust && c.id !== keepId && String(c.priority) === form.rank) ? { ...c, priority: '', is_primary: false } : c;
+          });
+        }
+        const out = { ...cur, contacts };
+        if (lead && Object.keys(desp).some((k) => (desp[k] || []).length)) {
+          out.leads = (cur.leads || []).map((l) => (l.id === lead.id ? { ...l, category_dispatch_forms: { ...(l.category_dispatch_forms || {}), ...desp } } : l));
+        }
+        return out;
+      }, { retry: true });
       setEditing(null); setForm(emptyContactForm);
       setMsg({ t: 'g', text: '✅ Saved.' });
-    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
     finally { setBusy(false); }
   }
 
@@ -725,20 +1009,26 @@ function MyContacts({ leads, book, sales, save, repId }) {
     if (!window.confirm(`Remove ${c.name} from your list?\n\nSales Admin keeps a record of it (flagged as removed by you).`)) return;
     try {
       // Soft-delete: hidden from the rep but kept for Sales Admin, flagged with who/when.
-      await patchSales(save, { contacts: (sales.contacts || []).map((x) => (x.id === c.id ? { ...x, rep_deleted: true, rep_deleted_at: new Date().toISOString(), rep_deleted_by: repId } : x)) });
+      const at = new Date().toISOString();
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        contacts: ((prev && prev.contacts) || []).map((x) => (x.id === c.id ? { ...x, rep_deleted: true, rep_deleted_at: at, rep_deleted_by: repId } : x)),
+      }), { retry: true });
       if (editing === c.id) { setEditing(null); setForm(emptyContactForm); }
-    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
   }
 
   async function setRank(c, rank) {
     try {
-      const contacts = (sales.contacts || []).map((x) => {
-        if (x.id === c.id) return { ...x, priority: rank ? Number(rank) : '', is_primary: rank === '1' };
-        const sameCust = (c.customer && x.customer === c.customer) || (c.lead_id && x.lead_id === c.lead_id);
-        return (rank && sameCust && String(x.priority) === rank) ? { ...x, priority: '', is_primary: false } : x;
-      });
-      await patchSales(save, { contacts });
-    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+      await save('sales', (prev) => ({
+        ...(prev || {}),
+        contacts: ((prev && prev.contacts) || []).map((x) => {
+          if (x.id === c.id) return { ...x, priority: rank ? Number(rank) : '', is_primary: rank === '1' };
+          const sameCust = (c.customer && x.customer === c.customer) || (c.lead_id && x.lead_id === c.lead_id);
+          return (rank && sameCust && String(x.priority) === rank) ? { ...x, priority: '', is_primary: false } : x;
+        }),
+      }), { retry: true });
+    } catch (e) { setMsg({ t: 'r', text: saveErrorText(e) }); }
   }
 
   return (
@@ -849,11 +1139,10 @@ function MyContacts({ leads, book, sales, save, repId }) {
               : rows.map((c) => (
                 <tr key={c.id} className={editing === c.id ? 'hi' : undefined}>
                   {/* §7: the radio button brings the line into the form above to edit */}
-                  {/* 28.09 §Sales ¶21: "the lead or customer name, the contact person name,
-                      and designation … should be on one line. The radio button selection can
-                      move one line to the top." Long names were wrapping and pushing the three
-                      apart; they no longer wrap, and the radio aligns to the top of the row. */}
-                  <td style={{ textAlign: 'center', verticalAlign: 'top' }}><input type="radio" name="contact-edit" checked={editing === c.id} aria-label={`Edit ${c.name}`} onChange={() => editContact(c)} /></td>
+                  {/* 28.09 §Sales ¶21: long names were wrapping and pushing the lead, the
+                      contact and the designation apart; they no longer wrap. 30.09 §SL1: the
+                      radio sits on the row's middle line with them, not at the top. */}
+                  <td className="rowsel" style={{ textAlign: 'center', verticalAlign: 'middle' }}><input type="radio" name="contact-edit" checked={editing === c.id} style={{ margin: 0, verticalAlign: 'middle' }} aria-label={`Edit ${c.name}`} onChange={() => editContact(c)} /></td>
                   <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{custOfContact(c, allLeads) || '—'}</td>
                   <td>{(() => { const pk = payOfContact(c, allLeads); return pk ? <span style={{ ...pill(PAY_STYLE[pk] || {}), fontSize: 10 }}>{payLabel(pk)}</span> : '—'; })()}</td>
                   <td>{contactCats(c).map((cat) => <span key={cat} className="tag tb" style={{ marginRight: 3, fontSize: 10 }}>{cat}</span>) || '—'}</td>
@@ -896,7 +1185,8 @@ function AddCustomer({ sales, save, repId, book, onDone, pickId = null, onPicked
   const [busy, setBusy] = useState(false);
   const cityList = ddList(sales, 'locations');
 
-  const mine = useMemo(() => [...book.leads, ...book.customers].slice().sort((a, b) => String(a.client_name).localeCompare(String(b.client_name))), [book]);
+  // 30.09 §SL2: customers have their own tab and editor now — this form is for leads
+  const mine = useMemo(() => book.leads.slice().sort((a, b) => String(a.client_name).localeCompare(String(b.client_name))), [book]);
   const existing = form.leadSel !== '__new__' ? mine.find((l) => l.id === form.leadSel) || null : null;
   const dupe = useMemo(() => {
     const name = form.custNew.trim().toLowerCase();
@@ -929,11 +1219,12 @@ function AddCustomer({ sales, save, repId, book, onDone, pickId = null, onPicked
     try {
       if (existing) {
         if (!form.categories.length) throw new Error('Select at least one category.');
-        await patchSales(save, {
-          leads: setLeadCategories(allLeads, existing.id, form.categories, repId).map((l) => (l.id === existing.id
+        await save('sales', (prev) => ({
+          ...(prev || {}),
+          leads: setLeadCategories((prev && prev.leads) || [], existing.id, form.categories, repId).map((l) => (l.id === existing.id
             ? { ...l, payment_type: form.paymentType, head_office: form.headOffice, delivery_location: form.deliveryLocation, gstin: form.gstin, category_dispatch_forms: { ...(l.category_dispatch_forms || {}), ...form.dispatchForms } }
             : l)),
-        });
+        }), { retry: true });
         setMsg({ t: 'g', text: `✅ ${existing.client_name} updated — categories: ${form.categories.join(', ')}.` });
       } else {
         if (dupe) throw new Error(`"${dupe.client_name}" is already on the list${leadsForRep([dupe], repId).length ? ' — pick it above to edit it' : ' (allocated to another rep — ask the Super Admin)'}.`);
@@ -942,19 +1233,27 @@ function AddCustomer({ sales, save, repId, book, onDone, pickId = null, onPicked
           deliveryLocation: form.deliveryLocation, gstin: form.gstin, categories: form.categories,
           dispatchForms: form.dispatchForms, stage: form.stage, followUp: form.followUp,
         };
-        const lead = buildLead(leadForm, repId);
-        const patch = { leads: [...allLeads, lead] };
-        if (form.followUp) {
-          patch.interactions = [...(sales.interactions || []),
-            buildInteraction(lead.id, repId, { type: 'Follow-up scheduled', outcome: form.remarks, followUp: form.followUp })];
-        }
-        await patchSales(save, patch);
-        setMsg({ t: 'g', text: '✅ Lead saved — it is on My Leads now. Add contacts from My Contacts.' });
+        const built = buildLead(leadForm, repId);
+        // §SL5: a new lead entered as Converted goes to the Super Admin to convert, like any other
+        const requested = isConvertedStage(built.stage);
+        const lead = requested ? requestConversion([built], built.id, repId)[0] : built;
+        const inter = form.followUp
+          ? buildInteraction(lead.id, repId, { type: 'Follow-up scheduled', outcome: form.remarks, followUp: form.followUp })
+          : null;
+        await save('sales', (prev) => {
+          const cur = prev || {};
+          const out = { ...cur, leads: [...(cur.leads || []), lead] };
+          if (inter) out.interactions = [...(cur.interactions || []), inter];
+          return out;
+        }, { retry: true });
+        setMsg({ t: 'g', text: requested
+          ? '✅ Lead saved and marked Converted — the Super Admin has been asked to convert it. Add contacts from My Contacts.'
+          : '✅ Lead saved — it is on My Leads now. Add contacts from My Contacts.' });
         setForm({ leadSel: '__new__', custNew: '', paymentType: '', headOffice: '', deliveryLocation: '', gstin: '', categories: [], dispatchForms: {}, stage: 'To Approach', followUp: '', remarks: '' });
         setTimeout(onDone, 700);
       }
     } catch (e) {
-      setMsg({ t: 'r', text: e.message || String(e) });
+      setMsg({ t: 'r', text: e && e.code === 'conflict' ? saveErrorText(e) : (e.message || String(e)) });
     } finally { setBusy(false); }
   }
 
@@ -971,7 +1270,7 @@ function AddCustomer({ sales, save, repId, book, onDone, pickId = null, onPicked
           <label>Lead *</label>
           <select value={form.leadSel} aria-label="Lead" onChange={(e) => { pickLead(e.target.value); if (onPicked) onPicked(e.target.value); }}>
             <option value="__new__">➕ Add New Lead…</option>
-            {mine.map((l) => <option key={l.id} value={l.id}>{l.client_name}{book.customers.some((c) => c.id === l.id) ? ' (customer)' : ''}</option>)}
+            {mine.map((l) => <option key={l.id} value={l.id}>{l.client_name}</option>)}
           </select>
           {form.leadSel === '__new__' && (
             <>

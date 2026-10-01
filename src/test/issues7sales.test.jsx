@@ -35,7 +35,7 @@ const tab = async (label) => userEvent.click(await screen.findByText(label));
 const lastSales = (saved) => saved.filter((s) => s.key === 'sales').pop().data;
 
 describe('Rep — SKUs and the CSA requisition', () => {
-  it('adds a SKU under a customer with its structure, then sends the sample for CSA with the despatch details', async () => {
+  it('adds a SKU under a customer with its structure and despatch details, then sends it for CSA from the same form', async () => {
     const { saved } = openRep(salesModule());
     await tab('📦 SKUs');
     await userEvent.click(screen.getByLabelText('SKU pick Customer'));
@@ -48,27 +48,35 @@ describe('Rep — SKUs and the CSA requisition', () => {
     await userEvent.selectOptions(screen.getByLabelText('Secondary Substrate'), 'LDPE');
     await userEvent.selectOptions(screen.getByLabelText('Secondary Micron'), '60');
     await userEvent.selectOptions(screen.getByLabelText('Category'), 'Oil');
-    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
+    // 30.09 §PE2: the sales logins spell it "Despatch"
+    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Pouch');
+    // 30.09 §SK1 / §SK2: the despatch details are on Add SKU itself — no radio, no
+    // "sample received" gate — with the Customer Master's rows as the locations
+    const det = screen.getByLabelText('Despatch details');
+    await userEvent.selectOptions(within(det).getByLabelText('Despatch location'), 'Pune (W1)');
+    await userEvent.type(within(det).getByLabelText('Tentative order quantity'), '50000');
+    fireEvent.change(within(det).getByLabelText('Tentative despatch date'), { target: { value: '2026-10-15' } });
+    await userEvent.type(within(det).getByLabelText('Target price'), '3.25');
+    await userEvent.type(within(det).getByLabelText('Pouch width end to end (mm)'), '150');
     await userEvent.click(screen.getByText('✓ Add SKU'));
     await waitFor(() => expect(lastSales(saved).skus).toHaveLength(1));
-    expect(lastSales(saved).skus[0]).toMatchObject({
+    const added = lastSales(saved).skus[0];
+    expect(added).toMatchObject({
       sku_name: '1kg Oil Pouch', lead_id: 'L2',
       structure: 'PET · 12 mic · 600 mm  +  LDPE · 60 mic',
     });
+    // kept on the SKU even though it has not gone to QC yet
+    expect(added.csa_draft).toMatchObject({ despatch_location: 'Pune', warehouse_name: 'W1', tentative_qty: 50000, tentative_date: '2026-10-15', target_price: 3.25, kind: 'pouch' });
+    expect(added.csa_draft.details.pouch_width_mm).toBe(150);
+    expect(added.csa_requested).toBeFalsy();
 
-    // pick it (radio), say the sample is received, fill the requisition, send to QC
+    // §SK3: the radio brings it back with its despatch details; §SK4: it goes to QC from the form
     await userEvent.click(await screen.findByLabelText('Edit 1kg Oil Pouch'));
-    await userEvent.click(screen.getByLabelText('Sample received Yes'));
-    const req = await screen.findByLabelText('CSA requisition');
-    await userEvent.selectOptions(within(req).getByLabelText('Despatch location'), 'Pune');
-    await userEvent.type(within(req).getByLabelText('Tentative order quantity'), '50000');
-    fireEvent.change(within(req).getByLabelText('Tentative despatch date'), { target: { value: '2026-10-15' } });
-    await userEvent.type(within(req).getByLabelText('Target price'), '3.25');
-    await userEvent.type(within(req).getByLabelText('Pouch width end to end (mm)'), '150');
-    await userEvent.click(within(req).getByText('🧪 Send for CSA to QC'));
+    expect(within(screen.getByLabelText('Despatch details')).getByLabelText('Pouch width end to end (mm)')).toHaveValue(150);
+    await userEvent.click(screen.getByText('🧪 Send for CSA to QC'));
     await waitFor(() => expect(lastSales(saved).skus[0].csa_requested).toBe(true));
     const r = lastSales(saved).skus[0].csa_request;
-    expect(r).toMatchObject({ despatch_location: 'Pune', tentative_qty: 50000, tentative_date: '2026-10-15', target_price: 3.25, kind: 'pouch' });
+    expect(r).toMatchObject({ despatch_location: 'Pune', warehouse_name: 'W1', tentative_qty: 50000, tentative_date: '2026-10-15', target_price: 3.25, kind: 'pouch' });
     expect(r.details.pouch_width_mm).toBe(150);
     expect(await screen.findByText(/sent to QC for the CSA report/)).toBeInTheDocument();
   });

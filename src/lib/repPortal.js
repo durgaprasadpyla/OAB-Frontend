@@ -117,7 +117,7 @@ export function buildSku({ leadId, name, category, dispatchForm }, repId, { now 
   if (!leadId) throw new Error('Select a customer.');
   if (!s(name)) throw new Error('Enter the SKU name.');
   if (!s(category)) throw new Error('Select a category.');
-  if (!s(dispatchForm)) throw new Error('Select a dispatch form.');
+  if (!s(dispatchForm)) throw new Error('Select a despatch form.');
   return {
     id: uid('sku'), lead_id: leadId, sku_name: s(name), category: s(category),
     dispatch_form: s(dispatchForm), created_by: repId, created_at: now.toISOString(),

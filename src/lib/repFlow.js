@@ -10,12 +10,13 @@
 // "customer", a "floor price" or an "open PO" is. Nothing here touches the network.
 import { salesUid, salesToday, leadsForRep, leadCategories } from './sales.js';
 import { acceptedMinPrice } from './repPortal.js';
-import { getCustLocations } from './master.js';
 
 const s = (v) => String(v == null ? '' : v).trim();
 const arr = (v) => (Array.isArray(v) ? v : []);
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const lower = (v) => s(v).toLowerCase();
+/** A customer name as the Customer Master is matched: case and spacing do not count. */
+const nameKey = (v) => lower(v).replace(/\s+/g, ' ');
 
 /* ── lead or customer ───────────────────────────────────────────────────── */
 
@@ -44,12 +45,143 @@ export function isCustomerLead(lead, customers) {   // eslint-disable-line no-un
 export function repBook(sales, customers, repId) {
   const mine = leadsForRep(sales && sales.leads, repId);
   const ids = new Set(mine.map((l) => l.id));
-  const kamOf = arr(sales && sales.leads).filter((l) => l && String(l.kam || '') === String(repId) && !ids.has(l.id));
-  const all = [...mine, ...kamOf];
+  const kamOf = repId
+    ? arr(sales && sales.leads).filter((l) => l && String(l.kam || '') === String(repId) && !ids.has(l.id))
+    : [];
+  // 30.09: the Super Admin makes a rep KAM from the Customer Master — the KAM screen
+  // lists customers, never leads — so a KAM account is a customer unless the Super
+  // Admin has explicitly moved it back to a lead. The older code filed these on the
+  // lead side whenever the KAM screen had created the lead record without the flag.
+  const kamCustomer = (l) => l.converted_to_customer !== false;
   return {
-    leads: all.filter((l) => !isCustomerLead(l, customers)),
-    customers: all.filter((l) => isCustomerLead(l, customers)),
+    leads: [...mine.filter((l) => !isCustomerLead(l, customers)), ...kamOf.filter((l) => !kamCustomer(l))],
+    customers: [...mine.filter((l) => isCustomerLead(l, customers)), ...kamOf.filter(kamCustomer)],
   };
+}
+
+/* ── the conversion — ONE rule for the rep, the S Dashboard and the Super Admin ── */
+//
+// 30.09 §Sales: "In My Leads, leads marked Converted should be sent to the Super
+// Admin for conversion; once the Super Admin converts, they move to the customers
+// list." And: "I have marked these customers as customers from lead, whereas in the
+// sales rep login they are still under leads 'Converted'."
+//
+// The stage dropdown and the conversion were two unrelated fields: a rep — or the
+// Super Admin on the S Dashboard — could set the stage to Converted and nothing was
+// ever converted. Now a rep's "Converted" is a REQUEST the Super Admin sees queued,
+// and the Super Admin's own "Converted" IS the conversion. Both Leads screens read
+// the queue through these helpers, so they can never disagree again.
+
+/** True for the "Converted" lead stage, however it is cased. */
+export function isConvertedStage(stage) {
+  return lower(stage) === 'converted';
+}
+
+/** Marked Converted (by the rep, or on the stage dropdown) but not converted yet. */
+export function conversionPending(lead) {
+  if (!lead || isCustomerLead(lead)) return false;
+  return lead.conversion_requested === true || isConvertedStage(lead.stage);
+}
+
+/** The leads waiting for the Super Admin to convert them, oldest request first. */
+export function conversionQueue(leads) {
+  const when = (l) => s(l.conversion_requested_at || l.stage_updated_at || l.created_at);
+  return arr(leads).filter(conversionPending).sort((a, b) => when(a).localeCompare(when(b)));
+}
+
+/** A rep marks a lead Converted: the stage moves, and the Super Admin is asked to convert it. */
+export function requestConversion(leads, leadId, repId, { now = new Date() } = {}) {
+  const at = now.toISOString();
+  return arr(leads).map((l) => (l.id !== leadId ? l : {
+    ...l,
+    ...(isConvertedStage(l.stage) ? {} : { stage_before_conversion: s(l.stage) }),
+    stage: 'Converted', stage_updated_at: at, stage_updated_by: repId,
+    conversion_requested: true, conversion_requested_at: at, conversion_requested_by: repId,
+  }));
+}
+
+/** The Super Admin converts: the flag every screen reads, who and when, and the request closed. */
+export function convertLeads(leads, ids, { by = 'super_admin', now = new Date() } = {}) {
+  const set = new Set(arr(ids));
+  const at = now.toISOString();
+  return arr(leads).map((l) => {
+    if (!set.has(l.id)) return l;
+    const stage = isConvertedStage(l.stage) ? {} : {
+      stage_before_conversion: s(l.stage), stage: 'Converted', stage_updated_at: at, stage_updated_by: by,
+    };
+    return { ...l, ...stage, converted_to_customer: true, converted_at: at, converted_by: by, conversion_requested: false };
+  });
+}
+
+/**
+ * ↩ Lead: the conversion undone cleanly. The stage leaves "Converted" — back to what
+ * it was before, else To Approach — so the lead does not land straight back in the
+ * Super Admin's queue.
+ */
+export function revertLead(leads, leadId, { by = 'super_admin', now = new Date() } = {}) {
+  const at = now.toISOString();
+  return arr(leads).map((l) => {
+    if (l.id !== leadId) return l;
+    const before = s(l.stage_before_conversion);
+    const stage = isConvertedStage(l.stage) ? (before && !isConvertedStage(before) ? before : 'To Approach') : l.stage;
+    return {
+      ...l, converted_to_customer: false, conversion_requested: false,
+      stage, stage_updated_at: at, stage_updated_by: by, reverted_at: at, reverted_by: by,
+    };
+  });
+}
+
+/**
+ * What a failed sales save says. Module 12 is written by seven roles, so a save that
+ * lost the race (409) is common: the blob has already been reloaded by then, and the
+ * person only needs to click again — it must never fail in silence.
+ */
+export function saveErrorText(e, what = 'Save') {
+  if (e && (e.code === 'conflict' || e.status === 409)) {
+    return 'The sales data was changed by someone else and has been reloaded — please click again.';
+  }
+  return what + ' failed: ' + ((e && e.message) || e);
+}
+
+/** The Customer Master rows of a customer, matched on the name (case and spacing ignored). */
+export function masterRowsFor(name, customers) {
+  const key = nameKey(name);
+  if (!key) return [];
+  return arr(customers).filter((c) => c && nameKey(c.customer) === key);
+}
+
+/** Whether a name is already in the Customer Master. */
+export function inCustomerMaster(name, customers) {
+  return masterRowsFor(name, customers).length > 0;
+}
+
+/** Two customer names that the Customer Master would treat as one. */
+export function sameCustomerName(a, b) {
+  return !!nameKey(a) && nameKey(a) === nameKey(b);
+}
+
+/**
+ * The Customer Master rows a conversion adds: one per converted name that the master
+ * does not have yet, so the sale-order screens can use it. Names already there are
+ * left alone — converting twice never adds a duplicate row.
+ */
+export function customerRowsToAdd(leads, ids, customers) {
+  const set = new Set(arr(ids));
+  const have = new Set(arr(customers).map((c) => nameKey(c && c.customer)));
+  const out = [];
+  arr(leads).forEach((l) => {
+    if (!l || !set.has(l.id)) return;
+    const name = s(l.client_name);
+    const key = nameKey(name);
+    if (!key || have.has(key)) return;
+    have.add(key);
+    out.push({
+      group: s(l.group), customer: name, dispatchLoc: s(l.delivery_location || l.deliveryLocation), warehouseName: '',
+      billingAddr: '', shippingAddr: '', gstin: s(l.gstin), state: '',
+      contactPerson: '', contactPhone: '', contactEmail: '', remarks: s(l.remarks),
+    });
+  });
+  return out;
 }
 
 /** The list a Lead / Customer radio resolves to. */
@@ -59,8 +191,9 @@ export function pickerList(book, kind) {
 
 /**
  * Where a lead / customer takes delivery. A customer's despatch locations are the
- * Customer Master's (the Super Admin's); a lead has the delivery location the rep
- * wrote down. The Super Admin's Locations list is offered behind both.
+ * Customer Master's (the Super Admin's) and nothing else; a lead not in the master
+ * yet has the delivery location the rep wrote down, with the Super Admin's
+ * Locations list behind it.
  */
 export function despatchLocationsFor(lead, customers, extra = []) {
   return despatchLocationRowsFor(lead, customers, extra).map((r) => r.location);
@@ -93,7 +226,12 @@ export function despatchLocationRowsFor(lead, customers, extra = []) {
     out.push({ location: loc, warehouse: wh, key, label: wh ? loc + ' (' + wh + ')' : loc });
   };
   if (lead) {
-    getCustLocations(customers, lead.client_name).forEach((l) => push(l && l.dispatchLoc, l && l.warehouseName));
+    // 30.09 §PE1: Kova Agro offered "DHARAPURAM (DHARAPURAM)", "DHARAPURAM (KOVAI
+    // OWN)" and "Tirupur" — the third was the city the rep typed on the lead, which
+    // the Super Admin's Customer Master does not have. When the master has the
+    // customer, its rows are the whole answer: no lead city, no city list.
+    masterRowsFor(lead.client_name, customers).forEach((l) => push(l.dispatchLoc, l.warehouseName));
+    if (out.length) return out;
     push(lead.delivery_location, '');
   }
   arr(extra).forEach((v) => push(v, ''));
@@ -106,14 +244,15 @@ export function despatchLocationRowsFor(lead, customers, extra = []) {
  * The despatch-form specific fields the requisition carries, per form.
  *   roll         per reel kg · core width (mm) · reading direction · packing instructions
  *   pouch        pouch width (mm) · pouch height (mm) · packing instructions · other specs
- *   shrink       sleeve form: height · width · open width; roll form: core (mm) · metres or kg per core
+ *   shrink       sleeve form: height · width · open width; roll form: core (mm) and
+ *                metres per core OR kgs per core (which one, and how many)
  *   labels       labels in a bunch · labels per box · packing instructions
  *   bulk         side / bottom gusset · pouch width · gusset · pouch height — with the
  *                total gusset (×2 bottom, ×4 side) and the finished height / width worked out
  */
 export const DESPATCH_FIELDS = {
   roll: [
-    { k: 'per_reel_kg', label: 'Per reel (kg)', type: 'number' },
+    { k: 'per_reel_kg', label: 'Per reel (Kgs)', type: 'number', unit: 'Kgs' },
     { k: 'core_width_mm', label: 'Core width (mm)', type: 'number', unit: 'mm' },
     { k: 'reading_direction', label: 'Reading direction', type: 'select', options: ['Readable', 'Unreadable'] },
     { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
@@ -130,7 +269,9 @@ export const DESPATCH_FIELDS = {
     { k: 'sleeve_width_mm', label: 'Width of the sleeve (mm)', type: 'number', unit: 'mm', when: 'Sleeve form' },
     { k: 'open_width_mm', label: 'Open width (mm)', type: 'number', unit: 'mm', when: 'Sleeve form' },
     { k: 'core_mm', label: 'Core dimension (mm)', type: 'number', unit: 'mm', when: 'Roll form' },
-    { k: 'per_core', label: 'Metres or kg per core', type: 'text', when: 'Roll form' },
+    // 30.09 §SK2: "metres per core OR kgs per core" — a choice and a number, not free text
+    { k: 'per_core_basis', label: 'Per core', type: 'radio', options: ['Metres per core', 'Kgs per core'], when: 'Roll form' },
+    { k: 'per_core_qty', label: 'Metres / Kgs per core', type: 'number', when: 'Roll form' },
   ],
   labels: [
     { k: 'labels_per_bunch', label: 'Labels in a bunch', type: 'number' },
@@ -187,6 +328,25 @@ export function buildCsaRequest(form, sku, { now = new Date(), user = '' } = {})
   if (!s(form.tentative_date)) throw new Error('Pick the tentative despatch date.');
   if (!(n(form.target_price) > 0)) throw new Error('Enter the target price.');
   const kind = despatchKind(sku.dispatch_form || sku.dispatch_type);
+  const sample = s(form.sample_received);
+  return {
+    despatch_location: s(form.despatch_location),
+    // 28.09 §Superstar ¶1: the warehouse behind the town travels with it
+    warehouse_name: s(form.warehouse_name),
+    tentative_qty: n(form.tentative_qty),
+    tentative_date: s(form.tentative_date),
+    target_price: n(form.target_price),
+    despatch_form: s(sku.dispatch_form || sku.dispatch_type),
+    kind,
+    details: despatchDetails(form, kind),
+    ...(sample ? { sample_received: sample } : {}),
+    sent_at: now.toISOString(),
+    sent_by: user,
+  };
+}
+
+/** The despatch-form specific values of a form, typed: numbers as numbers, the bulk-bag totals worked out. */
+function despatchDetails(form, kind) {
   const fields = DESPATCH_FIELDS[kind] || [];
   const details = {};
   fields.forEach((f) => {
@@ -196,23 +356,55 @@ export function buildCsaRequest(form, sku, { now = new Date(), user = '' } = {})
     else if (v != null && s(v)) details[f.k] = s(v);
   });
   if (kind === 'bulk') Object.assign(details, bulkBagTotals(details));
+  return details;
+}
+
+/**
+ * 30.09 §SK1-§SK3: the despatch details as the rep left them on the Add / Edit SKU
+ * form — kept on the SKU whether or not it has gone to QC yet, so the edit radio
+ * brings back what was typed. Nothing is required here (a draft can be half done);
+ * the requisition itself is still validated by buildCsaRequest when it is sent.
+ */
+export function buildCsaDraft(form, dispatchForm, { now = new Date() } = {}) {
+  const f = form || {};
+  const kind = despatchKind(dispatchForm);
+  const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? '' : Number(v));
   return {
-    despatch_location: s(form.despatch_location),
-    tentative_qty: n(form.tentative_qty),
-    tentative_date: s(form.tentative_date),
-    target_price: n(form.target_price),
-    despatch_form: s(sku.dispatch_form || sku.dispatch_type),
+    despatch_location: s(f.despatch_location),
+    warehouse_name: s(f.warehouse_name),
+    tentative_qty: num(f.tentative_qty),
+    tentative_date: s(f.tentative_date),
+    target_price: num(f.target_price),
+    despatch_form: s(dispatchForm),
     kind,
-    details,
-    sent_at: now.toISOString(),
-    sent_by: user,
+    details: despatchDetails(f, kind),
+    saved_at: now.toISOString(),
   };
 }
 
-/** Mark the SKU as sent to QC for its CSA — what QC's pending list reads. */
+/**
+ * The despatch details to put back into the form for a SKU: the draft when the rep
+ * saved it after the last send, else what went to QC, else nothing.
+ */
+export function csaDetailsOf(sku) {
+  const draft = sku && sku.csa_draft;
+  const sent = sku && sku.csa_request;
+  if (draft && sent) return s(draft.saved_at) >= s(sent.sent_at) ? draft : sent;
+  return draft || sent || null;
+}
+
+/**
+ * Mark the SKU as sent to QC for its CSA — what QC's pending list reads. A
+ * requisition sent with no sample in hand (the rep said "No") does not claim one.
+ */
 export function sendSkuForCsa(skus, skuId, request) {
+  const sample = !request || request.sample_received !== 'No';
   return arr(skus).map((sk) => (sk.id === skuId
-    ? { ...sk, sample_received: 'Yes', sample_received_at: sk.sample_received_at || request.sent_at, sample_sent: 'Yes', sample_sent_at: request.sent_at, csa_requested: true, csa_request: request }
+    ? {
+      ...sk,
+      ...(sample ? { sample_received: 'Yes', sample_received_at: sk.sample_received_at || request.sent_at, sample_sent: 'Yes', sample_sent_at: request.sent_at } : {}),
+      csa_requested: true, csa_request: request,
+    }
     : sk));
 }
 

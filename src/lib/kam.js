@@ -95,6 +95,7 @@ export function kamApplyEdits(leads, edits, { uid = salesUid } = {}) {
     if (i >= 0) {
       out[i] = { ...out[i], ...fields };
     } else {
+      const at = new Date().toISOString();
       out = [...out, {
         id: uid('lead'),
         client_name: customer,
@@ -102,7 +103,12 @@ export function kamApplyEdits(leads, edits, { uid = salesUid } = {}) {
         category_assignments: {},
         stage: 'To Approach',
         created_by: 'sadmin',
-        created_at: new Date().toISOString(),
+        created_at: at,
+        // 30.09 §SL6: this row comes off the Customer Master, so it is a customer — a
+        // lead record without the flag put a KAM's own account on their LEAD side.
+        converted_to_customer: true,
+        converted_at: at,
+        converted_by: 'kam',
         ...fields,
       }];
     }

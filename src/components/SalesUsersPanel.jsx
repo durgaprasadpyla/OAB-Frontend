@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  REP_ACCOUNT_STATUSES, REP_MODULES, repModulesOf, addRep, updateRep, repCategoriesOf,
+  REP_ACCOUNT_STATUSES, REP_MODULES, REP_MODULES_REV, repModulesOf, addRep, updateRep, repCategoriesOf,
 } from '../lib/sales.js';
 import { inr } from '../lib/format.js';
 
@@ -70,7 +70,8 @@ export default function SalesUsersPanel({ sales, patch, showPasswords = false })
     if (cur.has(k)) cur.delete(k); else cur.add(k);
     if (cur.size === 0) { setMsg({ t: 'r', text: 'A rep needs at least one module.' }); return; }
     const modules = cur.size === REP_MODULES.length ? [] : [...cur];
-    try { await patch({ sales_users: updateRep(users, rep.id, { modules }) }); }
+    // 30.09: saved from a list that offers My Customers, so leaving it out is deliberate
+    try { await patch({ sales_users: updateRep(users, rep.id, { modules, modules_rev: REP_MODULES_REV }) }); }
     catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
   }
 

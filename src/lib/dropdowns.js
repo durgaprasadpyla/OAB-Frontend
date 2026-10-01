@@ -51,7 +51,7 @@ export const DROPDOWN_DEFS = [
   { key: 'categories', label: 'SKU Categories', where: 'Sales Rep · Sales Admin', type: 'list' },
   // Routes (Dashboard → Routes tab) now offer THIS list in the Dispatch Form picker —
   // the backing dispatch_type row is found-or-created by name when the route is saved.
-  { key: 'despatch', label: 'Dispatch Forms — Sales SKUs', where: 'Sales Rep — SKUs · Routes', type: 'list' },
+  { key: 'despatch', label: 'Despatch Forms — Sales SKUs', where: 'Sales Rep — SKUs · Routes', type: 'list' },
   { key: 'paytypes', label: 'Customer Payment Types', where: 'Sales Rep — Add Customer', type: 'pairs' },
   // Issues 7 §26: "Customer Statuses" reads "Lead Statuses" — a status is a LEAD's stage.
   { key: 'statuses', label: 'Lead Statuses', where: 'Sales Rep · Sales Admin', type: 'list' },

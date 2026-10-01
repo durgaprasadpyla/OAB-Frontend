@@ -9,6 +9,8 @@ const LABELS = Object.values(DESPATCH_FIELDS).flat().reduce((m, f) => { m[f.k] =
 LABELS.totalGusset = 'Total gusset (mm)';
 LABELS.totalHeight = 'Finished pouch height (mm)';
 LABELS.totalWidth = 'Finished pouch width (mm)';
+// requisitions sent before 30.09 carried the shrink roll form's per-core figure as text
+LABELS.per_core = 'Metres or kg per core';
 
 export default function CsaRequestCard({ sku, compact = false, showTarget = false }) {
   const r = sku && sku.csa_request;
@@ -21,7 +23,7 @@ export default function CsaRequestCard({ sku, compact = false, showTarget = fals
     <div className="al al-b" style={{ display: 'block', marginTop: compact ? 4 : 8 }} aria-label="CSA requisition from the sales rep">
       <div style={{ fontWeight: 700, marginBottom: 4 }}>📨 Requisition from the sales rep{r.sent_at ? ` · ${fmtDate(String(r.sent_at).slice(0, 10))}` : ''}{r.sent_by ? ` · ${r.sent_by}` : ''}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontSize: 12 }}>
-        <span>Despatch location: <b>{r.despatch_location || '—'}</b></span>
+        <span>Despatch location: <b>{r.despatch_location || '—'}{r.warehouse_name ? ` (${r.warehouse_name})` : ''}</b></span>
         <span>Tentative quantity: <b>{Number(r.tentative_qty || 0).toLocaleString('en-IN')}</b></span>
         <span>Tentative despatch: <b>{r.tentative_date ? fmtDate(r.tentative_date) : '—'}</b></span>
         {/* 29.09 ¶26: "Target price (This shall only be visible in quote login)." The

@@ -144,8 +144,9 @@ describe('Issues 3.0 §3 — the sales-user module allocation is readable', () =
     expect(formPanel.className).toContain('mod-alloc');
     // Every module reads as its own label with its caption in a separate element,
     // so a 14px box rule can never squeeze the text on top of the tick.
-    // Sales Login (2026-09-15): Negotiations became Quotations + Send Quote + Quote Accepted
-    ['Follow-ups', 'Log Visit', 'Enter PO', 'My Targets', 'My Leads', 'My Contacts', 'Add Lead', 'SKUs', 'Quotations', 'Send Quote', 'Quote Accepted']
+    // Sales Login (2026-09-15): Negotiations became Quotations + Send Quote + Quote Accepted.
+    // 30.09 §SL2: My Customers can be granted; Add Lead was merged into My Leads on 28.09.
+    ['Follow-ups', 'Log Visit', 'Enter PO', 'My Targets', 'My Leads', 'My Customers', 'My Contacts', 'SKUs', 'Quotations', 'Send Quote', 'Quote Accepted']
       .forEach((label) => expect(within(formPanel).getByText(label).tagName).toBe('SPAN'));
     expect(within(formPanel).getAllByRole('checkbox')).toHaveLength(11);
 
