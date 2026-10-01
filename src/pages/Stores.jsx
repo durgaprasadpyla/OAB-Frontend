@@ -8,6 +8,7 @@ import { inr, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
+import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
 
 // Stores Login. Four desks, in the order the day runs:
 //   Material on Hand — the landing board: every item with its characteristics,
@@ -1398,6 +1399,86 @@ const blankChild = () => ({ rolls: '1', widthMm: '', weightKg: '', internalCode:
  */
 export const SO_SOURCE = 'open';
 
+/**
+ * Issues as on 30.09 (S3): "for a particular SO, based on the BOM quantities only, the
+ * allocation should happen. The stores guy should know that according to the BOM for
+ * that SO (say the requirement is 300 kg) he is allowed to assign only 300 kg."
+ *
+ * Each item of the order's BOM: what the order needs (on its PO quantity), what is
+ * allocated to it, what has been issued to it net of returns, and what is still open.
+ * While allocated + issued is short of the need one more roll may go — even past it;
+ * once it reaches the need the line is complete and takes nothing more. The figures
+ * are the server's (GET /api/stores/so-material); the slip being built is added here.
+ */
+function SoBomPosition({ so, lines, issues, department, slipAddsOf }) {
+  const rt = { textAlign: 'right' };
+  const grey = { fontSize: 10, color: 'var(--i3)' };
+  const dept = String(department || '').trim().toLowerCase();
+  const inDept = (l) => (l.departments || []).some((d) => String(d || '').trim().toLowerCase() === dept);
+  // with a department chosen, its own lines (and anything off the BOM) — the rest are another slip's
+  const shown = dept && lines.some(inDept) ? lines.filter((l) => inDept(l) || l.onBom === false) : lines;
+  const issuedOf = (l) => (issues || []).filter((x) => netOut(x) > 0 && (x.itemId != null && l.itemId != null
+    ? String(x.itemId) === String(l.itemId) : codeKey(x.itemCode) === codeKey(l.itemCode)));
+  return (
+    <div style={{ margin: '4px 0 8px' }}>
+      <div className="ctitle" style={{ fontSize: 11, margin: '6px 0 2px' }}>
+        BOM of {so} — what this order needs
+        <span style={{ fontWeight: 400, color: 'var(--i3)', textTransform: 'none', letterSpacing: 0 }}>
+          {shown.length < lines.length ? ` · the lines for ${department}` : ''} · on the order quantity; a line is complete once
+          what is allocated and issued reaches what it needs
+        </span>
+      </div>
+      <div className="tw"><table aria-label={`BOM position for ${so}`}>
+        <thead><tr>
+          <th>Item code</th><th>Description</th><th>Dept</th><th style={rt}>Needs</th><th style={rt}>Allocated</th>
+          <th style={rt}>Issued</th><th style={rt}>Still open</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          {shown.map((l) => {
+            const pending = slipAddsOf(l.itemId);
+            const open = openOf(l, pending);
+            const out = issuedOf(l);
+            const kind = [l.materialType, l.subGroup, l.specialtyName].filter(Boolean).join(' / ');
+            return (
+              <tr key={l.itemId ?? l.itemCode}>
+                <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{l.itemCode}</td>
+                <td style={{ fontSize: 11, whiteSpace: 'normal' }}>
+                  {l.itemName || '—'}
+                  {kind ? <div style={grey}>{kind}</div> : null}
+                  {out.length > 0 && (
+                    <div style={{ fontSize: 10, color: '#1e7e34' }}>
+                      issued: {out.map((x) => `${x.internalCode}${x.lineNo ? ` (${x.lineNo})` : ''}`).join(', ')}
+                    </div>
+                  )}
+                </td>
+                <td style={{ fontSize: 11 }}>
+                  {l.onBom === false ? <span className="tag ty" style={{ fontSize: 9 }}>not on the BOM</span> : (l.departments || []).join(' / ') || '—'}
+                </td>
+                <td style={{ ...rt, fontWeight: 700 }}>{l.required != null ? `${qty(l.required)} ${l.uom || ''}` : '—'}</td>
+                <td style={rt}>{num(l.allocated) ? qty(l.allocated) : '—'}</td>
+                <td style={rt}>
+                  {num(l.netIssued) ? qty(l.netIssued) : '—'}
+                  {num(l.returned) > 0 ? <div style={grey}>{qty(l.returned)} came back</div> : null}
+                </td>
+                <td style={{ ...rt, fontWeight: 700, color: open > 0 ? '#B7770D' : undefined }}>{open == null ? '—' : qty(open)}</td>
+                <td style={{ fontSize: 11 }}>
+                  {isComplete(l, pending)
+                    ? <span className="tag" style={{ fontSize: 9, background: '#e6f4ea', color: '#1e7e34' }}>✓ complete</span>
+                    : hasCap(l)
+                      ? <span className="tag ty" style={{ fontSize: 9 }}>open</span>
+                      : <span className="tag tgr" style={{ fontSize: 9 }} title="The BOM gives no quantity to measure it against">not capped</span>}
+                  {pending > 0 ? <span style={grey}> · {qty(pending)} on this slip</span> : null}
+                  {hasCap(l) && coveredOf(l) > num(l.required) + 1e-9 ? <span style={grey}> · {qty(coveredOf(l) - num(l.required))} over</span> : null}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table></div>
+    </div>
+  );
+}
+
 function IssuesReturns({ flash }) {
   const { mods } = useData();
   const [items, setItems] = useState([]);
@@ -1551,16 +1632,33 @@ function IssuesReturns({ flash }) {
   // or anything to that particular sale order." The PLAN login has already promised
   // rolls to this order — the desk issuing against it needs to SEE them, so it hands
   // over the material that was set aside rather than whatever is nearest.
-  const [soAlloc, setSoAlloc] = useState([]);
+  //
+  // Issues as on 30.09 (P1, P3, S2, S3): "the issue happens from the stores login only;
+  // only allocation happens from planning … somewhere it should nudge the stores guy
+  // to issue that allocated roll first and only later anything else." What the order
+  // has — the rolls allocated to it (by PLAN or by this desk) and what has gone out to
+  // it — is read against what its BOM needs for the WHOLE order
+  // (GET /api/stores/so-material). An older server has no such thing: the allocation
+  // list alone is shown then, as before, and nothing is capped.
+  const [soMat, setSoMat] = useState(null);   // { so, lines, allocations, issues } — lines empty on an older server
+  const [allocTick, setAllocTick] = useState(0);
   useEffect(() => {
     const so = String(form.so || '').trim();
-    if (!so) { setSoAlloc([]); return undefined; }
+    if (!so) { setSoMat(null); return undefined; }
     let live = true;
-    storesApi.allocations(so)
-      .then((a) => { if (live) setSoAlloc(Array.isArray(a) ? a : []); })
-      .catch(() => { if (live) setSoAlloc([]); });
+    (async () => {
+      let m = null;
+      try { m = asSoMaterial(await storesApi.soMaterial(so)); } catch { m = null; }
+      if (m) { if (live) setSoMat({ ...m, so }); return; }
+      let a = [];
+      try { const r = await storesApi.allocations(so); a = Array.isArray(r) ? r : []; } catch { a = []; }
+      if (live) setSoMat({ so, lines: [], allocations: a, issues: [] });
+    })();
     return () => { live = false; };
-  }, [form.so, lastSlip]);
+  }, [form.so, lastSlip, lastReturn, allocTick]);
+  const matReady = !!(soMat && soMat.so === String(form.so || '').trim());
+  const soAlloc = matReady ? soMat.allocations : [];
+  const matLines = matReady ? soMat.lines : [];
 
   const soChosen = !!String(form.so || '').trim();
   const ctxReady = !!(ctx && ctx.so === String(form.so || '').trim());
@@ -1795,23 +1893,233 @@ function IssuesReturns({ flash }) {
 
   const setChild = (i, patch) => setChildren((cs) => cs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
+  /* ── Issues 30.09: who holds a roll, and where the order stands against its BOM ──
+     P2: "Upon allocating a material in the plan login, that particular roll or item
+     should not be available for the stores login to issue to any other sale order."
+     The server always refused it, but only when the whole slip was sent; the picker
+     offered the roll as free — often as the FIFO ① — so the desk found out last. */
+
+  /** What THIS order holds on a roll (an older server's rows carry no unitId: matched by sticker). */
+  const heldMine = (unitId, internalCode) => soAlloc.filter((a) => (a.unitId != null
+    ? String(a.unitId) === String(unitId) : !!internalCode && a.internalCode === internalCode))
+    .reduce((s, a) => s + num(a.qty), 0);
+  /** The holds OTHER orders have on a roll: [{ so, qty, source }]. With no order chosen, every hold. */
+  const holdsOther = (u) => {
+    const so = String(form.so || '').trim();
+    if (Array.isArray(u.holds)) return u.holds.filter((h) => !so || String(h.so || '').trim() !== so);
+    // an older server says only how much is held and for whom
+    const q = Math.max(0, num(u.allocated) - heldMine(u.id, u.internalCode));
+    if (q <= 1e-9) return [];
+    const names = (Array.isArray(u.allocatedTo) ? u.allocatedTo : []).filter((o) => !so || o !== so);
+    return [{ so: names.join(', ') || 'another sale order', qty: q, source: '' }];
+  };
+  const heldOther = (u) => holdsOther(u).reduce((s, h) => s + num(h.qty), 0);
+  const holdersText = (hs) => hs.map((h) => `${h.so}${sourceLabel(h.source) ? ` (${sourceLabel(h.source)})` : ''}`).join(', ');
+  /** What of a roll may still go on this slip: its remaining, less other orders' holds and the slip. */
+  const freeFor = (u) => num(u.qtyRemaining) - heldOther(u) - inBasket(u.id);
+  const sameItem = (a, id, code) => (a.itemId != null ? String(a.itemId) === String(id) : codeKey(a.itemCode) === codeKey(code));
+
+  /** The /so-material line of an item, by id (or code). */
+  const lineOf = (id, code) => matLines.find((l) => String(l.itemId) === String(id))
+    || (code ? matLines.find((l) => codeKey(l.itemCode) === codeKey(code)) : null) || null;
+  /** The departments an item is consumed in, per the order's BOM. */
+  const deptsOfItem = (id, code) => {
+    const l = lineOf(id, code);
+    if (l && Array.isArray(l.departments) && l.departments.some(Boolean)) return l.departments.filter(Boolean);
+    return [...new Set(bomItemsAll.filter((b) => String(b.itemId) === String(id)).map((b) => b.departmentName).filter(Boolean))];
+  };
+  /**
+   * S3: what the slip already adds to an item's commitment — per roll, the part not
+   * drawn from this order's own hold on it (the server counts the same way: issuing a
+   * roll the order holds is a conversion, not a new commitment).
+   */
+  const slipIncrease = (id) => {
+    const perRoll = new Map();
+    basket.filter((b) => String(b.itemId) === String(id)).forEach((b) => {
+      const k = String(b.unitId);
+      const cur = perRoll.get(k) || { q: 0, code: b.internalCode };
+      perRoll.set(k, { ...cur, q: cur.q + num(b.qty) });
+    });
+    let t = 0;
+    perRoll.forEach((v, k) => { t += Math.max(0, v.q - heldMine(k, v.code)); });
+    return t;
+  };
+  /** The new commitment `q` more of roll `u` on the slip would make. */
+  const increaseIf = (u, q) => {
+    const mine = heldMine(u.id, u.internalCode);
+    const before = inBasket(u.id);
+    return Math.max(0, before + q - mine) - Math.max(0, before - mine);
+  };
+  const chosenLine = (mode === 'issue' && soChosen && itemId) ? lineOf(itemId, (chosenItem || {}).code) : null;
+  const slipAdds = chosenLine ? slipIncrease(itemId) : 0;
+  const lineDone = isComplete(chosenLine, slipAdds);
+  // what this order's own hold on the picked roll still has to give — converting a
+  // hold into an issue is never capped
+  const ownLeft = selectedUnit ? Math.max(0, heldMine(selectedUnit.id, selectedUnit.internalCode) - inBasket(selectedUnit.id)) : 0;
+  const capReason = lineDone ? `The BOM line for ${chosenLine.itemCode} on ${form.so} is complete — no more can be allocated or issued` : '';
+  // S2: an allocated roll of the chosen item that is not on the slip yet
+  const waitingAlloc = (mode === 'issue' && soChosen && itemId)
+    ? soAlloc.find((a) => sameItem(a, itemId, (chosenItem || {}).code) && inBasket(a.unitId) + 1e-9 < num(a.qty)) || null
+    : null;
+
+  /**
+   * S2: "Here the roll should be preselected." Choosing an item this order has a roll
+   * allocated of puts THAT roll in the picker, with what is held for the order. Runs
+   * when the item, its rolls, the holds or the slip change — a roll the desk then
+   * picks (or clears) by hand is left alone.
+   */
+  const preselectKey = useRef('');
+  useEffect(() => {
+    if (mode !== 'issue' || !soChosen || !itemId) return;
+    const key = [form.so, itemId, units.map((u) => u.id).join(','), soAlloc.map((a) => `${a.id}:${a.qty}`).join(','), basket.length].join('|');
+    if (preselectKey.current === key) return;
+    preselectKey.current = key;
+    if (form.unitId) return;
+    const left = (u) => Math.min(heldMine(u.id, u.internalCode), num(u.qtyRemaining)) - inBasket(u.id);
+    const u = units.find((x) => (x.itemId == null || String(x.itemId) === String(itemId)) && left(x) > 1e-9);
+    if (!u) return;
+    setForm((f) => (f.unitId ? f : { ...f, unitId: String(u.id), qty: String(+left(u).toFixed(3)) }));
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The roll picker, issuing: this order's own rolls first (★), then FIFO. ① marks the
+  // oldest roll that is actually free — never one another order holds.
+  const isMine = (u) => heldMine(u.id, u.internalCode) > 0;
+  const rollChoices = mode === 'issue' ? [...withStock.filter(isMine), ...withStock.filter((u) => !isMine(u))] : units;
+  const fifoPick = mode === 'issue'
+    ? rollChoices.find((u) => !isMine(u) && freeFor(u) > 1e-9) || null
+    : (units[0] && num(units[0].qtyRemaining) > 0 ? units[0] : null);
+  const heldAway = (u) => mode === 'issue' && !isMine(u) && heldOther(u) > 1e-9 && freeFor(u) <= 1e-9;
+  const rollLabel = (u) => {
+    const uom = u.uom ? ' ' + u.uom : '';
+    const tail = `${u.widthMm ? ` · ${qty(u.widthMm)}mm` : ''}${u.location ? ` · ${u.location}` : ''}`;
+    const mark = fifoPick === u ? '① ' : '';
+    if (mode !== 'issue') return `${mark}${u.internalCode} · ${qty(u.qtyRemaining)}${uom}${tail}`;
+    const left = num(u.qtyRemaining) - inBasket(u.id);
+    if (isMine(u)) {
+      const mine = Math.max(0, heldMine(u.id, u.internalCode) - inBasket(u.id));
+      return `★ ${u.internalCode} · allocated to ${form.so} · ${qty(mine)}${uom}${left > mine + 1e-9 ? ` (roll has ${qty(left)})` : ''}${tail}`;
+    }
+    const others = holdsOther(u);
+    const held = heldOther(u);
+    if (held > 1e-9 && freeFor(u) <= 1e-9) return `${u.internalCode} · held for ${holdersText(others)}${tail}`;
+    if (held > 1e-9) return `${mark}${u.internalCode} · free ${qty(freeFor(u))} of ${qty(left)}${uom} · ${qty(held)} held for ${holdersText(others)}${tail}`;
+    return `${mark}${u.internalCode} · ${qty(left)}${uom}${tail}`;
+  };
+  /** 'Rolls of this item': every hold on a roll, this order's starred. */
+  const heldForText = (u) => {
+    const so = String(form.so || '').trim();
+    const hs = Array.isArray(u.holds) ? u.holds
+      : num(u.allocated) > 0 ? [{ so: (Array.isArray(u.allocatedTo) ? u.allocatedTo : []).join(', ') || '—', qty: u.allocated }] : [];
+    return hs.length ? hs.map((h) => `${so && h.so === so ? '★ ' : ''}${h.so} · ${qty(h.qty)}${sourceLabel(h.source) ? ` (${sourceLabel(h.source)})` : ''}`).join(', ') : '—';
+  };
+
   /* ── issuing: build the slip, then book it and print it ── */
 
   function addToBasket() {
     if (!selectedUnit) { flash('r', 'Pick a roll to put on the slip.'); return; }
     const q = num(form.qty);
     if (q <= 0) { flash('r', 'Enter the quantity to issue from ' + selectedUnit.internalCode + '.'); return; }
-    const free = num(selectedUnit.qtyRemaining) - inBasket(selectedUnit.id);
+    const free = freeFor(selectedUnit);
     if (q > free + 1e-9) {
-      flash('r', `Only ${qty(free)} ${selectedUnit.uom || ''} of ${selectedUnit.internalCode} is left${inBasket(selectedUnit.id) ? ' after what is already on this slip' : ''}.`);
+      const others = holdsOther(selectedUnit);
+      if (others.length) {
+        // P2: say who holds it, and how much is left to give this order
+        flash('r', `${qty(heldOther(selectedUnit))} ${selectedUnit.uom || ''} of ${selectedUnit.internalCode} is allocated to ${holdersText(others)} — `
+          + `only ${qty(Math.max(0, free))} can be issued${form.so ? ' to ' + form.so : ''}. Release it first — in the PLAN login, or here with that sale order picked.`);
+      } else {
+        flash('r', `Only ${qty(free)} ${selectedUnit.uom || ''} of ${selectedUnit.internalCode} is left${inBasket(selectedUnit.id) ? ' after what is already on this slip' : ''}.`);
+      }
       return;
     }
+    // S3: the BOM cap — the server's own rule, said before the slip is sent
+    const block = chosenLine ? bomCapBlock(chosenLine, { so: form.so, increase: increaseIf(selectedUnit, q), pending: slipAdds }) : null;
+    if (block) { flash('r', block); return; }
+    // S2: "nudge the stores guy to issue that allocated roll first and only later anything else"
+    if (waitingAlloc && !isMine(selectedUnit)
+      && !window.confirm(`${waitingAlloc.internalCode} is allocated to ${form.so} for ${waitingAlloc.itemCode || (chosenItem || {}).code || 'this item'} — issue it first.\n\nAdd ${selectedUnit.internalCode} instead?`)) return;
     setBasket((b) => [...b, {
       unitId: selectedUnit.id, internalCode: selectedUnit.internalCode, itemId: chosenItem ? chosenItem.id : itemId,
       itemCode: chosenItem ? chosenItem.code : '', itemName: chosenItem ? chosenItem.name : '', uom: selectedUnit.uom || (chosenItem || {}).uom || '',
       widthMm: selectedUnit.widthMm, location: selectedUnit.location, qty: q,
     }]);
     setForm((f) => ({ ...f, qty: '', unitId: '' }));
+  }
+
+  /**
+   * S2: one click puts an allocated roll on the slip — what is held for the order, for
+   * the department it was allocated for (or the one the BOM consumes it in). Never
+   * capped: issuing a hold is a promise kept, not a new commitment.
+   */
+  function takeAllocated(a) {
+    if (a.unitId == null) { flash('r', `${a.internalCode} cannot be put on the slip from here — pick it in the Roll list below.`); return; }
+    const remaining = a.unitRemaining != null ? num(a.unitRemaining) : num(a.qty);
+    const q = Math.min(num(a.qty), remaining - inBasket(a.unitId));
+    if (q <= 1e-9) { flash('r', `${a.internalCode} is already on the slip.`); return; }
+    const cur = String(form.department || '').trim();
+    const wanted = a.department ? [a.department] : deptsOfItem(a.itemId, a.itemCode);
+    const onRoute = (d) => (routeDepts.length ? routeDepts.find((r) => norm(r) === norm(d)) : d);
+    const dept = (cur && (!wanted.length || wanted.some((d) => norm(d) === norm(cur)))) ? cur
+      : (wanted.map(onRoute).find(Boolean) || cur);
+    if (!dept) { flash('r', `Pick the department ${a.internalCode} goes to first.`); return; }
+    if (basket.length && cur && norm(dept) !== norm(cur)) {
+      flash('r', `${a.internalCode} goes to ${dept}; finish this ${cur} slip first — one slip goes to one department.`);
+      return;
+    }
+    setBasket((b) => [...b, {
+      unitId: a.unitId, internalCode: a.internalCode, itemId: a.itemId, itemCode: a.itemCode || '', itemName: a.itemName || '',
+      uom: a.uom || '', widthMm: a.widthMm, location: a.location, qty: +q.toFixed(3), allocationId: a.id,
+    }]);
+    if (norm(dept) !== norm(cur)) setForm((f) => ({ ...f, department: dept }));
+    if (String(form.unitId) === String(a.unitId)) setForm((f) => ({ ...f, unitId: '', qty: '' }));
+  }
+
+  /** P3: release a hold from here — the roll goes back to the free stock. */
+  async function releaseAlloc(a) {
+    if (!window.confirm(`Release ${a.internalCode} from ${form.so}?\n\n${qty(a.qty)} ${a.uom || ''} held for this order`
+      + `${sourceLabel(a.source) ? ` (allocated by ${sourceLabel(a.source)})` : ''} goes back to the free stock, and any order can then be given it.`)) return;
+    setBusy(true);
+    try {
+      await storesApi.releaseAllocation(a.id);
+      flash('g', `${a.internalCode} released from ${form.so} — it is free stock again.`);
+      setAllocTick((t) => t + 1);
+      await loadUnits(itemId);
+    } catch (e) { flash('r', e.message); } finally { setBusy(false); }
+  }
+
+  /**
+   * P3: "Sale order-wise allocation in the stores … He will be able to allocate that
+   * particular roll or ink tin or anything to that particular sale order." The roll is
+   * held for the order — no one else can be given it — until it is issued or released.
+   */
+  async function allocateSelected() {
+    if (!soChosen) { flash('r', 'Pick the sale order to allocate to first.'); return; }
+    if (!selectedUnit) { flash('r', 'Pick the roll to allocate.'); return; }
+    const q = num(form.qty);
+    if (q <= 0) { flash('r', `Enter the quantity of ${selectedUnit.internalCode} to allocate to ${form.so}.`); return; }
+    const mine = heldMine(selectedUnit.id, selectedUnit.internalCode);
+    const free = num(selectedUnit.qtyRemaining) - heldOther(selectedUnit) - mine - inBasket(selectedUnit.id);
+    if (q > free + 1e-9) {
+      const others = holdsOther(selectedUnit);
+      flash('r', `Only ${qty(Math.max(0, free))} ${selectedUnit.uom || ''} of ${selectedUnit.internalCode} is free to allocate`
+        + (mine > 0 ? ` — ${qty(mine)} is already allocated to ${form.so}` : '')
+        + (others.length ? `${mine > 0 ? ';' : ' —'} ${qty(heldOther(selectedUnit))} is held for ${holdersText(others)}` : '')
+        + (inBasket(selectedUnit.id) ? ' (some of it is on this slip)' : '') + '.');
+      return;
+    }
+    const block = chosenLine ? bomCapBlock(chosenLine, { so: form.so, increase: q, pending: slipAdds }) : null;
+    if (block) { flash('r', block); return; }
+    const depts = deptsOfItem(itemId, (chosenItem || {}).code);
+    setBusy(true);
+    try {
+      await storesApi.allocate({
+        so: form.so, unitId: Number(selectedUnit.id), qty: q,
+        department: form.department || (depts.length === 1 ? depts[0] : undefined), note: form.note || undefined,
+      });
+      flash('g', `📌 ${selectedUnit.internalCode} · ${qty(q)} ${selectedUnit.uom || ''} allocated to ${form.so} — held for this order until it is issued or released.`);
+      setForm((f) => ({ ...f, unitId: '', qty: '' }));
+      setAllocTick((t) => t + 1);
+      await loadUnits(itemId);
+    } catch (e) { flash('r', e.message); } finally { setBusy(false); }
   }
 
   async function doIssue() {
@@ -2034,25 +2342,64 @@ function IssuesReturns({ flash }) {
             )}
           </>
         )}
-        {/* §15: what the planner has already set aside for this order. The desk hands
-            over THESE rolls — that is what the allocation was for. */}
-        {mode === 'issue' && soChosen && soAlloc.length > 0 && (
+        {/* §15 / 30.09 (P1, P3, S2): what is set aside for this order — by PLAN or by this
+            desk — and a click to hand it over. The desk issues THESE rolls first; that is
+            what the allocation was for. */}
+        {mode === 'issue' && soChosen && matReady && (
           <div className="al al-b" style={{ margin: '4px 0 6px' }} aria-label={`Material allocated to ${form.so}`}>
-            <b>{soAlloc.length} roll(s) are already allocated to {form.so} by the planning login</b> — issue these first:
-            <div className="tw" style={{ marginTop: 4 }}><table>
-              <thead><tr><th>Roll</th><th>Item</th><th>Location</th><th style={{ textAlign: 'right' }}>Allocated</th></tr></thead>
-              <tbody>
-                {soAlloc.map((a) => (
-                  <tr key={a.id}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{a.internalCode}</td>
-                    <td style={{ fontSize: 11 }}>{a.itemCode}{a.itemName ? ` — ${a.itemName}` : ''}</td>
-                    <td style={{ fontSize: 11 }}>{a.location || '—'}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(a.qty)} {a.uom || ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table></div>
+            {soAlloc.length > 0 ? (
+              <>
+                <b>{soAlloc.length} roll(s) are allocated to {form.so} — issue these first.</b>{' '}
+                <span style={{ fontSize: 11 }}><b>Put on slip</b> takes the roll onto the slip below, for the department it is allocated for.</span>
+                <div className="tw" style={{ marginTop: 4 }}><table>
+                  <thead><tr>
+                    <th>Roll</th><th>Item</th><th>For dept</th><th>Location</th><th style={{ textAlign: 'right' }}>Allocated</th><th>By</th><th style={{ width: 190 }}></th>
+                  </tr></thead>
+                  <tbody>
+                    {soAlloc.map((a) => {
+                      const onSlip = basket.some((b) => b.allocationId === a.id);
+                      return (
+                        <tr key={a.id}>
+                          <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 11 }}>{a.internalCode}</td>
+                          <td style={{ fontSize: 11 }}>{a.itemCode}{a.itemName ? ` — ${a.itemName}` : ''}</td>
+                          <td style={{ fontSize: 11 }}>{a.department || '—'}</td>
+                          <td style={{ fontSize: 11 }}>{a.location || '—'}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(a.qty)} {a.uom || ''}</td>
+                          {/* rows from before the source was recorded were all PLAN's */}
+                          <td style={{ fontSize: 11 }}>
+                            <span className="tag tb" style={{ fontSize: 9 }}>{sourceLabel(a.source) || 'PLAN'}</span>
+                            {a.actor ? <span style={{ color: 'var(--i3)' }}> {a.actor}</span> : null}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-g" style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                                disabled={busy || onSlip || a.unitId == null} aria-label={`Put ${a.internalCode} on the slip`}
+                                title={a.unitId == null ? 'Pick this roll in the Roll list below' : undefined}
+                                onClick={() => takeAllocated(a)}>{onSlip ? '✓ on slip' : '↧ Put on slip'}</button>
+                              <button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 8px', color: 'var(--red)' }}
+                                disabled={busy} aria-label={`Release ${a.internalCode} from ${form.so}`}
+                                onClick={() => releaseAlloc(a)}>✕ Release</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table></div>
+              </>
+            ) : (
+              <span style={{ fontSize: 12 }}>
+                Nothing is allocated to {form.so} yet. To hold a roll for this order without issuing it, pick it below and
+                press <b>📌 Allocate</b> — the PLAN login can allocate too.
+              </span>
+            )}
           </div>
+        )}
+        {/* S3: "The stores guy should know that according to the BOM for that SO … he is
+            allowed to assign only 300 kg." */}
+        {mode === 'issue' && soChosen && matReady && matLines.length > 0 && (
+          <SoBomPosition so={form.so} lines={matLines} issues={soMat.issues} department={form.department}
+            slipAddsOf={slipIncrease} />
         )}
         <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}{form.department ? ` for ${form.department}` : ''}</span> : null}</div>
         {mode === 'issue' && soChosen && ctxReady && !bomMissing && form.department && bomItems.length === 0 && (
@@ -2093,6 +2440,7 @@ function IssuesReturns({ flash }) {
               {visibleItems.map((it) => (
                 <option key={it.id} value={it.id}>
                   {it.code}{mode === 'issue' && soChosen && bomDeptOf(it.id).length ? ` · for ${bomDeptOf(it.id).join(' / ')}` : ''}
+                  {mode === 'issue' && soChosen && soAlloc.some((a) => sameItem(a, it.id, it.code)) ? ' · ★ allocated' : ''}
                 </option>
               ))}
             </select>
@@ -2105,19 +2453,19 @@ function IssuesReturns({ flash }) {
               style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} />
           </div>
           <div className="fg"><label>Roll / can (oldest first)</label>
+            {/* 30.09 (P2/S2): this order's allocated rolls lead (★); a roll other orders
+                hold all of is shown but cannot be picked; one they hold part of says so */}
             <select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })} aria-label="Roll">
               <option value="">— select a roll —</option>
-              {(mode === 'issue' ? withStock : units).map((u, i) => (
-                <option key={u.id} value={u.id}>
-                  {i === 0 && num(u.qtyRemaining) > 0 ? '① ' : ''}{u.internalCode} · {qty(num(u.qtyRemaining) - (mode === 'issue' ? inBasket(u.id) : 0))} {u.uom || ''}{u.widthMm ? ` · ${qty(u.widthMm)}mm` : ''}{u.location ? ` · ${u.location}` : ''}
-                </option>
+              {rollChoices.map((u) => (
+                <option key={u.id} value={u.id} disabled={heldAway(u)}>{rollLabel(u)}</option>
               ))}
             </select>
           </div>
           <div className="fg"><label>Quantity</label>
             <input type="number" step="any" min="0" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
               aria-label="Quantity" disabled={mode === 'return' && split}
-              placeholder={selectedUnit ? `max ${qty(num(selectedUnit.qtyRemaining) - (mode === 'issue' ? inBasket(selectedUnit.id) : 0))}` : ''} />
+              placeholder={selectedUnit ? `max ${qty(mode === 'issue' ? Math.max(0, freeFor(selectedUnit)) : num(selectedUnit.qtyRemaining))}` : ''} />
           </div>
           <div className="fg"><label>Internal code</label>
             <input value={selectedUnit ? selectedUnit.internalCode : ''} readOnly tabIndex={-1} aria-label="Internal code of the roll"
@@ -2127,8 +2475,47 @@ function IssuesReturns({ flash }) {
 
         {mode === 'issue' && (
           <>
-            <div className="act" style={{ justifyContent: 'flex-start' }}>
-              <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit}>＋ Add to slip</button>
+            {/* S3: where the chosen item stands against this order's BOM, under the picker */}
+            {chosenLine && (
+              <div className={'al ' + (lineDone ? 'al-r' : 'al-b')} style={{ margin: '2px 0 4px', fontSize: 12 }}
+                aria-label={`BOM line for ${chosenLine.itemCode}`} role={lineDone ? 'alert' : undefined}>
+                {lineDone ? (
+                  <>
+                    <b>The BOM line for {chosenLine.itemCode} on {form.so} is complete — no more can be allocated or issued.</b>{' '}
+                    Needs {qty(chosenLine.required)} {chosenLine.uom || ''}; allocated {qty(chosenLine.allocated)}, issued {qty(chosenLine.netIssued)}
+                    {slipAdds > 0 ? `, on this slip ${qty(slipAdds)}` : ''}.
+                    {ownLeft > 0 ? ' The roll allocated to this order can still go out.' : ''}
+                  </>
+                ) : hasCap(chosenLine) ? (
+                  <>
+                    BOM needs <b>{qty(chosenLine.required)} {chosenLine.uom || ''}</b> of {chosenLine.itemCode}
+                    {' · '}allocated {qty(chosenLine.allocated)} · issued {qty(chosenLine.netIssued)} · on this slip {qty(slipAdds)}
+                    {' · '}still open <b>{qty(openOf(chosenLine, slipAdds))}</b> — one more roll may take it past the need; after that the line is closed.
+                  </>
+                ) : (
+                  <>
+                    {chosenLine.itemCode}: allocated {qty(chosenLine.allocated)} · issued {qty(chosenLine.netIssued)} —{' '}
+                    {chosenLine.onBom === false ? 'not on the BOM of ' + form.so : 'the BOM gives no quantity for it in this unit'}, so nothing caps it.
+                  </>
+                )}
+              </div>
+            )}
+            {waitingAlloc && selectedUnit && !isMine(selectedUnit) && (
+              <div className="al al-y" style={{ margin: '2px 0 4px', fontSize: 12 }} role="note">
+                ★ <b>{waitingAlloc.internalCode}</b> is allocated to {form.so} for this item — issue it first (it heads the Roll list).
+              </div>
+            )}
+            <div className="act" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+              <button className="btn btn-s" onClick={addToBasket} disabled={busy || !selectedUnit || (lineDone && ownLeft <= 1e-9)}
+                title={lineDone && ownLeft <= 1e-9 ? capReason : undefined}>＋ Add to slip</button>
+              {/* P3: hold the roll for the order without issuing it */}
+              {soChosen && (
+                <button className="btn btn-s" onClick={allocateSelected} disabled={busy || !selectedUnit || lineDone}
+                  title={lineDone ? capReason : `Hold the roll for ${form.so} until it is issued or released`}
+                  aria-label={selectedUnit ? `Allocate ${selectedUnit.internalCode} to ${form.so}` : `Allocate a roll to ${form.so}`}>
+                  📌 Allocate to {form.so}
+                </button>
+              )}
               <span className="pg-sub" style={{ margin: 0 }}>Add every roll going to {form.department || 'the department'}{form.so ? ` for ${form.so}` : ''}, then press Issue — one slip, one PDF.</span>
             </div>
             <div className="ctitle" style={{ fontSize: 11, margin: '8px 0 2px' }}>③ The slip <span className="tag tgr">{basket.length}</span> <span style={{ fontWeight: 400, color: 'var(--i3)' }}>— each roll gets its own line number (ISS/…/N.1, N.2)</span></div>
@@ -2327,7 +2714,7 @@ function IssuesReturns({ flash }) {
         <div className="card">
           <div className="ctitle">Rolls of this item <span className="tag tgr">{withStock.length} in stock</span></div>
           <div className="tw sy" style={{ maxHeight: 240 }}><table>
-            <thead><tr><th>#</th><th>Internal Code</th><th>Location</th><th style={{ textAlign: 'right' }}>Width</th><th style={{ textAlign: 'right' }}>Remaining</th><th>Received</th><th>Status</th></tr></thead>
+            <thead><tr><th>#</th><th>Internal Code</th><th>Location</th><th style={{ textAlign: 'right' }}>Width</th><th style={{ textAlign: 'right' }}>Remaining</th><th>Held for</th><th>Received</th><th>Status</th></tr></thead>
             <tbody>
               {units.map((u, i) => (
                 <tr key={u.id} className={num(u.qtyRemaining) <= 0 ? undefined : (i === 0 ? 'hi' : undefined)} style={num(u.qtyRemaining) <= 0 ? { opacity: 0.5 } : undefined}>
@@ -2336,6 +2723,8 @@ function IssuesReturns({ flash }) {
                   <td style={{ fontSize: 11 }}>{u.location || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{u.widthMm ? qty(u.widthMm) : '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(u.qtyRemaining)}</td>
+                  {/* P2: which orders a roll is promised to — it is theirs, not free stock */}
+                  <td style={{ fontSize: 11 }}>{heldForText(u)}</td>
                   <td style={{ fontSize: 11 }}>{u.receivedAt ? String(u.receivedAt).slice(0, 10) : '—'}</td>
                   <td style={{ fontSize: 11 }}>{statusLabel(u.status)}</td>
                 </tr>

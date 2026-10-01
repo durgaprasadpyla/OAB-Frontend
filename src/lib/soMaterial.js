@@ -50,6 +50,13 @@ export const netOut = (l) => Math.max(0, num(l && l.qtyIssued) - num(l && l.qtyR
 /** True when the line has a requirement the cap can be measured against. */
 export const hasCap = (line) => !!line && line.required != null && num(line.required) > 0;
 
+/** Allocated + issued net of returns — the server sends it; summed here when it does not. */
+export const coveredOf = (line) => (!line ? 0
+  : line.covered != null ? num(line.covered) : num(line.allocated) + num(line.netIssued));
+
+/** What the line still needs, after what is covered and what the slip adds. */
+export const openOf = (line, pending = 0) => (hasCap(line) ? Math.max(0, num(line.required) - coveredOf(line) - num(pending)) : null);
+
 /**
  * The BOM cap, as a sentence when it refuses and null when it allows.
  *
@@ -60,7 +67,7 @@ export const hasCap = (line) => !!line && line.required != null && num(line.requ
  */
 export function bomCapBlock(line, { so, increase, pending = 0 }) {
   if (!hasCap(line) || !(num(increase) > 1e-9)) return null;
-  const covered = num(line.covered) + num(pending);
+  const covered = coveredOf(line) + num(pending);
   if (covered + 1e-9 < num(line.required)) return null;
   const uom = line.uom ? ' ' + line.uom : '';
   return `The BOM of ${so} needs ${fmt(line.required)}${uom} of ${line.itemCode}; ${fmt(covered)} is already allocated or issued `
@@ -69,4 +76,4 @@ export function bomCapBlock(line, { so, increase, pending = 0 }) {
 }
 
 /** A BOM line is complete once what is allocated + issued (+ the slip) reaches the requirement. */
-export const isComplete = (line, pending = 0) => hasCap(line) && num(line.covered) + num(pending) + 1e-9 >= num(line.required);
+export const isComplete = (line, pending = 0) => hasCap(line) && coveredOf(line) + num(pending) + 1e-9 >= num(line.required);
