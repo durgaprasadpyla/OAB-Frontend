@@ -404,6 +404,9 @@ export const storesApi = {
   // 24.09: close an issue line the material is never coming back from, so the return
   // picker stops offering it (and re-open it when the wrong one was closed).
   closeIssueLine: (txnId, closed = true) => api('/api/stores/issue-lines/' + encodeURIComponent(txnId) + '/close?closed=' + (closed ? 'true' : 'false'), { method: 'POST' }),
+  // Issues 30.09: the lines ticked in the history, closed in one call →
+  // { closed, lines:[lineNo…], skipped:[{ txnId, lineNo, reason }] } (skips are not errors).
+  closeIssueLines: (txnIds, closed = true) => api('/api/stores/issue-lines/close', { method: 'POST', body: { txnIds, closed } }),
   allocate: (body) => api('/api/stores/allocations', { method: 'POST', body }),
   releaseAllocation: (id) => api('/api/stores/allocations/' + encodeURIComponent(id), { method: 'DELETE' }),
   // Issues 6: a sale order's route and BOM, read through its JSS — what the

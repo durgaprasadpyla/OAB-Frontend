@@ -8,6 +8,7 @@ import { inr, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
+import StoresIssueHistory, { HISTORY_LIMIT } from '../components/StoresIssueHistory.jsx';
 
 // Stores Login. Four desks, in the order the day runs:
 //   Material on Hand — the landing board: every item with its characteristics,
@@ -1467,12 +1468,68 @@ function IssuesReturns({ flash }) {
     try {
       await storesApi.closeIssueLine(line.txnId, true);
       if (String(issueLinePick) === String(line.txnId)) { setIssueLinePick(''); }
-      await loadIssueLines();
+      await loadIssueLines(); await loadTxns();
       flash('g', `${line.lineNo || line.slipNo} closed — it is off the return list.`);
     } catch (e) { flash('r', e.message); }
   }
+
+  /**
+   * Issues 30.09 S4 (reported before, "not fixed yet"): "a 'Close to Return' button at
+   * the top and CHECKBOXES against each issue line item. Multiple can be selected and
+   * marked 'Close to Return'. These issue slips will not be visible in the returns
+   * dropdown." The lines ticked in Recent issues & returns are closed in one call, and
+   * the open-line list is re-read straight away — whatever mode the desk is in — so the
+   * returns dropdown never offers a line that was just closed.
+   *
+   * Resolves to the ledger ids that were closed (null when nothing was), which the
+   * history uses to tag those rows.
+   */
+  async function closeToReturn(rows) {
+    const lines = (rows || []).filter((r) => r && r.kind === 'ISSUE');
+    if (!lines.length) return null;
+    const names = lines.map((r) => r.lineNo || r.slipNo || '#' + r.id);
+    if (!window.confirm(`Close ${lines.length} issue line(s) to return?\n\n`
+      + names.slice(0, 15).join(', ') + (names.length > 15 ? ` and ${names.length - 15} more` : '') + '\n\n'
+      + 'Closing says the material on them was consumed and none of it is coming back: they will no longer be offered '
+      + 'in the returns dropdown. Stock is not changed.')) return null;
+    const ids = lines.map((r) => Number(r.id));
+    try {
+      const r = await closeLinesOnServer(ids);
+      const skipped = Array.isArray(r && r.skipped) ? r.skipped : [];
+      const skippedIds = new Set(skipped.map((x) => String(x.txnId)));
+      const done = ids.filter((id) => !skippedIds.has(String(id)));
+      if (done.some((id) => String(id) === String(issueLinePick))) setIssueLinePick('');
+      await loadTxns(); await loadIssueLines();
+      const why = skipped.map((x) => `${x.lineNo || names[ids.indexOf(Number(x.txnId))] || '#' + x.txnId} (${x.reason || 'not closed'})`).join('; ');
+      const n = r && r.closed != null ? num(r.closed) : done.length;
+      if (n > 0) flash(skipped.length ? 'y' : 'g', `Closed ${n} line(s) — they are off the returns dropdown.${why ? ' Not closed: ' + why + '.' : ''}`);
+      else flash('r', `Nothing was closed.${why ? ' ' + why + '.' : ''}`);
+      return done.length ? done : null;
+    } catch (e) { flash('r', e.message); return null; }
+  }
+  /** The bulk call; against a backend that predates it, the 24.09 one-line call per line. */
+  async function closeLinesOnServer(ids) {
+    try {
+      return await storesApi.closeIssueLines(ids, true);
+    } catch (e) {
+      if (e.status !== 404 && e.status !== 405) throw e;
+      const out = { closed: 0, lines: [], skipped: [] };
+      for (const id of ids) {
+        try {
+          const l = await storesApi.closeIssueLine(id, true);
+          out.closed += 1;
+          out.lines.push((l && l.lineNo) || '#' + id);
+        } catch (err) { out.skipped.push({ txnId: id, reason: err.message }); }
+      }
+      return out;
+    }
+  }
   useEffect(() => { if (mode === 'return') loadIssueLines(); }, [mode, loadIssueLines]);
   const issueSlips = useMemo(() => [...new Set(issueLines.map((l) => l.slipNo).filter(Boolean))], [issueLines]);
+  // a slip whose last open line was just closed is no longer in the list to pick from
+  useEffect(() => {
+    if (issueSlipPick && !issueSlips.includes(issueSlipPick)) setIssueSlipPick('');
+  }, [issueSlips, issueSlipPick]);
   const linesOfSlip = useMemo(() => issueLines.filter((l) => !issueSlipPick || l.slipNo === issueSlipPick), [issueLines, issueSlipPick]);
   const pickedLine = useMemo(() => issueLines.find((l) => String(l.txnId) === String(issueLinePick)) || null, [issueLines, issueLinePick]);
 
@@ -1692,8 +1749,9 @@ function IssuesReturns({ flash }) {
     setChildren([blankChild()]);
   }
 
+  // Issues 30.09 S6: "by default all slips are shown" — the history read the newest 60.
   const loadTxns = useCallback(async () => {
-    try { setTxns((await storesApi.txns({ limit: 60 })) || []); } catch { /* history is best-effort */ }
+    try { setTxns((await storesApi.txns({ limit: HISTORY_LIMIT })) || []); } catch { /* history is best-effort */ }
   }, []);
   useEffect(() => { loadTxns(); }, [loadTxns]);
 
@@ -2345,37 +2403,9 @@ function IssuesReturns({ flash }) {
         </div>
       )}
 
-      <div className="card">
-        <div className="ctitle">Recent issues &amp; returns <span className="tag tgr">{txns.length}</span></div>
-        <div className="tw sy" style={{ maxHeight: 280 }}><table>
-          <thead><tr><th>When</th><th>Kind</th><th>Slip / line no.</th><th>Download</th><th>Item</th><th>Roll</th><th style={{ textAlign: 'right' }}>Qty</th><th>Sale order</th><th>Department</th><th>By</th></tr></thead>
-          <tbody>
-            {txns.length === 0 ? <tr><td colSpan={10} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing issued yet</td></tr>
-              : txns.map((t) => {
-                const no = t.kind === 'ISSUE' ? t.slipNo : t.returnNo;
-                return (
-                <tr key={t.id}>
-                  <td style={{ fontSize: 11 }}>{t.ts ? String(t.ts).slice(0, 10) : '—'}</td>
-                  <td><span className={'tag ' + (t.kind === 'ISSUE' ? 'ty' : 'tg')} style={{ fontSize: 9 }}>{t.kind === 'ISSUE' ? 'Issue' : 'Return'}</span></td>
-                  <td style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 700 }}>{t.kind === 'ISSUE' ? (t.lineNo || t.slipNo || '—') : (t.returnNo || '—')}</td>
-                  <td>
-                    {no ? (
-                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => reprint(no)}
-                        title={t.kind === 'ISSUE' ? 'Download this issue slip as PDF' : 'Download this return slip as PDF'} aria-label={`Download slip ${no}`}>⬇ Download as PDF</button>
-                    ) : <span style={{ color: 'var(--i3)', fontSize: 10 }}>no slip</span>}
-                  </td>
-                  <td style={{ fontSize: 11 }}>{t.itemCode}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{t.internalCode}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(t.qty)}</td>
-                  <td style={{ fontSize: 11 }}>{t.so || '—'}</td>
-                  <td style={{ fontSize: 11 }}>{t.department || '—'}</td>
-                  <td style={{ fontSize: 10, color: 'var(--i3)' }}>{t.actor || '—'}</td>
-                </tr>
-                );
-              })}
-          </tbody>
-        </table></div>
-      </div>
+      {/* Issues 30.09 S4-S6: every slip, filterable, with the identity columns, and
+          issue lines ticked here are closed to return in one go. */}
+      <StoresIssueHistory txns={txns} masterItems={masterItems} onReprint={reprint} onCloseLines={closeToReturn} />
     </>
   );
 }

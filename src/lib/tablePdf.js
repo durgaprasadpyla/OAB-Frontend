@@ -14,8 +14,14 @@ const nf = (v) => ((v === '' || v == null || Number.isNaN(Number(v))) ? '' : Num
  * @param {object} spec
  *   title        — big line at the top
  *   subtitle     — small grey line under it
- *   meta         — [[label, value], …] pairs printed in two columns under the title
- *   columns      — [{ label, width (weight), align:'left'|'right', key }]
+ *   meta         — [[label, value], …] pairs printed in two columns under the title;
+ *                  `[label, value, { full: true }]` gives a long value (a customer, a job
+ *                  name) a row of its own across the whole width, below the two columns.
+ *                  Every row is as tall as its longest wrapped value, so nothing prints
+ *                  over the row beneath it and the table starts below the last line.
+ *   columns      — [{ label, width (weight), align:'left'|'right', key, nowrap }]
+ *                  `nowrap` keeps an identifier (ISS/2026/77.0, a roll sticker) on ONE
+ *                  line — a cell too long for its column is drawn smaller, never split.
  *   rows         — array of arrays (already formatted strings/numbers), or objects when
  *                  columns carry `key`
  *   totals       — optional array of cells for a bold last row
@@ -58,21 +64,49 @@ export function buildTablePdf(spec) {
     y += 5;
   }
   if (meta.length) {
+    // Issues 30.09 (stores): the slip printed "AMAZON SELLER SERVICES / PRIVATE LIMITED"
+    // over the Job name row, and the end of the job name UNDER the table's header bar.
+    // Rows sat at a fixed 5 mm pitch while a wrapped value runs on at jsPDF's own line
+    // spacing (~3.9 mm), and the block's height ignored the wrapping altogether. Each
+    // row now steps down by its tallest value, and the table starts below the last line
+    // actually drawn — with nothing wrapped, the layout is exactly what it was.
     pdf.setFontSize(9.5);
     const half = usable / 2;
-    const lineH = 5;
-    const perCol = Math.ceil(meta.length / 2);
-    meta.forEach(([label, value], i) => {
-      const col = i < perCol ? 0 : 1;
-      const rowI = i < perCol ? i : i - perCol;
-      const yy = y + 4 + rowI * lineH;
+    const rowH = 5;
+    const factor = typeof pdf.getLineHeightFactor === 'function' ? pdf.getLineHeightFactor() : 1.15;
+    const wrapH = (9.5 * factor * 25.4) / 72;
+    const isFull = (m) => !!(m[2] && m[2].full);
+    const grid = meta.filter((m) => !isFull(m));
+    const full = meta.filter(isFull);
+    const perCol = Math.ceil(grid.length / 2);
+    // measured in the bold face it is drawn in: splitTextToSize uses the current font
+    const wrap = (value, w) => {
+      pdf.setFont('helvetica', 'bold');
+      return pdf.splitTextToSize(String(value == null ? '' : value), w);
+    };
+    const pair = (label, lines, x, yy) => {
       pdf.setTextColor(90, 100, 120); pdf.setFont('helvetica', 'normal');
-      pdf.text(String(label) + ':', x0 + col * half, yy);
+      pdf.text(String(label) + ':', x, yy);
       pdf.setTextColor(16, 29, 49); pdf.setFont('helvetica', 'bold');
-      const txt = pdf.splitTextToSize(String(value == null ? '' : value), half - 40);
-      pdf.text(txt, x0 + col * half + 38, yy);
+      pdf.text(lines, x + 38, yy);
+    };
+    const tall = (n) => rowH + (Math.max(n, 1) - 1) * wrapH;
+    let yy = y + 4;
+    for (let r = 0; r < perCol; r++) {
+      const left = grid[r];
+      const right = grid[perCol + r];
+      const l = wrap(left[1], half - 40);
+      const rt = right ? wrap(right[1], half - 40) : [];
+      pair(left[0], l, x0, yy);
+      if (right) pair(right[0], rt, x0 + half, yy);
+      yy += tall(Math.max(l.length, rt.length));
+    }
+    full.forEach(([label, value]) => {
+      const lines = wrap(value, usable - 40);
+      pair(label, lines, x0, yy);
+      yy += tall(lines.length);
     });
-    y += 4 + perCol * lineH + 2;
+    y = yy + 2;
   }
   y += 2;
 
@@ -96,12 +130,24 @@ export function buildTablePdf(spec) {
   }
   header();
 
+  // Issues 30.09: "ISS/2026/77.0" printed as "ISS/2026/77." with the "0" on a line of
+  // its own — every cell was wrapped, and an unspaced number is split by character.
+  // A `nowrap` cell stays one line; if it is wider than its column it is drawn smaller
+  // (down to 6pt). getTextWidth is jsPDF's; a stand-in without it just skips the shrink.
+  const fitSize = (text, avail) => {
+    if (!text || typeof pdf.getTextWidth !== 'function') return null;
+    const w = pdf.getTextWidth(text);
+    return w > avail ? Math.max(6, (8.5 * avail) / w) : null;
+  };
   const drawRow = (row, ri, bold) => {
     const cellLines = [];
+    const cellSize = [];
     let maxLines = 1;
     columns.forEach((c, i) => {
-      const lines = pdf.splitTextToSize(cellText(row, i), widths[i] - 3.2);
+      const text = cellText(row, i);
+      const lines = c.nowrap ? [text] : pdf.splitTextToSize(text, widths[i] - 3.2);
       cellLines.push(lines);
+      cellSize.push(c.nowrap ? fitSize(text, widths[i] - 3.2) : null);
       if (lines.length > maxLines) maxLines = lines.length;
     });
     const rowH = Math.max(6, maxLines * lineH + 2.4);
@@ -110,8 +156,10 @@ export function buildTablePdf(spec) {
     else if (ri % 2 === 1) { pdf.setFillColor(244, 247, 251); pdf.rect(x0, y, usable, rowH, 'F'); }
     pdf.setTextColor(20, 20, 20);
     cellLines.forEach((lines, i) => {
+      if (cellSize[i]) pdf.setFontSize(cellSize[i]);
       if (right.has(i)) pdf.text(lines, colX[i] + widths[i] - 1.6, y + 4.2, { align: 'right' });
       else pdf.text(lines, colX[i] + 1.6, y + 4.2);
+      if (cellSize[i]) pdf.setFontSize(8.5);
     });
     if (bold) pdf.setFont('helvetica', 'normal');
     pdf.setDrawColor(222, 228, 238); pdf.setLineWidth(0.15); pdf.line(x0, y + rowH, x0 + usable, y + rowH);
