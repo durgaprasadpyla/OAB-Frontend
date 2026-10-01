@@ -867,8 +867,9 @@ export default function Purchase() {
                                     <>
                                       <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }}
                                         onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`} aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
+                                      {/* §PU2: the stores desk receives; this links the GRN it booked. */}
                                       <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}
-                                        aria-label={`Receive ${po.poNum}`}>📷 Receive</button>
+                                        title="Link the GRN the stores desk booked against this PO" aria-label={`Link GRN ${po.poNum}`}>🔗 Link GRN</button>
                                     </>
                                   )}
                                 </td>

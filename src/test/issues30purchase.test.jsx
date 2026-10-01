@@ -135,7 +135,7 @@ const GRN5 = {
 async function openReceive(user, modules) {
   const utils = renderApp(<Purchase />, { modules: { masterItems: MASTER, ...modules }, role: 'purchase', user: 'buyer1' });
   await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
-  await user.click(await screen.findByRole('button', { name: `Receive ${PO9}` }));
+  await user.click(await screen.findByRole('button', { name: `Link GRN ${PO9}` }));
   return utils;
 }
 
@@ -189,9 +189,9 @@ describe('PU2 — the GRN reference is the stores desk’s, never typed', () => 
     const user = userEvent.setup();
     const utils = renderApp(<Purchase />, { modules: { masterItems: MASTER, purchase: trackPurchase(), storeGrns: [] }, role: 'purchase' });
     await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
-    await screen.findByRole('button', { name: `Receive ${PO9}` });
+    await screen.findByRole('button', { name: `Link GRN ${PO9}` });
     utils.mods.storeGrns.push(GRN5);                    // stores books it now
-    await user.click(screen.getByRole('button', { name: `Receive ${PO9}` }));
+    await user.click(screen.getByRole('button', { name: `Link GRN ${PO9}` }));
     await waitFor(() => expect(screen.getByLabelText('GRN Reference')).toHaveValue('GRN/2026/5'));
   });
 });
