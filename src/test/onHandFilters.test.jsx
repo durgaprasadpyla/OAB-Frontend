@@ -154,4 +154,39 @@ describe('Material on Hand — filters, search and the figures above them', () =
     expect(screen.getByLabelText('Filter by material').value).toBe('FILM');
     expect(screen.getByLabelText('Search items').value).toBe('520');
   });
+
+  // "Total kgs in stores > material available on hand — in KGs upon filtering".
+  it('totals the kilograms on hand for what the filters show, leaving non-kg items out', async () => {
+    await board();
+    // 100 + 200 + 50 + 10 + 0 kg; the 40 Ltr of adhesive cannot be added to them
+    expect(within(stat('Total on hand (KG)')).getByText('360 kg')).toBeInTheDocument();
+    expect(within(stat('Total on hand (KG)')).getByText(/excl\. 1 non-kg item/)).toBeInTheDocument();
+
+    set('Filter by material', 'FILM');
+    await waitFor(() => expect(within(stat('Total on hand (KG)')).getByText('350 kg')).toBeInTheDocument());
+    expect(within(stat('Total on hand (KG)')).queryByText(/non-kg/)).toBeNull();
+
+    set('Filter by sub-group', 'AF BOPP');
+    await waitFor(() => expect(within(stat('Total on hand (KG)')).getByText('300 kg')).toBeInTheDocument());
+
+    set('Filter by department', 'Printing');
+    set('Search items', 'BLM031');
+    await waitFor(() => expect(within(stat('Total on hand (KG)')).getByText('100 kg')).toBeInTheDocument());
+  });
+
+  it('counts only the kilograms of the chosen status', async () => {
+    await board();
+    set('Filter by status', 'REJECTED');
+    await waitFor(() => expect(within(stat('Total KG')).getByText('40 kg')).toBeInTheDocument());
+    set('Filter by status', 'MOVING');
+    // 60 + 200 + 50 + 10 kg moving; the adhesive's 40 Ltr still left out
+    await waitFor(() => expect(within(stat('Total KG')).getByText('320 kg')).toBeInTheDocument());
+  });
+
+  it('recognises every spelling of kilograms the UOM list has held', async () => {
+    const { isKgUom } = await import('../pages/Stores.jsx');
+    ['Kg', 'KG', 'Kgs', 'KGS', 'kg.', ' kgs ', 'Kilograms'].forEach((u) => expect(isKgUom(u)).toBe(true));
+    ['Ltr', 'Mtr', "No's", 'ROLL', '', null].forEach((u) => expect(isKgUom(u)).toBe(false));
+  });
 });
+

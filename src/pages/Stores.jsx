@@ -96,6 +96,12 @@ export default function Stores() {
 
 /* ───────────────────────── Material on Hand (landing) ───────────────────── */
 
+// KG, Kg, Kgs, KGS, "kg." — the UOM list has held every spelling at one time or another.
+export function isKgUom(u) {
+  const k = String(u || '').toLowerCase().replace(/[^a-z]/g, '');
+  return k === 'kg' || k === 'kgs' || k === 'kilo' || k === 'kilos' || k === 'kilogram' || k === 'kilograms';
+}
+
 // `flash` is optional: this board is embedded in logins that have no message bar of
 // their own (the plant's Raw Material on Hand, the Padmin's Item Master), and an
 // error must never take the screen down for want of somewhere to say it.
@@ -249,13 +255,23 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
   // With a disposition chosen the figures answer the question that was asked —
   // "the amount that is in the moving stocks, non-moving stocks, rejected stocks or
   // QC hold" — rather than the whole item's value regardless of disposition.
-  const totals = useMemo(() => ({
-    items: visible.length,
-    below: visible.filter((r) => r.belowMsl).length,
-    value: visible.reduce((t, r) => t + (fStatus
-      ? num(((r.byStatus || {})[fStatus] || {}).value)
-      : num(r.stockValue)), 0),
-  }), [visible, fStatus]);
+  //
+  // "Total kgs in stores": the kilograms on hand across the rows the filters show.
+  // Only items stocked in kilograms count — metres, litres and numbers cannot be
+  // added to them — and the items left out are counted so the figure says so.
+  const totals = useMemo(() => {
+    const onHand = (r) => (fStatus ? num(((r.byStatus || {})[fStatus] || {}).qty) : num(r.closingStock));
+    const kgRows = visible.filter((r) => isKgUom(r.uom));
+    return {
+      items: visible.length,
+      below: visible.filter((r) => r.belowMsl).length,
+      value: visible.reduce((t, r) => t + (fStatus
+        ? num(((r.byStatus || {})[fStatus] || {}).value)
+        : num(r.stockValue)), 0),
+      kg: kgRows.reduce((t, r) => t + onHand(r), 0),
+      notKg: visible.filter((r) => !isKgUom(r.uom) && onHand(r) > 0).length,
+    };
+  }, [visible, fStatus]);
 
   async function expand(item) {
     if (open === item.id) { setOpen(null); setUnits([]); return; }
@@ -327,6 +343,12 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
         <div className="stat">
           <div className="sl">{fStatus ? `Value — ${statusLabel(fStatus)}` : 'Stock value'}</div>
           <div className="sv">{inr(Math.round(totals.value))}</div>
+        </div>
+        <div className="stat" aria-label="Total kgs on hand"
+          title={totals.notKg ? `${totals.notKg} item(s) stocked in other units (metres, litres, numbers) are not included` : 'Every item shown is stocked in kilograms'}>
+          <div className="sl">{fStatus ? `Total KG — ${statusLabel(fStatus)}` : 'Total on hand (KG)'}</div>
+          <div className="sv">{qty(Math.round(totals.kg * 100) / 100)} kg</div>
+          {totals.notKg > 0 && <div style={{ fontSize: 10, color: 'var(--i3)' }}>excl. {totals.notKg} non-kg item{totals.notKg === 1 ? '' : 's'}</div>}
         </div>
       </div>
       <div className="pg-sub" style={{ marginTop: 0 }}>
