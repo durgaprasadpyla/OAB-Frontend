@@ -471,7 +471,7 @@ export default function NewPO() {
               {whNotice && !locKey && (
                 <div className="al al-y" style={{ marginTop: 4, fontSize: 11 }} role="status" aria-label="Rep warehouse not in the Customer Master">
                   ⚠ The sales rep&rsquo;s warehouse &ldquo;{whNotice}&rdquo; is not in the Customer Master for {customer || (repPo && repPo.customer)}
-                  {repPo && repPo.loc ? ` at ${repPo.loc}` : ''} — pick the despatch location row it should go to.
+                  {repPo && repPo.loc ? ` at ${repPo.loc}` : ''} — pick the dispatch location row it should go to.
                   {groupOpen ? ' The customer is under more than one group, so no group is taken for it: the row picked brings its group.' : ''}
                 </div>
               )}

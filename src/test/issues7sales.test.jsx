@@ -35,7 +35,7 @@ const tab = async (label) => userEvent.click(await screen.findByText(label));
 const lastSales = (saved) => saved.filter((s) => s.key === 'sales').pop().data;
 
 describe('Rep — SKUs and the CSA requisition', () => {
-  it('adds a SKU under a customer with its structure and despatch details, then sends it for CSA from the same form', async () => {
+  it('adds a SKU under a customer with its structure and dispatch details, then sends it for CSA from the same form', async () => {
     const { saved } = openRep(salesModule());
     await tab('📦 SKUs');
     await userEvent.click(screen.getByLabelText('SKU pick Customer'));
@@ -49,13 +49,13 @@ describe('Rep — SKUs and the CSA requisition', () => {
     await userEvent.selectOptions(screen.getByLabelText('Secondary Micron'), '60');
     await userEvent.selectOptions(screen.getByLabelText('Category'), 'Oil');
     // 30.09 §PE2: the sales logins spell it "Despatch"
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
     // 30.09 §SK1 / §SK2: the despatch details are on Add SKU itself — no radio, no
     // "sample received" gate — with the Customer Master's rows as the locations
-    const det = screen.getByLabelText('Despatch details');
-    await userEvent.selectOptions(within(det).getByLabelText('Despatch location'), 'Pune (W1)');
+    const det = screen.getByLabelText('Dispatch details');
+    await userEvent.selectOptions(within(det).getByLabelText('Dispatch location'), 'Pune (W1)');
     await userEvent.type(within(det).getByLabelText('Tentative order quantity'), '50000');
-    fireEvent.change(within(det).getByLabelText('Tentative despatch date'), { target: { value: '2026-10-15' } });
+    fireEvent.change(within(det).getByLabelText('Tentative dispatch date'), { target: { value: '2026-10-15' } });
     await userEvent.type(within(det).getByLabelText('Target price'), '3.25');
     await userEvent.type(within(det).getByLabelText('Pouch width end to end (mm)'), '150');
     await userEvent.click(screen.getByText('✓ Add SKU'));
@@ -72,7 +72,7 @@ describe('Rep — SKUs and the CSA requisition', () => {
 
     // §SK3: the radio brings it back with its despatch details; §SK4: it goes to QC from the form
     await userEvent.click(await screen.findByLabelText('Edit 1kg Oil Pouch'));
-    expect(within(screen.getByLabelText('Despatch details')).getByLabelText('Pouch width end to end (mm)')).toHaveValue(150);
+    expect(within(screen.getByLabelText('Dispatch details')).getByLabelText('Pouch width end to end (mm)')).toHaveValue(150);
     await userEvent.click(screen.getByText('🧪 Send for CSA to QC'));
     await waitFor(() => expect(lastSales(saved).skus[0].csa_requested).toBe(true));
     const r = lastSales(saved).skus[0].csa_request;
@@ -134,7 +134,7 @@ describe('Rep — quotations, sending and accepting', () => {
 });
 
 describe('Rep — the PO with several SKUs', () => {
-  it('lists the customer, its despatch locations, the accepted SKUs with a JSS, prices the lines and saves them', async () => {
+  it('lists the customer, its dispatch locations, the accepted SKUs with a JSS, prices the lines and saves them', async () => {
     const skus = [
       sku({ quotation_accepted: true, jss_spec: 'A900', price_tiers: [{ qty: 1000, price: 12 }, { qty: 5000, price: 10 }] }),
       sku({ id: 'S2', sku_name: 'Bag', quotation_accepted: true, jss_spec: 'A901', price_tiers: [{ qty: 1, price: 5 }] }),
@@ -143,7 +143,7 @@ describe('Rep — the PO with several SKUs', () => {
     const { saved } = openRep(salesModule({ skus, qc_reports: [{ sku_id: 'S1' }, { sku_id: 'S2' }] }));
     await tab('🧾 Enter PO');
     await userEvent.selectOptions(await screen.findByLabelText('PO customer'), 'L2');
-    await userEvent.selectOptions(screen.getByLabelText('PO despatch location'), 'Nashik');
+    await userEvent.selectOptions(screen.getByLabelText('PO dispatch location'), 'Nashik');
     await userEvent.type(screen.getByLabelText('PO Number'), 'PO-77');
     const first = screen.getByLabelText('PO SKU 1');
     expect(within(first).queryByText(/NoJss/)).toBeNull();          // no JSS yet → not offered

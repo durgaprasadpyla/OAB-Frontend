@@ -20,8 +20,12 @@ describe('calcKg — balance to kilograms of film', () => {
     expect(calcKg({}, 0, jssPouch)).toEqual({ net: 0, withWastage: 0 });
   });
 
-  it('takes a roll quantity as the net weight — already kilograms — then adds wastage', () => {
-    expect(calcKg({}, 850, jssRoll)).toEqual({ net: 850, withWastage: 892.5 });
+  // Issues 17.10 §2: a roll is ordered in metres; its weight is metres × film width × GSM
+  it('weighs a roll metres by its film width and GSM, then adds wastage', () => {
+    const k = calcKg({}, 10000, { dispatchForm: 'Roll', filmWidth: 500, gsm: 40 });
+    expect(k.net).toBeCloseTo(200);          // 10,000 m × 0.5 m × 40 g/m² = 200 kg
+    expect(k.withWastage).toBeCloseTo(210);
+    expect(calcKg({}, 850, { dispatchForm: 'Roll' })).toBeNull();   // no film width / GSM yet
     expect(calcKg({ dispatchForm: 'Kgs' }, 400, null)).toEqual({ net: 400, withWastage: 420 });
   });
 
@@ -83,15 +87,19 @@ describe('OAB board — Bal Mtrs and Bal Kg\'s', () => {
     expect(within(statCard("Bal Kg's")).getByText(NO_WEIGHT).textContent).toContain('1 spec has no weight');
   });
 
-  it('counts a roll\'s balance as kilograms directly, not × a pouch weight', async () => {
+  // Issues 17.10 §2: SO 26/909 — 10,000 m on order showed 6.72 lakh m and 10,500 kg
+  it('counts a roll\'s balance as metres, and weighs it by film width × GSM — not × a pouch weight', async () => {
     const rollJss = [{ spec: 'R1', dispatchForm: 'Roll', filmWidth: 480, gsm: 60, pouchWeight: 12.5, customer: 'Acme' }];
     const rollRows = [{ so: '26/9', spec: 'R1', customer: 'Acme', jobName: 'Roll R', dispatchForm: 'Roll', poQty: 850, invDisp: 0, manDisp: 0, fg: 0, poDate: '2026-08-01' }];
     renderApp(<OabBoard />, { modules: { oab: oabModule({ SF: rollRows }), jss: rollJss }, route: '/oab?sheet=SF' });
     await screen.findByText('Roll R');
 
-    // The PO qty of a roll IS the weight — 850 kg net. With the 5% wastage the film to
-    // consume is 892.5 → 893.
-    expect(within(statCard("Bal Kg's")).getByText(/893/)).toBeInTheDocument();
+    // The PO qty of a roll IS the running length — 850 m, 892.5 → 893 with wastage — and
+    // its weight is 850 m × 0.48 m × 60 g/m² = 24.48 kg, 25.7 with the same 5%.
+    expect(within(statCard('Bal Mtrs')).getByText(/893/)).toBeInTheDocument();
+    const kgValue = statCard("Bal Kg's").querySelector('.sv').textContent;
+    expect(kgValue).toMatch(/^26\s*kg$/);
+    expect(kgValue).not.toMatch(/893/);
     expect(within(statCard("Bal Kg's")).queryByText(NO_WEIGHT)).not.toBeInTheDocument();
   });
 
@@ -115,7 +123,7 @@ describe('OAB board — Bal Mtrs and Bal Kg\'s', () => {
     const kgInfo = within(statCard("Bal Kg's")).getByRole('note').getAttribute('aria-label');
     expect(kgInfo).toMatch(/pouch weight/);
     expect(kgInfo).toMatch(/5% wastage/);                       // consistent with Bal Mtrs
-    expect(kgInfo).toMatch(/Rolls are ordered in kilograms/);   // the non-obvious rule
+    expect(kgInfo).toMatch(/Rolls are ordered in metres/);       // the non-obvious rule
   });
 
   it('follows the filters — both figures cover only the rows in view', async () => {

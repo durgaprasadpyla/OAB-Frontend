@@ -86,7 +86,7 @@ export default function RepPoTab({ leads, sales, save, repId }) {
   async function savePo() {
     let rows;
     try {
-      if (!form.location) throw new Error('Pick the despatch location.');
+      if (!form.location) throw new Error('Pick the dispatch location.');
       rows = buildPoLines({
         leadId: form.leadId, customer: lead ? lead.client_name : '',
         despatchLocation: locRow ? locRow.location : '', warehouseName: locRow ? locRow.warehouse : '',
@@ -126,8 +126,8 @@ export default function RepPoTab({ leads, sales, save, repId }) {
             </select>
             {book.customers.length === 0 && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>None of your leads has been converted into a customer yet.</div>}
           </div>
-          <div className="fg"><label>Despatch location *</label>
-            <select value={form.location} aria-label="PO despatch location" onChange={(e) => set({ location: e.target.value })} disabled={!lead}>
+          <div className="fg"><label>Dispatch location *</label>
+            <select value={form.location} aria-label="PO dispatch location" onChange={(e) => set({ location: e.target.value })} disabled={!lead}>
               <option value="">-- Select --</option>
               {locations.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
             </select>
@@ -198,7 +198,7 @@ export default function RepPoTab({ leads, sales, save, repId }) {
         <div className="tw sy">
           <table>
             <thead><tr>
-              <th>Date</th><th>PO #</th><th>Customer</th><th>Despatch location</th><th>SKU</th><th>JSS</th>
+              <th>Date</th><th>PO #</th><th>Customer</th><th>Dispatch location</th><th>SKU</th><th>JSS</th>
               <th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Price</th><th style={{ textAlign: 'right' }}>Total</th><th>On OAB</th>
             </tr></thead>
             <tbody>

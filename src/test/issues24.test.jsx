@@ -95,9 +95,9 @@ describe('PLAN readiness — Partial is in metres (§4)', () => {
   it('offers the order’s metres, not its pouch count', async () => {
     const { default: PlanReadiness } = await import('../pages/PlanReadiness.jsx');
     render(<PlanReadiness />);
-    const pick = await screen.findByLabelText('Readiness for SO-1');
-    fireEvent.change(pick, { target: { value: 'READY' } });
-    fireEvent.change(await screen.findByLabelText('Ready mode for SO-1'), { target: { value: 'PARTIAL' } });
+    // Issues 17.10 §6: radio → "Ready to Plan — Partial" in the bar above the board
+    fireEvent.click(await screen.findByLabelText('Select SO-1'));
+    fireEvent.click(screen.getByRole('button', { name: /Ready to Plan — Partial/ }));
 
     const box = await screen.findByLabelText('Metres ready for SO-1');
     // 50,600 is the number of pouches; the order runs to 12,650 metres.
@@ -109,8 +109,8 @@ describe('PLAN readiness — Partial is in metres (§4)', () => {
   it('refuses more metres than the order runs to', async () => {
     const { default: PlanReadiness } = await import('../pages/PlanReadiness.jsx');
     render(<PlanReadiness />);
-    fireEvent.change(await screen.findByLabelText('Readiness for SO-1'), { target: { value: 'READY' } });
-    fireEvent.change(await screen.findByLabelText('Ready mode for SO-1'), { target: { value: 'PARTIAL' } });
+    fireEvent.click(await screen.findByLabelText('Select SO-1'));
+    fireEvent.click(screen.getByRole('button', { name: /Ready to Plan — Partial/ }));
     fireEvent.change(await screen.findByLabelText('Metres ready for SO-1'), { target: { value: '20000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText(/cannot exceed the 12,650 m/)).toBeTruthy();

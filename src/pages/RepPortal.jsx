@@ -28,7 +28,7 @@ import {
 
 // Contact rank options (repRanks). '' is "no rank".
 const REP_RANKS = [['1', 'Primary'], ['2', 'Secondary'], ['3', 'Tertiary'], ['', '—']];
-const REP_CUSTOMER_TYPES = ['Manufacturer', 'Trader', 'Distributor', 'Exporter', 'Others'];
+const REP_CUSTOMER_TYPES = ['Manufacturer', 'Trader', 'Distributor', 'Exporter', 'Filler', 'Others'];
 
 /* ── contact helpers (repContactCats / repCustOfContact / repGroupOfContact / repPayOfContact) ── */
 const contactCats = (c) => (c && c.categories && c.categories.length ? c.categories : (c && c.category ? [c.category] : []));
@@ -250,7 +250,7 @@ function CategoryDispatchChecklist({ sales, categories, value, onChange }) {
   };
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--i2)', marginBottom: 4 }}>📮 Despatch forms for each category (optional — leave blank to allow all)</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--i2)', marginBottom: 4 }}>📮 Dispatch forms for each category (optional — leave blank to allow all)</div>
       {categories.map((cat) => (
         <div key={cat} style={{ marginBottom: 6, padding: '6px 8px', background: 'var(--bg)', border: '1px solid var(--bd)', borderRadius: 6 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#1a4fa0', marginBottom: 4 }}>{cat}</div>
@@ -595,8 +595,8 @@ function CustomerEditor({ book, sales, save, repId, pickId, onPick }) {
         <div className="fg"><label>GST Number</label>
           <input value={form.gstin} aria-label="Customer GSTIN" disabled={!lead} onChange={(e) => setForm({ ...form, gstin: e.target.value })} />
         </div>
-        <div className="fg"><label>Despatch locations</label>
-          <div aria-label="Customer despatch locations" style={{ fontSize: 12, padding: '7px 0' }}>
+        <div className="fg"><label>Dispatch locations</label>
+          <div aria-label="Customer dispatch locations" style={{ fontSize: 12, padding: '7px 0' }}>
             {!lead ? <span style={{ color: 'var(--i3)' }}>—</span>
               : despatch.length ? despatch.map((r, i) => (
                 <span key={i} className="tag tb" style={{ marginRight: 4 }}>{r.dispatchLoc || '—'}{r.warehouseName ? ` (${r.warehouseName})` : ''}</span>
@@ -658,7 +658,7 @@ function CustomersList({ customers, sales, repId, selId, onSelect, waiting }) {
             <th style={{ width: 34, textAlign: 'center' }}>Edit</th>
             <th style={{ minWidth: 180 }}>Customer</th><th>Group</th><th>My categories</th>
             <th style={{ width: 60, textAlign: 'center' }}>Pay</th><th>Primary contact</th><th>Phone</th>
-            <th>Despatch locations</th><th style={{ width: 100 }}>Converted on</th><th style={{ width: 70 }}></th>
+            <th>Dispatch locations</th><th style={{ width: 100 }}>Converted on</th><th style={{ width: 70 }}></th>
           </tr></thead>
           <tbody>
             {rows.length === 0 ? (

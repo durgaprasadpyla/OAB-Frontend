@@ -38,7 +38,12 @@ export function calcMetres(r, qty, jss) {
   else if (df === 'pouch' || df === 'pouches') base = q * w / 1000;
   else if (df === 'bulk bag' || df === 'bulk bags') base = q * h / 1000;
   else if (df === 'sleeve' || df === 'sleeves') base = q * h / 1000;   // Qty × Sleeve Height ÷ 1000 (legacy 2496)
-  else if (df === 'roll' || df === 'rolls' || df === 'kgs' || df === 'kg') base = (fw > 0 && gsm > 0) ? q / ((fw / 1000) * (gsm / 1000)) : 0;
+  // Issues 17.10 §2: a ROLL is ordered in METRES — the PO qty is the running length
+  // itself. It used to be read as kilograms and divided by film width × GSM, which is
+  // how SO 26/909's 10,000 m became "6.72 lakh m to produce". Only a form literally
+  // named Kgs is a weight order and is converted to metres.
+  else if (df === 'roll' || df === 'rolls') base = q;
+  else if (df === 'kgs' || df === 'kg') base = (fw > 0 && gsm > 0) ? q / ((fw / 1000) * (gsm / 1000)) : 0;
   else if (df === 'labels' || df === 'label') base = 0;
   else base = q * w / 1000;
   return { net: Math.round(base), withWastage: Math.round(base * 1.05) };
@@ -53,10 +58,13 @@ export function calcMetres(r, qty, jss) {
  * `pouchWeight` is the film weight IN a finished pouch and excludes the trim you
  * lose, so `withWastage` is what you actually consume, parallel to the metres.
  *
- * Rolls are ordered BY WEIGHT — their PO qty is already kilograms — so the
- * quantity is the net weight directly. Everything else is a piece count, and the
- * per-piece weight comes from the JSS `pouchWeight` (grams, the
- * `((H×2)+gusset)×W×GSM ÷ 1,000,000` figure QC computes on the spec).
+ * Rolls are ordered in METRES (Issues 17.10 §2), so their weight is the film run
+ * out: metres × film width (m) × GSM (g/m²) ÷ 1000. The old rule read a roll's PO
+ * qty as kilograms already — 10,000 m was reported as 10,500 kg, and the board's
+ * balance came to 553 tonnes. A form literally named Kgs is still a weight order.
+ * Everything else is a piece count, and the per-piece weight comes from the JSS
+ * `pouchWeight` (grams, the `((H×2)+gusset)×W×GSM ÷ 1,000,000` figure QC computes
+ * on the spec).
  *
  * Returns null rather than 0 when the spec carries no pouch weight, so callers
  * can tell "nothing to weigh" apart from "weight not recorded yet" and say so
@@ -65,10 +73,14 @@ export function calcMetres(r, qty, jss) {
 export function calcKg(r, qty, jss) {
   const df = String((jss && jss.dispatchForm) || r.dispatchForm || '').toLowerCase().trim();
   const q = num(qty);
-  const roll = df === 'roll' || df === 'rolls' || df === 'kgs' || df === 'kg';
   let net;
-  if (roll) net = q;
-  else {
+  if (df === 'kgs' || df === 'kg') net = q;
+  else if (df === 'roll' || df === 'rolls') {
+    const fw = num((jss && jss.filmWidth) || r.filmWidth);
+    const gsm = num((jss && jss.gsm) || r.gsm);
+    if (!(fw > 0 && gsm > 0)) return null;   // film width / GSM not on the spec yet
+    net = q * (fw / 1000) * gsm / 1000;
+  } else {
     const pw = num((jss && jss.pouchWeight) || r.pouchWeight);
     if (!(pw > 0)) return null;
     net = q * pw / 1000;

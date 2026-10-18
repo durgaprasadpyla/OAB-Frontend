@@ -256,18 +256,22 @@ export function despatchLocationRowsFor(lead, customers, extra = []) {
 
 /**
  * The despatch-form specific fields the requisition carries, per form.
- *   roll         per reel kg · core width (mm) · reading direction · packing instructions
+ *   roll         per reel kg · core width (inches) · reading direction · packing instructions
  *   pouch        pouch width (mm) · pouch height (mm) · packing instructions · other specs
- *   shrink       sleeve form: height · width · open width; roll form: core (mm) and
+ *   shrink       sleeve form: height · width · open width; roll form: core (inches) and
  *                metres per core OR kgs per core (which one, and how many)
  *   labels       labels in a bunch · labels per box · packing instructions
  *   bulk         side / bottom gusset · pouch width · gusset · pouch height — with the
  *                total gusset (×2 bottom, ×4 side) and the finished height / width worked out
+ *   other        what the form is · width · length / height · packing · other specs
  */
 export const DESPATCH_FIELDS = {
   roll: [
     { k: 'per_reel_kg', label: 'Per reel (Kgs)', type: 'number', unit: 'Kgs' },
-    { k: 'core_width_mm', label: 'Core width (mm)', type: 'number', unit: 'mm' },
+    // Issues 17.10 §3: "the core measurements should be in inches not in mm". The values
+    // were always typed as inches (3, 6 …), so nothing is converted — the old key is
+    // only read back as a fallback (`legacy`) for SKUs saved before.
+    { k: 'core_width_in', label: 'Core width (inches)', type: 'number', unit: 'inches', step: '0.01', legacy: 'core_width_mm' },
     { k: 'reading_direction', label: 'Reading direction', type: 'select', options: ['Readable', 'Unreadable'] },
     { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
   ],
@@ -282,7 +286,8 @@ export const DESPATCH_FIELDS = {
     { k: 'sleeve_height_mm', label: 'Height of the sleeve (mm)', type: 'number', unit: 'mm', when: 'Sleeve form' },
     { k: 'sleeve_width_mm', label: 'Width of the sleeve (mm)', type: 'number', unit: 'mm', when: 'Sleeve form' },
     { k: 'open_width_mm', label: 'Open width (mm)', type: 'number', unit: 'mm', when: 'Sleeve form' },
-    { k: 'core_mm', label: 'Core dimension (mm)', type: 'number', unit: 'mm', when: 'Roll form' },
+    // Issues 17.10 §3: the roll form's core is in inches too (old key read as a fallback)
+    { k: 'core_in', label: 'Core (inches)', type: 'number', unit: 'inches', step: '0.01', when: 'Roll form', legacy: 'core_mm' },
     // 30.09 §SK2: "metres per core OR kgs per core" — a choice and a number, not free text
     { k: 'per_core_basis', label: 'Per core', type: 'radio', options: ['Metres per core', 'Kgs per core'], when: 'Roll form' },
     { k: 'per_core_qty', label: 'Metres / Kgs per core', type: 'number', when: 'Roll form' },
@@ -298,18 +303,87 @@ export const DESPATCH_FIELDS = {
     { k: 'gusset_mm', label: 'Gusset (mm)', type: 'number', unit: 'mm' },
     { k: 'pouch_height_mm', label: 'Height of the pouch without gusset (mm)', type: 'number', unit: 'mm' },
   ],
+  // Issues 17.10 §1: "Others" had no field set at all (despatchKind gave 'other', this
+  // map had no 'other'), so picking it showed nothing under Dispatch details. A form
+  // the list does not know still gets its size and a place to say what it is.
+  other: [
+    { k: 'form_description', label: 'Describe the dispatch form', type: 'text' },
+    { k: 'width_mm', label: 'Width (mm)', type: 'number', unit: 'mm' },
+    { k: 'length_mm', label: 'Length / height (mm)', type: 'number', unit: 'mm' },
+    { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
+    { k: 'other_specs', label: 'Other specifications', type: 'text' },
+  ],
 };
 
-/** Which field set a despatch-form name maps to (the Super Admin's names vary in case). */
+/**
+ * Issues 17.10 §2 / §3: how the worked-out bulk-bag figures, and the core keys saved
+ * before the inch relabel, read wherever a requisition is shown. The old core keys
+ * always held inches (the field said mm, the rep typed 3), so they read as inches.
+ */
+export const DESPATCH_EXTRA_LABELS = {
+  totalGusset: 'Total gusset (mm)',
+  totalHeight: 'Final pouch height (mm)',
+  totalWidth: 'Final pouch width (mm)',
+  core_width_mm: 'Core width (inches)',
+  core_mm: 'Core (inches)',
+  // requisitions sent before 30.09 carried the shrink roll form's per-core figure as text
+  per_core: 'Metres or kg per core',
+};
+
+/** The label a saved detail key reads under, for a requisition of `kind`. */
+export function despatchDetailLabel(kind, key) {
+  const own = (DESPATCH_FIELDS[kind] || []).find((f) => f.k === key);
+  if (own) return own.label;
+  if (DESPATCH_EXTRA_LABELS[key]) return DESPATCH_EXTRA_LABELS[key];
+  const any = Object.values(DESPATCH_FIELDS).flat().find((f) => f.k === key);
+  return any ? any.label : key;
+}
+
+/**
+ * Saved despatch details with the pre-17.10 core keys moved onto the inch keys (the
+ * value as typed — it was inches all along), so an old SKU's core comes back on edit.
+ */
+export function withCurrentDespatchKeys(details) {
+  const d = { ...(details || {}) };
+  Object.values(DESPATCH_FIELDS).flat().forEach((f) => {
+    if (!f.legacy || !(f.legacy in d)) return;
+    if (d[f.k] === '' || d[f.k] == null) d[f.k] = d[f.legacy];
+    delete d[f.legacy];
+  });
+  return d;
+}
+
+/** A despatch-form entry as text — the Super Admin's list may hold names or [value, label] pairs. */
+const formName = (form) => lower(Array.isArray(form) ? form[0] : form && typeof form === 'object' ? (form.value || form.name || form.label) : form);
+
+/**
+ * Which field set a despatch-form name maps to. The Super Admin's names vary in case,
+ * number and wording ("ROLL", "Rolls", "Labels", "Pouches", "Bulk Bag", "Shrink sleeve
+ * in roll form" …), so this reads words, not exact names. Every non-empty name maps
+ * to a kind that HAS fields in DESPATCH_FIELDS — 'other' included (Issues 17.10 §1).
+ */
 export function despatchKind(form) {
-  const f = lower(form);
+  const f = formName(form);
   if (!f) return '';
   if (/shrink|sleeve/.test(f)) return 'shrink';
   if (/label/.test(f)) return 'labels';
-  if (/bulk|bag/.test(f)) return 'bulk';
-  if (/roll|reel/.test(f)) return 'roll';
-  if (/pouch/.test(f)) return 'pouch';
+  if (/bulk|fibc|jumbo|bag/.test(f)) return 'bulk';
+  if (/pouch|sachet/.test(f)) return 'pouch';
+  if (/roll|reel|film|laminat/.test(f)) return 'roll';
   return 'other';
+}
+
+/**
+ * Issues 17.10 §1: a shrink-sleeve form named for its form ("Shrink sleeve in roll
+ * form") answers the Sleeve / Roll radio itself, so its measurements show at once
+ * instead of only the radio.
+ */
+export function presetDespatchDetails(form) {
+  if (despatchKind(form) !== 'shrink') return {};
+  const f = formName(form);
+  if (/roll|reel/.test(f)) return { sleeve_form: 'Roll form' };
+  if (/sleeve form/.test(f)) return { sleeve_form: 'Sleeve form' };
+  return {};
 }
 
 /**
@@ -322,11 +396,12 @@ export function bulkBagTotals({ gusset_type, pouch_width_mm, gusset_mm, pouch_he
   const side = /side/i.test(String(gusset_type || ''));
   const bottom = /bottom/i.test(String(gusset_type || ''));
   const w = n(pouch_width_mm), g = n(gusset_mm), h = n(pouch_height_mm);
-  const totalGusset = side ? g * 4 : bottom ? g * 2 : 0;
+  // Issues 17.10 §2: mm to two places — 12.1 × 4 is 48.4, not 48.400000000000006
+  const mm = (v) => Math.round(v * 100) / 100;
   return {
-    totalGusset,
-    totalHeight: bottom ? h + g * 2 : h,
-    totalWidth: side ? w + g * 4 : w,
+    totalGusset: mm(side ? g * 4 : bottom ? g * 2 : 0),
+    totalHeight: mm(bottom ? h + g * 2 : h),
+    totalWidth: mm(side ? w + g * 4 : w),
   };
 }
 
@@ -337,9 +412,9 @@ export function bulkBagTotals({ gusset_type, pouch_width_mm, gusset_mm, pouch_he
  */
 export function buildCsaRequest(form, sku, { now = new Date(), user = '' } = {}) {
   if (!sku) throw new Error('Pick the SKU first.');
-  if (!s(form.despatch_location)) throw new Error('Pick the despatch location.');
+  if (!s(form.despatch_location)) throw new Error('Pick the dispatch location.');
   if (!(n(form.tentative_qty) > 0)) throw new Error('Enter the tentative order quantity.');
-  if (!s(form.tentative_date)) throw new Error('Pick the tentative despatch date.');
+  if (!s(form.tentative_date)) throw new Error('Pick the tentative dispatch date.');
   if (!(n(form.target_price) > 0)) throw new Error('Enter the target price.');
   const kind = despatchKind(sku.dispatch_form || sku.dispatch_type);
   const sample = s(form.sample_received);
@@ -364,7 +439,8 @@ function despatchDetails(form, kind) {
   const fields = DESPATCH_FIELDS[kind] || [];
   const details = {};
   fields.forEach((f) => {
-    const v = form[f.k];
+    // Issues 17.10 §3: a form still carrying the pre-inch key is read under the new one
+    const v = (form[f.k] === '' || form[f.k] == null) && f.legacy ? form[f.legacy] : form[f.k];
     if (f.when && String(form[fields[0].k] || '') !== f.when) return;
     if (f.type === 'number') { if (v !== '' && v != null) details[f.k] = n(v); }
     else if (v != null && s(v)) details[f.k] = s(v);

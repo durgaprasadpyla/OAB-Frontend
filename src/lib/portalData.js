@@ -58,7 +58,8 @@ export function invoicePortalFields(header, lines) {
   };
 }
 
-/** Unit noun for a UOM code — "Piece" for Pcs, "Kg" for Kgs. */
+/** Unit noun for a UOM code — "Piece" for Pcs, "Kg" for Kgs, "Metre" for Mtrs. */
 export function unitNoun(uom) {
+  if (uom === 'Mtrs') return 'Metre';
   return uom === 'Kgs' ? 'Kg' : 'Piece';
 }

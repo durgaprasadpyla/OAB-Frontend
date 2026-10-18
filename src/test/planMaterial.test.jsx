@@ -107,7 +107,7 @@ describe('PLAN — the material a picked order needs', () => {
     await screen.findByText(/Sale orders/);
     expect(screen.queryByLabelText('Material for the picked sale order')).toBeNull();
 
-    await user.click(await screen.findByLabelText('Material for 26/771'));
+    await user.click(await screen.findByLabelText('Select 26/771'));
     const panel = await screen.findByLabelText('Material for the picked sale order');
     expect(within(panel).getAllByText(/A1405/).length).toBeGreaterThan(0);
     expect(within(panel).getByText(/VSA Foods/)).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe('PLAN — the material a picked order needs', () => {
     const user = userEvent.setup();
     mount();
     await screen.findByText(/Sale orders/);
-    await user.click(await screen.findByLabelText('Material for 26/771'));
+    await user.click(await screen.findByLabelText('Select 26/771'));
 
     // §13 — the BOM is for 10,000; the order is 1,00,000; so ×10
     const scale = await screen.findByLabelText('BOM scale');
@@ -138,7 +138,7 @@ describe('PLAN — the material a picked order needs', () => {
     const user = userEvent.setup();
     const { posted } = mount();
     await screen.findByText(/Sale orders/);
-    await user.click(await screen.findByLabelText('Material for 26/771'));
+    await user.click(await screen.findByLabelText('Select 26/771'));
 
     const rolls = await screen.findByLabelText('Rolls of BLM033 for 26/771');
     // the unrelated roll (ZZZ) is not on this line's list
@@ -161,7 +161,7 @@ describe('PLAN — the material a picked order needs', () => {
     const user = userEvent.setup();
     mount({ allocations: [{ id: 1, so: '26/771', itemCode: 'BLM033', internalCode: 'BLMU-7', qty: 400, uom: 'Kg', location: 'Rack A1' }] });
     await screen.findByText(/Sale orders/);
-    await user.click(await screen.findByLabelText('Material for 26/771'));
+    await user.click(await screen.findByLabelText('Select 26/771'));
 
     const printing = await screen.findByLabelText('Material for 26/771 — Printing');
     const film = within(printing).getByText('BLM033').closest('tr');
@@ -176,7 +176,7 @@ describe('PLAN — the material a picked order needs', () => {
     const user = userEvent.setup();
     mount();
     await screen.findByText(/Sale orders/);
-    await user.click(await screen.findByLabelText('Material for 26/770'));     // A1338 — no BOM
+    await user.click(await screen.findByLabelText('Select 26/770'));     // A1338 — no BOM
     const panel = await screen.findByLabelText('Material for the picked sale order');
     expect(within(panel).getByText(/No BOM saved for A1338/)).toBeInTheDocument();
     expect(within(panel).getByText(/Ask QC to add it under/)).toBeInTheDocument();
@@ -202,7 +202,7 @@ const position = ({ lines = [matLine()], allocations = [], issues = [] } = {}) =
 describe('PLAN — what is allocated AND issued to the order (30.09)', () => {
   async function open(user, so = '26/771') {
     await screen.findByText(/Sale orders/);
-    await user.click(await screen.findByLabelText(`Material for ${so}`));
+    await user.click(await screen.findByLabelText(`Select ${so}`));
     return screen.findByLabelText(`Material for ${so} — Printing`);
   }
 
@@ -341,7 +341,7 @@ describe('PLAN — what is allocated AND issued to the order (30.09)', () => {
     await waitFor(() => expect(within(p771).getByText('BLMU-593')).toBeInTheDocument());
     await waitFor(() => expect(within(p771).getByLabelText('Assign BLM033 to 26/771')).toHaveTextContent('✓ BOM covered'));
 
-    await user.click(screen.getByLabelText('Material for 26/772'));
+    await user.click(screen.getByLabelText('Select 26/772'));
     const p772 = await screen.findByLabelText('Material for 26/772 — Printing');
     // 26/771's hold and its "covered" are not 26/772's
     expect(within(p772).queryByText('BLMU-593')).toBeNull();

@@ -12,6 +12,7 @@ import {
   customerRowsToAdd, inCustomerMaster, sameCustomerName, saveErrorText,
 } from '../lib/repFlow.js';
 import ConversionQueue from '../components/ConversionQueue.jsx';
+import LeadImport from '../components/LeadImport.jsx';
 import SalesCsaTab from '../components/SalesCsaTab.jsx';
 import SalesCostsTab from '../components/SalesCostsTab.jsx';
 import SalesPosTab from '../components/SalesPosTab.jsx';
@@ -215,6 +216,7 @@ function AllCustomers({ sales, save }) {
   const [rep, setRep] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [importing, setImporting] = useState(false);
   const leads = sales.leads || [];
   const customers = mods.customers || [];
   const cats = useMemo(() => allCategories(leads), [leads]);
@@ -362,9 +364,11 @@ function AllCustomers({ sales, save }) {
           {ddList(sales, 'statuses').map((st) => <option key={st} value={st}>{st}</option>)}
         </select>
         <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={() => setImporting((v) => !v)} aria-label="Import leads from Excel">⬆ Import leads</button>
         <button className="btn btn-s" onClick={exportRows} disabled={!rows.length}>⬇ Export</button>
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      {importing && <LeadImport sales={sales} save={save} onClose={() => setImporting(false)} />}
       <ConversionQueue queue={queue} busy={busy} markedBy={markedBy} owners={ownerNames}
         onConvert={convertLead} onConvertAll={convertAll} />
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 340px)' }}>
@@ -582,7 +586,7 @@ function ExportData({ sales }) {
         skuName(p.sku_id), Number(p.qty) || 0, Number(p.price) || 0, (Number(p.qty) || 0) * (Number(p.price) || 0),
         repName(sales.sales_users, p.created_by)])];
 
-    const targetsSheet = [['Rep', 'Month', 'Category', 'Despatch Type', 'Amount'],
+    const targetsSheet = [['Rep', 'Month', 'Category', 'Dispatch Type', 'Amount'],
       ...(sales.targets || []).map((t) => [repName(sales.sales_users, t.rep_id), t.month || '', t.category || '',
         t.dispatch_type || '', Number(t.amount) || 0])];
 

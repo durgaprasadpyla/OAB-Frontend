@@ -115,8 +115,8 @@ function Filters({ rows, f, setF, withStatus = true, withLocation = false }) {
         {uniq(inGroup.filter((r) => !r.isCust).map((r) => r.name)).map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {withLocation && (
-        <select value={f.location} aria-label="Filter by despatch location" onChange={(e) => setF({ ...f, location: e.target.value })}>
-          <option value="">All despatch locations</option>
+        <select value={f.location} aria-label="Filter by dispatch location" onChange={(e) => setF({ ...f, location: e.target.value })}>
+          <option value="">All dispatch locations</option>
           {uniq(inParty.map((r) => r.location)).map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       )}
@@ -270,7 +270,7 @@ export function RepQuotationsTab({ sales, save, repId }) {
         <Filters rows={rows} f={f} setF={setF} />
         <div className="tw sy" style={{ maxHeight: 360 }}>
           <table>
-            <thead><tr><th style={{ width: 30 }}></th><th>SKU</th><th>Lead / Customer</th><th>Group</th><th>Despatch location</th><th>Price per MOQ</th><th>Status</th></tr></thead>
+            <thead><tr><th style={{ width: 30 }}></th><th>SKU</th><th>Lead / Customer</th><th>Group</th><th>Dispatch location</th><th>Price per MOQ</th><th>Status</th></tr></thead>
             <tbody>
               {shown.length === 0 ? <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No quotations yet — the quote desk sends them here once the CSA is done.</td></tr>
                 : shown.map((r) => (
@@ -371,14 +371,14 @@ export function RepSendQuoteTab({ sales, save, repId }) {
           <button className="btn btn-g" onClick={prepare} disabled={!picked.length || busy}>🧾 Prepare Quote ({picked.length})</button>
         </div>
         <div className="pg-sub" style={{ marginTop: 0 }}>
-          Narrow the list group → customer (or lead) → despatch location — the customer alone is enough — tick the SKUs, then Prepare Quote:
+          Narrow the list group → customer (or lead) → dispatch location — the customer alone is enough — tick the SKUs, then Prepare Quote:
           the quotation opens with Download as PDF, and <b>Sent Quote</b> flips the status. To change an amount go back to Quotations, save, and send again.
         </div>
         <Filters rows={rows} f={f} setF={setF} withStatus={false} withLocation />
         {!targeted && <div className="al al-y">Select a customer or a lead to enable the checkboxes.</div>}
         <div className="tw sy" style={{ maxHeight: 420 }}>
           <table>
-            <thead><tr><th style={{ width: 30 }}></th><th>SKU</th><th>Lead / Customer</th><th>Group</th><th>Despatch location</th><th>Price per MOQ</th><th>Status</th><th>Quote accepted?</th><th>History</th></tr></thead>
+            <thead><tr><th style={{ width: 30 }}></th><th>SKU</th><th>Lead / Customer</th><th>Group</th><th>Dispatch location</th><th>Price per MOQ</th><th>Status</th><th>Quote accepted?</th><th>History</th></tr></thead>
             <tbody>
               {shown.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>Nothing to send.</td></tr>
                 : shown.map((r) => (
@@ -621,7 +621,7 @@ const uniqSorted = (list) => [...new Set(list.filter(Boolean))].sort((a, b) => S
 const ACCEPTED_COLS = [
   { k: 'party', label: 'Customer / Group', aria: 'Filter accepted by customer', options: (rows) => uniqSorted(rows.flatMap((a) => a.party)), match: (a, v) => a.party.includes(v) },
   { k: 'sku', label: 'SKU', aria: 'Filter accepted by SKU', options: (rows) => uniqSorted(rows.map((a) => a.r.sku.sku_name)), match: (a, v) => a.r.sku.sku_name === v },
-  { k: 'location', label: 'Despatch location', aria: 'Filter accepted by despatch location', options: (rows) => uniqSorted(rows.map((a) => a.r.location)), match: (a, v) => a.r.location === v },
+  { k: 'location', label: 'Dispatch location', aria: 'Filter accepted by dispatch location', options: (rows) => uniqSorted(rows.map((a) => a.r.location)), match: (a, v) => a.r.location === v },
   { k: 'price', label: 'Price', aria: 'Filter accepted by price', options: (rows) => uniqSorted(rows.map((a) => a.price)), match: (a, v) => a.price === v },
   { k: 'moq', label: 'MOQ', aria: 'Filter accepted by MOQ', options: (rows) => uniqSorted(rows.map((a) => a.moq)), match: (a, v) => a.moq === v },
   { k: 'jss', label: 'JSS', aria: 'Filter accepted by JSS', options: (rows) => uniqSorted(rows.map((a) => a.jss)), match: (a, v) => a.jss === v },

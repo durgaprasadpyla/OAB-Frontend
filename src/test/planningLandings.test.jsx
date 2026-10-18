@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth.jsx';
@@ -98,13 +98,12 @@ describe('PLAN readiness (/plan)', () => {
     const calls = mountPlan();
     expect(await screen.findByText(/Planning — Ready to Plan/)).toBeInTheDocument();
     // the open SO from module 1 is listed
-    const soCell = await screen.findByText('26/500');
-    const row = soCell.closest('tr');
-    // §46-51: pick "Ready to plan" then "Entire SO"
-    await userEvent.selectOptions(within(row).getByLabelText('Readiness for 26/500'), 'READY');
-    await userEvent.selectOptions(within(row).getByLabelText('Ready mode for 26/500'), 'COMPLETE');
-    await userEvent.click(within(row).getByRole('button', { name: /Save/i }));
+    await screen.findByText('26/500');
+    // §46-51 → Issues 17.10 §6: pick the row's radio, then "Ready to Plan — Full" on top
+    await userEvent.click(screen.getByLabelText('Select 26/500'));
+    await userEvent.click(screen.getByRole('button', { name: /Ready to Plan — Full/ }));
     // it hit the readiness endpoint for this SO
+    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/planning/ready') && c.method === 'POST')).toBe(true));
     const readyCall = calls.find((c) => c.u.includes('/api/planning/ready') && c.method === 'POST');
     expect(readyCall).toBeTruthy();
     expect(readyCall.body).toMatchObject({ so: '26/500', ready: true, mode: 'COMPLETE' });
@@ -112,16 +111,19 @@ describe('PLAN readiness (/plan)', () => {
 
   it('records Not ready — material with a mandatory tentative date (§47-54)', async () => {
     const calls = mountPlan();
-    const soCell = await screen.findByText('26/500');
-    const row = soCell.closest('tr');
-    await userEvent.selectOptions(within(row).getByLabelText('Readiness for 26/500'), 'MATERIAL');
+    await screen.findByText('26/500');
+    // Issues 17.10 §6: the not-ready reasons live in the action bar above the board
+    await userEvent.click(screen.getByLabelText('Select 26/500'));
+    await userEvent.click(screen.getByRole('button', { name: /Not Ready/ }));
+    await userEvent.selectOptions(screen.getByLabelText('Not ready reason type for 26/500'), 'MATERIAL');
     // saving without the tentative date is refused client-side
-    await userEvent.click(within(row).getByRole('button', { name: /Save/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     expect(await screen.findByText(/enter the tentative date/i)).toBeInTheDocument();
     expect(calls.some((c) => c.u.includes('/api/planning/ready') && c.method === 'POST')).toBe(false);
     // with the date it posts reason + date
-    await userEvent.type(within(row).getByLabelText('Tentative ready date for 26/500'), '2026-09-01');
-    await userEvent.click(within(row).getByRole('button', { name: /Save/i }));
+    await userEvent.type(screen.getByLabelText('Tentative ready date for 26/500'), '2026-09-01');
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/planning/ready') && c.method === 'POST')).toBe(true));
     const call = calls.find((c) => c.u.includes('/api/planning/ready') && c.method === 'POST');
     expect(call).toBeTruthy();
     expect(call.body).toMatchObject({ so: '26/500', ready: false, notReadyReason: 'MATERIAL', expectedReadyDate: '2026-09-01' });
@@ -129,15 +131,17 @@ describe('PLAN readiness (/plan)', () => {
 
   it('requires a free-text reason for Not ready — others', async () => {
     const calls = mountPlan();
-    const soCell = await screen.findByText('26/500');
-    const row = soCell.closest('tr');
-    await userEvent.selectOptions(within(row).getByLabelText('Readiness for 26/500'), 'OTHERS');
-    await userEvent.type(within(row).getByLabelText('Tentative ready date for 26/500'), '2026-09-05');
-    await userEvent.click(within(row).getByRole('button', { name: /Save/i }));
+    await screen.findByText('26/500');
+    await userEvent.click(screen.getByLabelText('Select 26/500'));
+    await userEvent.click(screen.getByRole('button', { name: /Not Ready/ }));
+    await userEvent.selectOptions(screen.getByLabelText('Not ready reason type for 26/500'), 'OTHERS');
+    await userEvent.type(screen.getByLabelText('Tentative ready date for 26/500'), '2026-09-05');
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     expect(await screen.findByText(/describe what is stopping/i)).toBeInTheDocument();
     expect(calls.some((c) => c.u.includes('/api/planning/ready') && c.method === 'POST')).toBe(false);
-    await userEvent.type(within(row).getByLabelText('Not ready reason for 26/500'), 'Cylinder rework');
-    await userEvent.click(within(row).getByRole('button', { name: /Save/i }));
+    await userEvent.type(screen.getByLabelText('Not ready reason for 26/500'), 'Cylinder rework');
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(calls.some((c) => c.u.includes('/api/planning/ready') && c.method === 'POST')).toBe(true));
     const call = calls.find((c) => c.u.includes('/api/planning/ready') && c.method === 'POST');
     expect(call.body).toMatchObject({ so: '26/500', ready: false, notReadyReason: 'OTHERS', notReadyNote: 'Cylinder rework' });
   });

@@ -126,6 +126,8 @@ export function csaStructure(report) {
 const CSA_NUMERIC = [
   'ink_gsm', 'adhesive_gsm', 'film_width', 'pouch_height', 'pouch_width', 'seal_width',
   'gsm', 'pouch_weight', 'pouches_per_kg', 'print_repeat', 'sleeve_repeat',
+  // Issues 17.10 §8: the roll / bag / sleeve measurements the dispatch form asks for
+  'core_in', 'per_reel_kg', 'gusset', 'lay_flat',
 ];
 
 export const CSA_BLANK = {

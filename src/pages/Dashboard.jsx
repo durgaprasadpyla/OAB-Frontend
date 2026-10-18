@@ -27,6 +27,8 @@ import SalesHistoryPanel from '../components/SalesHistoryPanel.jsx';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import GrnAdmin, { RmPriceAdmin } from '../components/GrnAdmin.jsx';
 import MasterData from './MasterData.jsx';
+import Modal from '../components/Modal.jsx';
+import { despatchLocationRowsFor } from '../lib/repFlow.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -580,10 +582,14 @@ function PriceMaster() {
 }
 
 /* ─────────────────────────── Delete SOs ─────────────────────────── */
+// Issues 17.10 §1: the option value for "keep the stored location" in the Edit PO# picker.
+const CURRENT_LOC = '__current__';
 function DeleteSOs() {
   const { mods, save, reloadModule } = useData();
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
+  // Issues 17.10 §1: the dispatch-location picker of Edit PO# — { row, options, value, resolve }.
+  const [locPick, setLocPick] = useState(null);
   // JSS is authoritative for customer / sub-brand / SKU (job) names: show the current
   // spec's values, not the copy stored on the row when the SO was created, so a repointed
   // spec shows the right SKU here too (mirrors OabBoard's openRows enrichment).
@@ -618,8 +624,12 @@ function DeleteSOs() {
     if (newPO === null) return;
     const newDate = window.prompt(`Edit PO Date for SO ${row.so} (YYYY-MM-DD):`, row.poDate || '');
     if (newDate === null) return;
-    const newLoc = window.prompt(`Edit Dispatch Location for SO ${row.so}:`, row.dispLoc || '');
-    if (newLoc === null) return;
+    // Issues 17.10 §1: the location is picked from the customer's own Customer Master
+    // rows (the same list New PO offers), not typed — a typo here sent the order to a
+    // place the customer does not have. Only a customer with no rows in the master
+    // falls back to typing it.
+    const loc = await askLocation(row);
+    if (loc === null) return;
     // The customer revises the quantity on a PO often enough that re-keying the whole
     // order was the only way to record it. It is the one field here that MOVES money and
     // material: the balance still to make is poQty minus what has gone out, the BOM
@@ -644,11 +654,44 @@ function DeleteSOs() {
     if (!target) { alert('SO not found — the list may be out of date.'); return; }
     target.poNum = newPO.trim();
     target.poDate = newDate.trim();
-    target.dispLoc = newLoc.trim();
+    target.dispLoc = loc.dispLoc;
+    // A picked master row also carries its warehouse (same-named towns are told apart
+    // by it, row+warehouse like Enter OAB); a typed or kept value leaves it as it was.
+    if (loc.warehouseName !== undefined) target.warehouseName = loc.warehouseName;
     target.poQty = newQty;
     setBusy(true);
     try { await save('oab', next); }
     catch (e) { alert('Update failed: ' + e.message); } finally { setBusy(false); }
+  }
+
+  // Issues 17.10 §1: resolves to { dispLoc, warehouseName? } or null (cancelled). The
+  // options are the SO's customer's Customer Master rows, keyed by row+warehouse. If the
+  // stored value is not one of them it stays selectable as "(current) …", so opening the
+  // edit to fix a PO number never silently blanks or swaps the location.
+  function askLocation(row) {
+    const options = despatchLocationRowsFor({ client_name: row.customer }, mods.customers);
+    if (!options.length) {
+      const typed = window.prompt(`Edit Dispatch Location for SO ${row.so}:
+(No dispatch locations in the Customer Master for this customer)`, row.dispLoc || '');
+      return Promise.resolve(typed === null ? null : { dispLoc: typed.trim() });
+    }
+    const cur = String(row.dispLoc || '').trim();
+    const curWh = String(row.warehouseName || '').trim();
+    const lc = (v) => v.toLowerCase();
+    const match = options.find((o) => lc(o.location) === lc(cur) && lc(o.warehouse) === lc(curWh))
+      || options.find((o) => lc(o.location) === lc(cur));
+    const value = match ? match.key : (cur ? CURRENT_LOC : options[0].key);
+    return new Promise((resolve) => setLocPick({ row, options, value, current: match ? '' : cur, resolve }));
+  }
+  function closeLocPick(result) {
+    if (locPick) locPick.resolve(result);
+    setLocPick(null);
+  }
+  function confirmLocPick() {
+    if (!locPick) return;
+    if (locPick.value === CURRENT_LOC) { closeLocPick({ dispLoc: locPick.current }); return; }
+    const o = locPick.options.find((x) => x.key === locPick.value);
+    closeLocPick(o ? { dispLoc: o.location, warehouseName: o.warehouse } : null);
   }
 
   // Re-point an SO to a different spec (superadmin). The new spec must exist in the JSS
@@ -706,6 +749,22 @@ function DeleteSOs() {
           </tbody>
         </table>
       </div>
+      {/* Issues 17.10 §1: dispatch location for Edit PO# — the customer's master rows only. */}
+      <Modal open={!!locPick} title={locPick ? `Dispatch Location for SO ${locPick.row.so}` : 'Dispatch Location'} onClose={() => closeLocPick(null)}
+        footer={<>
+          <button className="btn btn-s" onClick={() => closeLocPick(null)}>Cancel</button>
+          <button className="btn btn-g" onClick={confirmLocPick}>Next</button>
+        </>}>
+        {locPick && (
+          <div className="fg">
+            <label htmlFor="editso-disploc">Dispatch Location ({locPick.row.customer || 'customer'})</label>
+            <select id="editso-disploc" aria-label="Dispatch Location" value={locPick.value} onChange={(e) => setLocPick({ ...locPick, value: e.target.value })} style={{ width: '100%' }}>
+              {locPick.current ? <option value={CURRENT_LOC}>(current) {locPick.current}</option> : null}
+              {locPick.options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

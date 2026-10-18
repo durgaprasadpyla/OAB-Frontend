@@ -10,6 +10,7 @@ import {
 import {
   repBook, despatchLocationRowsFor, masterRowsFor, DESPATCH_FIELDS, despatchKind, bulkBagTotals,
   buildCsaRequest, buildCsaDraft, csaDetailsOf, sendSkuForCsa, quoteStatusOf, saveErrorText,
+  presetDespatchDetails, withCurrentDespatchKeys,
 } from '../lib/repFlow.js';
 import LeadCustomerPicker from './LeadCustomerPicker.jsx';
 import SubstrateLayers, { blankSubLayers, structureFromSubLayers, subLayersFromStructure } from './SubstrateLayers.jsx';
@@ -31,13 +32,17 @@ const blankCsa = () => ({ despatch_key: '', despatch_location: '', warehouse_nam
 /** Only the fields every despatch form shares — what survives a change of despatch form. */
 const commonOnly = (c) => Object.keys(blankCsa()).reduce((o, k) => { o[k] = c[k] ?? ''; return o; }, {});
 
-/** A saved requisition / draft back into the form's shape. */
-function csaFormFrom(r) {
-  if (!r) return blankCsa();
+/**
+ * A saved requisition / draft back into the form's shape. Issues 17.10 §1 / §3: a core
+ * saved under the old "(mm)" key comes back in the inch field, and a shrink form whose
+ * name says which form it is gets its radio answered.
+ */
+function csaFormFrom(r, dispatchForm = '') {
+  if (!r) return { ...blankCsa(), ...presetDespatchDetails(dispatchForm) };
   const loc = String(r.despatch_location || '').trim();
   const wh = String(r.warehouse_name || '').trim();
   return {
-    ...blankCsa(), ...(r.details || {}),
+    ...blankCsa(), ...presetDespatchDetails(dispatchForm), ...withCurrentDespatchKeys(r.details),
     despatch_key: loc ? loc + '||' + wh : '', despatch_location: loc, warehouse_name: wh,
     tentative_qty: r.tentative_qty ?? '', tentative_date: r.tentative_date || '', target_price: r.target_price ?? '',
   };
@@ -72,7 +77,7 @@ function DespatchField({ f, csa, onChange }) {
           ))}
         </div>
       ) : f.type === 'number' ? (
-        <input type="number" min="0" step="any" value={csa[f.k] ?? ''} aria-label={f.label} placeholder={f.unit || ''} onChange={(e) => onChange({ [f.k]: e.target.value })} />
+        <input type="number" min="0" step={f.step || 'any'} value={csa[f.k] ?? ''} aria-label={f.label} placeholder={f.unit || ''} onChange={(e) => onChange({ [f.k]: e.target.value })} />
       ) : (
         <input type="text" value={csa[f.k] ?? ''} aria-label={f.label} onChange={(e) => onChange({ [f.k]: e.target.value })} />
       )}
@@ -80,6 +85,39 @@ function DespatchField({ f, csa, onChange }) {
       {f.k === 'per_core_qty' && String(csa.per_core || '').trim() && (csa.per_core_qty === '' || csa.per_core_qty == null) && (
         <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>Earlier entry: “{String(csa.per_core).trim()}” — kept until you enter the figure here.</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Issues 17.10 §2: "no computation is visible" — the bulk-bag totals were one grey
+ * sentence under the inputs. Three read-only boxes now, each with the sum it is:
+ * total gusset = gusset × 4 (side) / × 2 (bottom); final height = height + gusset × 2
+ * for a bottom gusset, as entered for a side gusset; final width = width + gusset × 4
+ * for a side gusset, as entered for a bottom gusset. The same figures are saved with
+ * the SKU (buildCsaDraft / buildCsaRequest → bulkBagTotals) and shown to QC.
+ */
+function BulkBagTotals({ bulk, csa }) {
+  const side = /side/i.test(String(csa.gusset_type || ''));
+  const bottom = /bottom/i.test(String(csa.gusset_type || ''));
+  const typed = (v) => (v === '' || v == null ? '0' : String(v));
+  const g = typed(csa.gusset_mm), h = typed(csa.pouch_height_mm), w = typed(csa.pouch_width_mm);
+  const pick = 'Pick side or bottom gusset';
+  const boxes = [
+    ['Total gusset (mm)', bulk.totalGusset, side ? `${g} × 4 (side gusset)` : bottom ? `${g} × 2 (bottom gusset)` : pick],
+    ['Final pouch height (mm)', bulk.totalHeight, bottom ? `${h} + ${g} × 2 (bottom gusset)` : side ? `${h} — as entered (side gusset)` : pick],
+    ['Final pouch width (mm)', bulk.totalWidth, side ? `${w} + ${g} × 4 (side gusset)` : bottom ? `${w} — as entered (bottom gusset)` : pick],
+  ];
+  return (
+    <div className="g3" aria-label="Bulk bag totals" style={{ marginTop: 6, padding: '8px 10px', border: '1px solid var(--bd)', borderRadius: 8 }}>
+      {boxes.map(([label, value, how]) => (
+        <div className="fg" key={label}>
+          <label style={{ fontWeight: 700 }}>{label}</label>
+          <input type="text" readOnly tabIndex={-1} aria-label={label} value={side || bottom ? String(value) : ''}
+            placeholder="—" style={{ background: 'var(--bg)', fontWeight: 700, fontSize: 14 }} />
+          <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }} aria-label={`How ${label} is worked out`}>{how}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -146,7 +184,10 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
     setCsa(commonOnly);
   }
   function pickDespatchForm(v) {
-    if (despatchKind(v) !== kind) setCsa(commonOnly);
+    // Issues 17.10 §1: "Shrink sleeve in roll form" answers its own Sleeve / Roll radio
+    const preset = presetDespatchDetails(v);
+    if (despatchKind(v) !== kind) setCsa((c) => ({ ...commonOnly(c), ...preset }));
+    else if (preset.sleeve_form) setC(preset);
     set({ dispatchForm: v });
   }
   function pickLocation(key) {
@@ -167,7 +208,7 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
         ? sku.structure_layers : subLayersFromStructure(sku.structure),
       sampleReceived: sku.sample_received === 'Yes' || sku.sample_received === true || (sku.csa_requested && sku.sample_received !== 'No') ? 'Yes' : 'No',
     });
-    setCsa(csaFormFrom(csaDetailsOf(sku)));
+    setCsa(csaFormFrom(csaDetailsOf(sku), sku.dispatch_form || sku.dispatch_type || ''));
     setMsg(null);
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ }
   }
@@ -197,13 +238,13 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
             ? { ...sk, ...identity(sk.sample_received_at || now.toISOString()), ...extra }
             : sk)),
         }), { retry: true });
-        flash('g', '✓ SKU updated — despatch details saved with it.');
+        flash('g', '✓ SKU updated — dispatch details saved with it.');
         cancelEdit();
       } else {
         const sku = { ...buildSku(form, repId, { now }), ...identity(now.toISOString()), ...extra };
         await save('sales', (prev) => ({ ...(prev || {}), skus: [...((prev && prev.skus) || []), sku] }), { retry: true });
         setForm(blankForm()); setCsa(blankCsa());
-        flash('g', '✓ SKU added with its despatch details. Send it for CSA from this form whenever you are ready — pick it in the list below.');
+        flash('g', '✓ SKU added with its dispatch details. Send it for CSA from this form whenever you are ready — pick it in the list below.');
       }
     } catch (e) { flash('r', e && e.code === 'conflict' ? saveErrorText(e) : e.message); } finally { setBusy(false); }
   }
@@ -266,14 +307,14 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
           {editing && <button className="btn btn-s" onClick={cancelEdit}>Cancel</button>}
         </div>
         <div className="pg-sub" style={{ marginTop: 0 }}>
-          Pick the lead or customer, then the SKU with its structure and its despatch details. They are kept with the SKU;
+          Pick the lead or customer, then the SKU with its structure and its dispatch details. They are kept with the SKU;
           <b> Send for CSA to QC</b> hands them to QC for the CSA report — straight from here, for a new SKU too.
         </div>
         {editingSku && (
           <div className={'al ' + (csaDoneFor ? 'al-g' : csaSent ? 'al-b' : 'al-y')} aria-label="CSA status">
             {csaDoneFor ? 'QC has completed the CSA report for this SKU.'
               : csaSent ? `Sent to QC on ${fmtDate(String((editingSku.csa_request || {}).sent_at || '').slice(0, 10))} — waiting for the CSA report. Sending again replaces the requisition.`
-                : 'Not sent for CSA yet — fill in the despatch details below and send it to QC.'}
+                : 'Not sent for CSA yet — fill in the dispatch details below and send it to QC.'}
           </div>
         )}
         <div className="g3">
@@ -294,13 +335,13 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
               {categoryOffList && <option value={form.category}>{form.category} (no longer in the list)</option>}
             </select>
           </div>
-          <div className="fg"><label>Despatch Form *</label>
-            <select value={form.dispatchForm} aria-label="Despatch Form" onChange={(e) => pickDespatchForm(e.target.value)}>
+          <div className="fg"><label>Dispatch Form *</label>
+            <select value={form.dispatchForm} aria-label="Dispatch Form" onChange={(e) => pickDespatchForm(e.target.value)}>
               <option value="">-- Select --</option>
               {despatchOptions.map((d) => <option key={d[0]} value={d[0]}>{d[1]}</option>)}
               {formOffList && <option value={form.dispatchForm}>{form.dispatchForm} (not allowed for this category)</option>}
             </select>
-            {restricted && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Restricted to the despatch forms approved for “{form.category}” with this customer.</div>}
+            {restricted && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 4 }}>Restricted to the dispatch forms approved for “{form.category}” with this customer.</div>}
           </div>
           <div className="fg"><label>Sample received?</label>
             <div style={{ display: 'flex', gap: 14, fontSize: 12, minHeight: 34, alignItems: 'center' }} role="radiogroup" aria-label="Sample received">
@@ -316,11 +357,11 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
         {/* 30.09 §SK1 / §SK2: the despatch details belong to Add SKU itself — not a
             panel that opened only after the SKU was added, picked again and marked
             "sample received", which is why the client never found them. */}
-        <div style={{ marginTop: 6, padding: '10px 12px', border: '1px solid var(--bd)', borderRadius: 8, background: 'var(--bg)' }} aria-label="Despatch details">
-          <div className="ctitle" style={{ fontSize: 12 }}>🚚 Despatch details</div>
+        <div style={{ marginTop: 6, padding: '10px 12px', border: '1px solid var(--bd)', borderRadius: 8, background: 'var(--bg)' }} aria-label="Dispatch details">
+          <div className="ctitle" style={{ fontSize: 12 }}>🚚 Dispatch details</div>
           <div className="g4">
-            <div className="fg"><label>Despatch location *</label>
-              <select value={csa.despatch_key} aria-label="Despatch location" disabled={!selectedLead} onChange={(e) => pickLocation(e.target.value)}>
+            <div className="fg"><label>Dispatch location *</label>
+              <select value={csa.despatch_key} aria-label="Dispatch location" disabled={!selectedLead} onChange={(e) => pickLocation(e.target.value)}>
                 <option value="">-- Select --</option>
                 {locRows.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
                 {csa.despatch_key && !locRows.some((r) => r.key === csa.despatch_key) && <option value={csa.despatch_key}>{selectedLocLabel} (no longer listed)</option>}
@@ -332,7 +373,7 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
               </div>
             </div>
             <div className="fg"><label>Tentative order quantity *</label><input type="number" min="0" step="any" value={csa.tentative_qty} aria-label="Tentative order quantity" onChange={(e) => setC({ tentative_qty: e.target.value })} /></div>
-            <div className="fg"><label>Tentative despatch date *</label><input type="date" value={csa.tentative_date} aria-label="Tentative despatch date" onChange={(e) => setC({ tentative_date: e.target.value })} /></div>
+            <div className="fg"><label>Tentative dispatch date *</label><input type="date" value={csa.tentative_date} aria-label="Tentative dispatch date" onChange={(e) => setC({ tentative_date: e.target.value })} /></div>
             <div className="fg"><label>Target price (₹) *</label>
               <input type="number" min="0" step="0.01" value={csa.target_price} aria-label="Target price" onChange={(e) => setC({ target_price: e.target.value })} />
               {/* 29.09 ¶26: "Target price (This shall only be visible in quote login)." */}
@@ -340,19 +381,22 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
             </div>
           </div>
           {!form.dispatchForm ? (
-            <div style={{ fontSize: 11, color: 'var(--i3)' }}>Pick the Despatch Form above — its own measurements appear here.</div>
-          ) : shown.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--i3)' }}>Pick the Dispatch Form above — its own measurements appear here.</div>
+          ) : shown.length === 0 ? (
+            // Issues 17.10 §1: never a silent blank — every kind has fields, but say so if one ever does not
+            <div style={{ fontSize: 11, color: 'var(--i3)' }}>No measurements are set up for “{form.dispatchForm}” — note them under the SKU’s structure or tell QC.</div>
+          ) : (
             <>
               <div style={{ fontSize: 11, fontWeight: 700, margin: '6px 0 2px' }}>{form.dispatchForm} — details</div>
-              <div className="g4" aria-label="Despatch form details">
+              <div className="g4" aria-label="Dispatch form details">
                 {shown.map((f) => <DespatchField key={f.k} f={f} csa={csa} onChange={setC} />)}
               </div>
-              {bulk && (
-                <div className="al al-b" aria-label="Bulk bag totals">
-                  Total gusset <b>{bulk.totalGusset} mm</b> · total pouch height <b>{bulk.totalHeight} mm</b> · pouch width <b>{bulk.totalWidth} mm</b>
-                  <span style={{ color: 'var(--i3)' }}> (gusset × 2 for a bottom gusset, × 4 for a side gusset; height + gusset × 2 for a bottom gusset; width + gusset × 4 for a side gusset)</span>
-                </div>
+              {/* Issues 17.10 §1: a shrink sleeve showed only its Form radio, and nothing
+                  said the measurements wait on it */}
+              {kind === 'shrink' && !csa.sleeve_form && (
+                <div style={{ fontSize: 11, color: 'var(--i3)' }}>Pick Sleeve form or Roll form — the measurements for that form appear here.</div>
               )}
+              {bulk && <BulkBagTotals bulk={bulk} csa={csa} />}
             </>
           )}
         </div>
@@ -368,13 +412,13 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
           <div className="ctitle" style={{ margin: 0 }}>My SKUs — workflow <span className="tag tgr">{mine.length}</span></div>
         </div>
         <div className="pg-sub" style={{ marginTop: 0 }}>
-          Pick the radio button to correct a SKU — its despatch details come back with it — or to send it for CSA. The stages are
+          Pick the radio button to correct a SKU — its dispatch details come back with it — or to send it for CSA. The stages are
           set by QC and the quote desk; prices are on the Quotations tab. Stages marked * must be done before a PO can be entered.
         </div>
         <div className="tw sy">
           <table>
             <thead><tr>
-              <th style={{ width: 34, textAlign: 'center' }}></th><th>SKU</th><th>Lead / Customer</th><th style={{ minWidth: 130 }}>Category / Despatch</th><th>Structure</th><th>Status</th><th style={{ minWidth: 320 }}>Workflow stage</th>
+              <th style={{ width: 34, textAlign: 'center' }}></th><th>SKU</th><th>Lead / Customer</th><th style={{ minWidth: 130 }}>Category / Dispatch</th><th>Structure</th><th>Status</th><th style={{ minWidth: 320 }}>Workflow stage</th>
             </tr></thead>
             <tbody>
               {mine.length === 0 ? (

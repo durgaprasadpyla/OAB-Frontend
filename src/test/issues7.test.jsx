@@ -54,7 +54,7 @@ describe('Sales Login — leads and customers', () => {
     expect(isCustomerLead({ client_name: 'Nobody' }, customers)).toBe(false);
   });
 
-  it('offers a customer the Super Admin\'s despatch locations, and a lead its own delivery location', () => {
+  it('offers a customer the Super Admin\'s dispatch locations, and a lead its own delivery location', () => {
     expect(despatchLocationsFor(leads[1], customers)).toEqual(['Pune', 'Nashik']);
     expect(despatchLocationsFor(leads[0], customers, ['Hyderabad', 'Bengaluru'])).toEqual(['Hyderabad', 'Bengaluru']);
   });
@@ -83,7 +83,7 @@ describe('Sales Login — the CSA requisition', () => {
     expect(bulkBagTotals({ gusset_type: 'Side gusset', pouch_width_mm: 300, gusset_mm: 50, pouch_height_mm: 400 })).toEqual({ totalGusset: 200, totalHeight: 400, totalWidth: 500 });
   });
 
-  it('maps the Super Admin\'s despatch-form names to their field sets', () => {
+  it('maps the Super Admin\'s dispatch-form names to their field sets', () => {
     expect(despatchKind('Shrink Sleeve')).toBe('shrink');
     expect(despatchKind('Bulk Bags')).toBe('bulk');
     expect(despatchKind('Label')).toBe('labels');
@@ -93,7 +93,7 @@ describe('Sales Login — the CSA requisition', () => {
 
   it('needs the location, quantity, date and target price, keeps the form-specific details, and lands on QC\'s list', () => {
     const s = sku({ dispatch_form: 'Bulk Bags' });
-    expect(() => buildCsaRequest({}, s)).toThrow(/despatch location/);
+    expect(() => buildCsaRequest({}, s)).toThrow(/dispatch location/);
     const req = buildCsaRequest({ despatch_location: 'Pune', tentative_qty: '10000', tentative_date: '2026-10-01', target_price: '2.5',
       gusset_type: 'Side gusset', pouch_width_mm: '300', gusset_mm: '50', pouch_height_mm: '400', packing_instructions: 'x' }, s, { now: new Date('2026-09-15T10:00:00Z'), user: 'rep1' });
     expect(req.kind).toBe('bulk');

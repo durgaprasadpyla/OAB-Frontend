@@ -98,7 +98,7 @@ export default function CsaToJssPanel({ picked, onPick }) {
       {open && (
         <div className="tw sy" style={{ maxHeight: 260 }}>
           <table>
-            <thead><tr><th style={{ width: 30 }}></th><th>Customer</th><th>SKU</th><th>Structure</th><th>Dispatch</th><th>Despatch location</th><th>Accepted price</th><th>Accepted on</th><th>CSA</th></tr></thead>
+            <thead><tr><th style={{ width: 30 }}></th><th>Customer</th><th>SKU</th><th>Structure</th><th>Dispatch</th><th>Dispatch location</th><th>Accepted price</th><th>Accepted on</th><th>CSA</th></tr></thead>
             <tbody>
               {rows.length === 0 ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>Nothing waiting — every accepted CSA of a converted customer has its JSS.</td></tr>
                 : rows.map((c) => (

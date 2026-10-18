@@ -51,13 +51,14 @@ describe('invoicePortalFields — customer-portal extraction', () => {
     expect(f.subTotal).toBe(75 * 100 + 80 * 40);    // 11700
   });
 
-  it('roll dispatch form reports Kgs / per-Kg', () => {
+  it('roll dispatch form reports Mtrs / per-Metre', () => {
     const f = invoicePortalFields(
       { ivNo: 'BL/26-27/11', ivDt: '2026-06-01', gstType: 'IGST' },
       [{ spec: 'R1', jobName: 'Roll', qty: 500, rate: 120, dispatchForm: 'roll' }],
     );
-    expect(f.uom).toBe('Kgs');
-    expect(unitNoun(f.uom)).toBe('Kg');
+    expect(f.uom).toBe('Mtrs');
+    expect(unitNoun(f.uom)).toBe('Metre');
+    expect(unitNoun('Kgs')).toBe('Kg');
   });
 
   it('honours an explicit lineTotal over qty*rate', () => {

@@ -15,7 +15,7 @@ const CUSTOMERS = [
 ];
 const SWIGGY = { id: 'L9', client_name: 'Swiggy', converted_to_customer: true, delivery_location: '' };
 
-describe('a despatch location carries its warehouse', () => {
+describe('a dispatch location carries its warehouse', () => {
   it('keeps two warehouses in one town apart, and labels each', () => {
     // "the despatch locations should be as per the despatch locations that are
     //  populating in the Enter OAB. But here the warehouse name is not visible."

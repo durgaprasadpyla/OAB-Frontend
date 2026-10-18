@@ -8,10 +8,15 @@ export function getPM(spec, prices) {
   return (prices && prices[String(spec || '').trim()]) || { price: 0, costPrice: 0, transport: 'At Actuals' };
 }
 
-/** Unit of measure from dispatch form. (getUOM 5638) */
+/**
+ * Unit of measure from dispatch form. (getUOM 5638) Issues 17.10 §2: rolls are
+ * ordered and billed in metres — this said Kgs, on the PO, proforma and invoice alike.
+ */
 export function getUOM(dispatchForm) {
   const df = String(dispatchForm || '').toLowerCase().trim();
-  return (df === 'roll' || df === 'rolls') ? 'Kgs' : 'Pcs';
+  if (df === 'roll' || df === 'rolls') return 'Mtrs';
+  if (df === 'kgs' || df === 'kg') return 'Kgs';
+  return 'Pcs';
 }
 
 // Raw-material ₹/kg rates now live on the server (rm_rate table) instead of

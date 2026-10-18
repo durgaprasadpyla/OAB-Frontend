@@ -135,7 +135,9 @@ const GRN5 = {
 async function openReceive(user, modules) {
   const utils = renderApp(<Purchase />, { modules: { masterItems: MASTER, ...modules }, role: 'purchase', user: 'buyer1' });
   await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
-  await user.click(await screen.findByRole('button', { name: `Link GRN ${PO9}` }));
+  // Issues 17.10 §7: pick the PO's radio, then its Link GRN on the toolbar above the table
+  await user.click(await screen.findByRole('radio', { name: `Select PO ${PO9}` }));
+  await user.click(screen.getByRole('button', { name: `Link GRN ${PO9}` }));
   return utils;
 }
 
@@ -189,6 +191,7 @@ describe('PU2 — the GRN reference is the stores desk’s, never typed', () => 
     const user = userEvent.setup();
     const utils = renderApp(<Purchase />, { modules: { masterItems: MASTER, purchase: trackPurchase(), storeGrns: [] }, role: 'purchase' });
     await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
+    await user.click(await screen.findByRole('radio', { name: `Select PO ${PO9}` })); // Issues 17.10 §7
     await screen.findByRole('button', { name: `Link GRN ${PO9}` });
     utils.mods.storeGrns.push(GRN5);                    // stores books it now
     await user.click(screen.getByRole('button', { name: `Link GRN ${PO9}` }));
@@ -207,7 +210,8 @@ describe('PU2 — the GRN reference is the stores desk’s, never typed', () => 
       return base(url, opts);
     };
     await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
-    await user.click(await screen.findByRole('button', { name: `Link GRN ${PO9}` }));
+    await user.click(await screen.findByRole('radio', { name: `Select PO ${PO9}` })); // Issues 17.10 §7
+    await user.click(screen.getByRole('button', { name: `Link GRN ${PO9}` }));
     await waitFor(() => expect(screen.getByLabelText('GRN Reference')).toHaveValue('GRN/2026/5'));
     expect(screen.getByLabelText('GRN quantity line 1')).toHaveTextContent('…');
     expect(screen.getByRole('button', { name: /Save GRN link/ })).toBeDisabled();
@@ -298,7 +302,8 @@ describe('S7 — the purchase login’s PO Tracking & GRN', () => {
     mount();
     await user.click(screen.getByRole('button', { name: /PO Tracking & GRN/ }));
     const open = await screen.findByRole('table', { name: 'Open purchase orders' });
-    ['Item Code', 'Item Description', 'Material Type', 'Speciality'].forEach((h) => (
+    // Issues 17.10 §7: Material Type and Speciality now share one column
+    ['Item Code', 'Item Description', 'Material Type / Speciality'].forEach((h) => (
       expect(within(open).getByRole('columnheader', { name: h })).toBeInTheDocument()));
     const old = within(open).getByText('P-OLD').closest('tr');
     await waitFor(() => expect(within(old).getByText('PLT-1')).toBeInTheDocument());

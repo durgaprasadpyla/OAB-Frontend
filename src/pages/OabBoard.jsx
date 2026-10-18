@@ -21,12 +21,12 @@ import { saveInvoicePdf } from '../lib/invoicePdf.js';
  */
 const STAT_INFO = {
   sos: 'Open sale orders matching the filters above. Closed SOs are not counted — they live behind the Closed SOs button.',
-  poQty: 'Total quantity ordered across the sale orders in view. Pieces for pouches, labels and bulk bags; kilograms for rolls.',
+  poQty: 'Total quantity ordered across the sale orders in view. Pieces for pouches, labels and bulk bags; metres for rolls.',
   dispatched: 'Everything already sent out: the Inv column (invoiced) plus the Man column (manually dispatched).',
   fg: 'Finished goods already allocated to these sale orders from the FG pool. Allocated FG counts as done, so it reduces the balance.',
   balProduce: 'PO Qty − Inv − Man − FG, per order, never below zero. What is still to be made.',
   balMtrs: 'Running metres for the balance, including the 5% wastage allowance. Pouches: qty × pouch width. Bulk bags: qty × height. Rolls: derived from film width and GSM. Labels contribute no metres.',
-  balKg: "Weight of the film for the balance, including the same 5% wastage as Bal Mtrs: qty × the spec's pouch weight from the JSS × 1.05. Rolls are ordered in kilograms, so their balance is the weight directly. A spec with no weight on the JSS is left out and flagged below.",
+  balKg: "Weight of the film for the balance, including the same 5% wastage as Bal Mtrs: qty × the spec's pouch weight from the JSS × 1.05. Rolls are ordered in metres, so their weight is metres × film width × GSM from the JSS. A spec with no weight (or, for a roll, no film width / GSM) on the JSS is left out and flagged below.",
 };
 
 /** Whole days since an SO's PO date (null if no/invalid date), for the Age column. */

@@ -24,8 +24,9 @@ const BOM = {
 
 describe('bomUOM', () => {
   it('maps the dispatch form to a base unit', () => {
-    expect(bomUOM('Roll')).toBe('Kgs');
-    expect(bomUOM('rolls')).toBe('Kgs');
+    // Issues 17.10 §2: a roll SO's qty is metres
+    expect(bomUOM('Roll')).toBe('Mtrs');
+    expect(bomUOM('rolls')).toBe('Mtrs');
     expect(bomUOM('Pouch')).toBe('Pouches');
     expect(bomUOM('Labels')).toBe('Pieces');
     expect(bomUOM('')).toBe('Pcs');
@@ -197,7 +198,7 @@ describe('bomSaveSpec', () => {
   });
 
   it('derives the base UOM from the spec dispatch form', () => {
-    expect(bomSaveSpec({}, 'S', draft, { jssRow: { dispatchForm: 'Roll' } }).S.baseUOM).toBe('Kgs');
+    expect(bomSaveSpec({}, 'S', draft, { jssRow: { dispatchForm: 'Roll' } }).S.baseUOM).toBe('Mtrs');
   });
 });
 

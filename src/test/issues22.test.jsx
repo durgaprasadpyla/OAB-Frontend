@@ -101,7 +101,7 @@ describe('Issues 2.2 §7 — the PLAN login shows the PM board display fields', 
 
 /* ── §2 the despatch master backfills from the Super Admin Dashboard ─────── */
 
-describe('Issues 2.2 §2 — despatch forms reach QC without visiting Drop-down selections', () => {
+describe('Issues 2.2 §2 — dispatch forms reach QC without visiting Drop-down selections', () => {
   let created;
   beforeEach(() => {
     created = [];

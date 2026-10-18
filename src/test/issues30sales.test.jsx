@@ -131,7 +131,7 @@ describe('SL2 — My Customers', () => {
     expect(screen.queryByText('📦 SKUs')).toBeNull();
   });
 
-  it('lists the converted customers with their contact and the Customer Master\'s despatch locations', async () => {
+  it('lists the converted customers with their contact and the Customer Master\'s dispatch locations', async () => {
     openRep();
     await tab('🏆 My Customers');
     const row = (await screen.findByLabelText('Edit customer KOVAI AGRO FOODS')).closest('tr');
@@ -154,7 +154,7 @@ describe('SL2 — My Customers', () => {
     expect(screen.getByLabelText('Primary contact phone')).toHaveValue('99650');
     expect(screen.getByLabelText('Customer payment type')).toHaveValue('A');
     // the despatch locations are the Super Admin's, read-only
-    const locs = screen.getByLabelText('Customer despatch locations');
+    const locs = screen.getByLabelText('Customer dispatch locations');
     expect(within(locs).getByText('DHARAPURAM (KOVAI OWN)')).toBeInTheDocument();
     expect(locs.querySelector('input, select')).toBeNull();
 
@@ -476,7 +476,7 @@ describe('SL6 — the rep login reads the conversion live', () => {
 });
 
 /* ═══════════════ SK1-SK4 — the SKU form carries the despatch details ═══════════════ */
-describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
+describe('SK1-SK4 — dispatch details on Add / Edit SKU', () => {
   const pickParty = async (kind, id) => {
     await userEvent.click(screen.getByLabelText(`SKU pick ${kind}`));
     await userEvent.selectOptions(screen.getByLabelText(`SKU ${kind}`), id);
@@ -484,40 +484,40 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
   const fillSku = async (name, form) => {
     await userEvent.type(screen.getByLabelText('SKU Name'), name);
     await userEvent.selectOptions(screen.getByLabelText('Category'), 'Dairy');
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), form);
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), form);
   };
-  const details = () => screen.getByLabelText('Despatch details');
-  const labelsShown = () => [...within(screen.getByLabelText('Despatch form details')).getAllByText((_, el) => el.tagName === 'LABEL' && el.parentElement.className === 'fg')].map((l) => l.textContent);
+  const details = () => screen.getByLabelText('Dispatch details');
+  const labelsShown = () => [...within(screen.getByLabelText('Dispatch form details')).getAllByText((_, el) => el.tagName === 'LABEL' && el.parentElement.className === 'fg')].map((l) => l.textContent);
 
-  it('shows the four despatch fields on Add SKU straight away — no radio, no sample answer', async () => {
+  it('shows the four dispatch fields on Add SKU straight away — no radio, no sample answer', async () => {
     openRep();
     await tab('📦 SKUs');
     const d = details();
-    ['Despatch location', 'Tentative order quantity', 'Tentative despatch date', 'Target price'].forEach((l) => expect(within(d).getByLabelText(l)).toBeInTheDocument());
+    ['Dispatch location', 'Tentative order quantity', 'Tentative dispatch date', 'Target price'].forEach((l) => expect(within(d).getByLabelText(l)).toBeInTheDocument());
     expect(screen.getByLabelText('Sample received No')).toBeChecked();
     expect(within(d).getByText(/quote desk only/)).toBeInTheDocument();
   });
 
-  it('offers each despatch form exactly the doc\'s fields', async () => {
+  it('offers each dispatch form exactly the doc\'s fields', async () => {
     openRep();
     await tab('📦 SKUs');
     await pickParty('Lead', 'L3');
     await fillSku('X', 'Roll');
-    expect(labelsShown()).toEqual(['Per reel (Kgs)', 'Core width (mm)', 'Reading direction', 'Packing instructions']);
+    expect(labelsShown()).toEqual(['Per reel (Kgs)', 'Core width (inches)', 'Reading direction', 'Packing instructions']);
     expect(optionTexts(within(details()).getByLabelText('Reading direction'))).toEqual(['-- Select --', 'Readable', 'Unreadable']);
-    expect(within(details()).getByLabelText('Core width (mm)')).toHaveAttribute('type', 'number');
+    expect(within(details()).getByLabelText('Core width (inches)')).toHaveAttribute('type', 'number');
 
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
     expect(labelsShown()).toEqual(['Pouch width end to end (mm)', 'Pouch height end to end (mm)', 'Packing instructions', 'Other specifications']);
 
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Label');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Label');
     expect(labelsShown()).toEqual(['Labels in a bunch', 'Labels per box', 'Packing instructions']);
 
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Shrink Sleeve');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Shrink Sleeve');
     await userEvent.click(within(details()).getByLabelText('Sleeve form'));
     expect(labelsShown()).toEqual(['Form', 'Height of the sleeve (mm)', 'Width of the sleeve (mm)', 'Open width (mm)']);
     await userEvent.click(within(details()).getByLabelText('Roll form'));
-    expect(labelsShown()).toEqual(['Form', 'Core dimension (mm)', 'Per core', 'Metres / Kgs per core']);
+    expect(labelsShown()).toEqual(['Form', 'Core (inches)', 'Per core', 'Metres / Kgs per core']);
     // §SK2: metres per core OR kgs per core — a choice and a number
     await userEvent.click(within(details()).getByLabelText('Kgs per core'));
     expect(within(details()).getByLabelText('Metres / Kgs per core')).toHaveAttribute('type', 'number');
@@ -534,35 +534,40 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
     await userEvent.type(within(d).getByLabelText('Pouch width (mm)'), '300');
     await userEvent.type(within(d).getByLabelText('Gusset (mm)'), '50');
     await userEvent.type(within(d).getByLabelText('Height of the pouch without gusset (mm)'), '500');
+    // Issues 17.10 §2: three read-only boxes instead of a sentence
     let totals = within(d).getByLabelText('Bulk bag totals');
-    expect(totals.textContent).toMatch(/Total gusset 200 mm · total pouch height 500 mm · pouch width 500 mm/);
+    expect(within(totals).getByLabelText('Total gusset (mm)')).toHaveValue('200');
+    expect(within(totals).getByLabelText('Final pouch height (mm)')).toHaveValue('500');
+    expect(within(totals).getByLabelText('Final pouch width (mm)')).toHaveValue('500');
     await userEvent.click(within(d).getByLabelText('Bottom gusset'));
     totals = within(d).getByLabelText('Bulk bag totals');
-    expect(totals.textContent).toMatch(/Total gusset 100 mm · total pouch height 600 mm · pouch width 300 mm/);
+    expect(within(totals).getByLabelText('Total gusset (mm)')).toHaveValue('100');
+    expect(within(totals).getByLabelText('Final pouch height (mm)')).toHaveValue('600');
+    expect(within(totals).getByLabelText('Final pouch width (mm)')).toHaveValue('300');
   });
 
-  it('a change of despatch form drops the old form\'s measurements', async () => {
+  it('a change of dispatch form drops the old form\'s measurements', async () => {
     openRep();
     await tab('📦 SKUs');
     await pickParty('Lead', 'L3');
     await fillSku('X', 'Pouch');
     await userEvent.type(within(details()).getByLabelText('Pouch width end to end (mm)'), '150');
     await userEvent.type(within(details()).getByLabelText('Tentative order quantity'), '900');
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Roll');
-    await userEvent.selectOptions(screen.getByLabelText('Despatch Form'), 'Pouch');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Roll');
+    await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
     expect(within(details()).getByLabelText('Pouch width end to end (mm)')).toHaveValue(null);
     expect(within(details()).getByLabelText('Tentative order quantity')).toHaveValue(900);   // the common fields stay
   });
 
-  it('persists the despatch details on Add, and the edit radio brings them back', async () => {
+  it('persists the dispatch details on Add, and the edit radio brings them back', async () => {
     const { saved } = openRep();
     await tab('📦 SKUs');
     await pickParty('Customer', 'L1');
     await fillSku('1kg Pouch', 'Pouch');
     const d = details();
-    await userEvent.selectOptions(within(d).getByLabelText('Despatch location'), 'DHARAPURAM (KOVAI OWN)');
+    await userEvent.selectOptions(within(d).getByLabelText('Dispatch location'), 'DHARAPURAM (KOVAI OWN)');
     await userEvent.type(within(d).getByLabelText('Tentative order quantity'), '50000');
-    fireEvent.change(within(d).getByLabelText('Tentative despatch date'), { target: { value: '2026-10-15' } });
+    fireEvent.change(within(d).getByLabelText('Tentative dispatch date'), { target: { value: '2026-10-15' } });
     await userEvent.type(within(d).getByLabelText('Target price'), '3.25');
     await userEvent.type(within(d).getByLabelText('Pouch width end to end (mm)'), '150');
     await userEvent.type(within(d).getByLabelText('Packing instructions'), '50 per carton');
@@ -580,7 +585,7 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
     expect(within(details()).getByLabelText('Tentative order quantity')).toHaveValue(null);
     await userEvent.click(await screen.findByLabelText('Edit 1kg Pouch'));
     const e = details();
-    expect(within(e).getByLabelText('Despatch location')).toHaveValue('DHARAPURAM||KOVAI OWN');
+    expect(within(e).getByLabelText('Dispatch location')).toHaveValue('DHARAPURAM||KOVAI OWN');
     expect(within(e).getByLabelText('Tentative order quantity')).toHaveValue(50000);
     expect(within(e).getByLabelText('Target price')).toHaveValue(3.25);
     expect(within(e).getByLabelText('Pouch width end to end (mm)')).toHaveValue(150);
@@ -602,9 +607,9 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
     await pickParty('Customer', 'L1');
     await fillSku('Tray Lid', 'Label');
     const d = details();
-    await userEvent.selectOptions(within(d).getByLabelText('Despatch location'), 'DHARAPURAM (DHARAPURAM)');
+    await userEvent.selectOptions(within(d).getByLabelText('Dispatch location'), 'DHARAPURAM (DHARAPURAM)');
     await userEvent.type(within(d).getByLabelText('Tentative order quantity'), '20000');
-    fireEvent.change(within(d).getByLabelText('Tentative despatch date'), { target: { value: '2026-11-01' } });
+    fireEvent.change(within(d).getByLabelText('Tentative dispatch date'), { target: { value: '2026-11-01' } });
     await userEvent.type(within(d).getByLabelText('Target price'), '1.5');
     await userEvent.type(within(d).getByLabelText('Labels per box'), '500');
     await userEvent.click(screen.getByText('🧪 Send for CSA to QC'));
@@ -626,7 +631,7 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
     await pickParty('Lead', 'L3');
     await fillSku('X', 'Pouch');
     await userEvent.click(screen.getByText('🧪 Send for CSA to QC'));
-    expect(await screen.findByText('Pick the despatch location.')).toBeInTheDocument();
+    expect(await screen.findByText('Pick the dispatch location.')).toBeInTheDocument();
     expect(saved.some((s) => s.key === 'sales')).toBe(false);
   });
 
@@ -644,7 +649,7 @@ describe('SK1-SK4 — despatch details on Add / Edit SKU', () => {
     const now = new Date('2026-09-30T10:00:00Z');
     const draft = buildCsaDraft({ despatch_location: 'Pune', warehouse_name: 'W1', tentative_qty: '10', target_price: '', sleeve_form: 'Roll form', core_mm: '76', per_core_basis: 'Metres per core', per_core_qty: '500', sleeve_height_mm: '9' }, 'Shrink Sleeve', { now });
     expect(draft).toMatchObject({ despatch_location: 'Pune', warehouse_name: 'W1', tentative_qty: 10, target_price: '', kind: 'shrink', saved_at: now.toISOString() });
-    expect(draft.details).toEqual({ sleeve_form: 'Roll form', core_mm: 76, per_core_basis: 'Metres per core', per_core_qty: 500 });
+    expect(draft.details).toEqual({ sleeve_form: 'Roll form', core_in: 76, per_core_basis: 'Metres per core', per_core_qty: 500 });
     expect(DESPATCH_FIELDS.shrink.some((f) => f.k === 'per_core')).toBe(false);
     // the newer of the draft and what went to QC is what the form reloads
     expect(csaDetailsOf({ csa_draft: { saved_at: '2026-09-30', tentative_qty: 2 }, csa_request: { sent_at: '2026-09-29', tentative_qty: 1 } }).tentative_qty).toBe(2);
@@ -679,7 +684,7 @@ describe('PE1 — Kova Agro offers only its Customer Master rows', () => {
     openRep();
     await tab('📦 SKUs');
     await pickCustomer();
-    expect(optionTexts(within(screen.getByLabelText('Despatch details')).getByLabelText('Despatch location')))
+    expect(optionTexts(within(screen.getByLabelText('Dispatch details')).getByLabelText('Dispatch location')))
       .toEqual(['-- Select --', 'DHARAPURAM (DHARAPURAM)', 'DHARAPURAM (KOVAI OWN)']);
     expect(screen.getByText(/From the Super Admin.s Customer Master/)).toBeInTheDocument();
   });
@@ -691,22 +696,23 @@ describe('PE1 — Kova Agro offers only its Customer Master rows', () => {
 });
 
 /* ═══════════════ PE2 — "Despatch" in the sales logins ═══════════════ */
-describe('PE2 — the sales logins spell it Despatch', () => {
+// Issues 17.10 §3 reverses PE2: the client now wants it spelt D-I-S-P-A-T-C-H everywhere.
+describe('PE2 / 17.10 §3 — the sales logins spell it Dispatch', () => {
   it('on the rep portal\'s SKUs, My Leads, My Customers and My Contacts tabs', async () => {
     openRep(salesModule({ skus: [{ id: 'S1', lead_id: 'L1', sku_name: 'Old SKU', category: 'Dairy', dispatch_form: 'Pouch', created_by: REP }] }));
     await tab('📦 SKUs');
-    await screen.findByLabelText('Despatch Form');
+    await screen.findByLabelText('Dispatch Form');
     await userEvent.selectOptions(screen.getByLabelText('Category'), 'Dairy');
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
-    expect(screen.getByText('Category / Despatch')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/despatch/i);
+    expect(screen.getByText('Category / Dispatch')).toBeInTheDocument();
     await tab('📈 My Leads');
     await userEvent.click(screen.getByLabelText('Dairy'));          // opens the per-category forms list
-    expect(screen.getByText(/Despatch forms for each category/)).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
+    expect(screen.getByText(/Dispatch forms for each category/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/despatch/i);
     await tab('🏆 My Customers');
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
+    expect(document.body.textContent).not.toMatch(/despatch/i);
     await tab('📇 My Contacts');
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
+    expect(document.body.textContent).not.toMatch(/despatch/i);
   });
 
   it('on the S Dashboard\'s Targets and Leads tabs', async () => {
@@ -715,10 +721,10 @@ describe('PE2 — the sales logins spell it Despatch', () => {
     const go = (re) => userEvent.click([...document.querySelectorAll('.step-tab')].find((el) => re.test(el.textContent)));
     await go(/Targets/);
     await userEvent.click(await screen.findByRole('button', { name: /Manasa/ }));
-    expect(screen.getByLabelText('New Despatch-Form Targets')).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
+    expect(screen.getByLabelText('New Dispatch-Form Targets')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/despatch/i);
     await go(/Leads/);
-    expect(document.body.textContent).not.toMatch(/dispatch/i);
+    expect(document.body.textContent).not.toMatch(/despatch/i);
   });
 });
 
@@ -853,10 +859,10 @@ describe('R4 — a SKU whose category left the list still edits', () => {
 describe('R5 — a pre-30.09 shrink roll-form per-core text survives an edit', () => {
   const legacy = { sleeve_form: 'Roll form', core_mm: '76', per_core: '500 m per core', despatch_location: 'Pune', tentative_qty: '1000', tentative_date: '2026-11-01', target_price: '2' };
   const sku = { id: 'S1', lead_id: 'L1', sku_name: 'Sleeve', dispatch_form: 'Shrink Sleeve' };
-  const details = () => screen.getByLabelText('Despatch details');
+  const details = () => screen.getByLabelText('Dispatch details');
 
   it('rides along in the draft and the requisition while the number is empty', () => {
-    expect(buildCsaDraft(legacy, 'Shrink Sleeve').details).toMatchObject({ sleeve_form: 'Roll form', core_mm: 76, per_core: '500 m per core' });
+    expect(buildCsaDraft(legacy, 'Shrink Sleeve').details).toMatchObject({ sleeve_form: 'Roll form', core_in: 76, per_core: '500 m per core' });
     expect(buildCsaRequest(legacy, sku).details).toMatchObject({ per_core: '500 m per core' });
     // re-entered as a basis and a number: the new fields win, the text goes
     const typed = buildCsaDraft({ ...legacy, per_core_basis: 'Metres per core', per_core_qty: '500' }, 'Shrink Sleeve').details;
@@ -874,6 +880,6 @@ describe('R5 — a pre-30.09 shrink roll-form per-core text survives an edit', (
     expect(within(details()).getByText(/Earlier entry: “500 m per core”/)).toBeInTheDocument();
     await userEvent.click(screen.getByText('✓ Save SKU'));
     await waitFor(() => expect(lastSaved(saved, 'sales')).toBeTruthy());
-    expect(lastSaved(saved, 'sales').skus[0].csa_draft.details).toMatchObject({ per_core: '500 m per core', core_mm: 76 });
+    expect(lastSaved(saved, 'sales').skus[0].csa_draft.details).toMatchObject({ per_core: '500 m per core', core_in: 76 });
   });
 });

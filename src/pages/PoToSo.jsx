@@ -49,7 +49,7 @@ export default function PoToSo() {
       <div className="pg-ttl">🧾 PO → SO — OAB entry pending</div>
       <div className="pg-sub">
         Purchase orders the sales reps have entered against accepted quotations, waiting to be entered on the OAB. Select one and press
-        <b> Add to OAB</b>: the Add SO page opens pre-filled — customer, PO number and date, despatch location and warehouse, SKUs with
+        <b> Add to OAB</b>: the Add SO page opens pre-filled — customer, PO number and date, dispatch location and warehouse, SKUs with
         their JSS, quantity and the PO price beside the Price Master price — where finished goods in stock can be used, then
         <b> 🚀 Push to OAB</b>.
       </div>
@@ -63,7 +63,7 @@ export default function PoToSo() {
         <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
           <table>
             <thead><tr>
-              <th style={{ width: 30 }}></th><th>PO #</th><th>PO date</th><th>Customer</th><th>Despatch location</th><th>Sales rep</th><th>SKUs (JSS)</th>
+              <th style={{ width: 30 }}></th><th>PO #</th><th>PO date</th><th>Customer</th><th>Dispatch location</th><th>Sales rep</th><th>SKUs (JSS)</th>
               <th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>PO value</th><th>Entered</th>
             </tr></thead>
             <tbody>
@@ -79,7 +79,7 @@ export default function PoToSo() {
                       <td style={{ fontWeight: 600 }}>{p.customer || '—'}</td>
                       {/* 28.09 §Superstar ¶1: the warehouse behind the town — without it two
                           deliveries to the same place read identically here. */}
-                      <td style={{ fontSize: 11 }} aria-label={`Despatch location of ${p.po_number}`}>
+                      <td style={{ fontSize: 11 }} aria-label={`Dispatch location of ${p.po_number}`}>
                         {p.despatch_location || '—'}
                         {p.warehouse_name ? <div style={{ fontSize: 10, color: 'var(--i3)' }}>🏭 {p.warehouse_name}</div> : null}
                       </td>

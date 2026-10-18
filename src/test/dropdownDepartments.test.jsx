@@ -135,7 +135,7 @@ describe('Drop-down selections → Machines (Issues 1.0 #6)', () => {
     await userEvent.click(screen.getByRole('button', { name: '＋ Add' }));
     await waitFor(() => expect(created.some((c) => c.code === 'SL2' && c.departmentId === 2 && c.speedUom === 'm/min')).toBe(true));
   });
-  it('syncs the despatch list into the dispatch-type master, so QC sees all five forms', async () => {
+  it('syncs the dispatch list into the dispatch-type master, so QC sees all five forms', async () => {
     mount();
     // on open, the three names missing from the master are created (never deleted)
     await waitFor(() => expect(dtCreated.sort()).toEqual(['Bulk Bags', 'Label', 'Shrink Sleeve']));

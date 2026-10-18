@@ -172,7 +172,7 @@ describe('QT1 / PE3 — the names written are the names read', () => {
     expect(out.qc_reports[1].status).toBe('Pending Quote');      // a direct report with no SKU is not touched
   });
 
-  it('the CSA carries the despatch form the rep wrote, and "Pending QC" reads "Pending Quote"', () => {
+  it('the CSA carries the dispatch form the rep wrote, and "Pending QC" reads "Pending Quote"', () => {
     const r = buildCsaReport({}, { sales: { skus: [{ id: 'S1', lead_id: 'L1', dispatch_form: 'Roll' }] }, skuId: 'S1', uid: () => 'c' });
     expect(r.dispatch_type).toBe('Roll');
     expect(csaStatusLabel('Pending QC')).toBe('Pending Quote');
@@ -430,17 +430,17 @@ describe('QT3 — the Quotations tab', () => {
 });
 
 describe('QT4 — Send Quote', () => {
-  it('cascades group → customer → despatch location and resets what is below a change', async () => {
+  it('cascades group → customer → dispatch location and resets what is below a change', async () => {
     openRep();
     await tab('📤 Send Quote');
-    const loc = await screen.findByLabelText('Filter by despatch location');
+    const loc = await screen.findByLabelText('Filter by dispatch location');
     expect([...loc.options].map((o) => o.textContent)).toEqual(expect.arrayContaining(['Hyderabad', 'Nashik']));
     await userEvent.selectOptions(screen.getByLabelText('Filter by customer'), 'Beta Foods');
-    expect([...screen.getByLabelText('Filter by despatch location').options].map((o) => o.textContent)).toEqual(['All despatch locations', 'Nashik']);
-    await userEvent.selectOptions(screen.getByLabelText('Filter by despatch location'), 'Nashik');
+    expect([...screen.getByLabelText('Filter by dispatch location').options].map((o) => o.textContent)).toEqual(['All dispatch locations', 'Nashik']);
+    await userEvent.selectOptions(screen.getByLabelText('Filter by dispatch location'), 'Nashik');
     await userEvent.selectOptions(screen.getByLabelText('Filter by group'), 'BETA GROUP');
     expect(screen.getByLabelText('Filter by customer')).toHaveValue('');
-    expect(screen.getByLabelText('Filter by despatch location')).toHaveValue('');
+    expect(screen.getByLabelText('Filter by dispatch location')).toHaveValue('');
     expect(screen.getByLabelText('Send 200g Pouch')).toBeDisabled();       // a group alone names nobody
   });
 
@@ -548,7 +548,7 @@ describe('QT5 — Quote Accepted', () => {
 
 /* ═══════════════ QT7: Enter PO ═══════════════ */
 describe('QT7 — Enter PO', () => {
-  it('prices a flat-price quote, warns under the MOQ, and takes the despatch location from the SKU\'s CSA', async () => {
+  it('prices a flat-price quote, warns under the MOQ, and takes the dispatch location from the SKU\'s CSA', async () => {
     const sales = repSales();
     sales.skus = [
       { id: 'F1', lead_id: 'L2', sku_name: 'Flat pouch', category: 'Oil', created_by: R1, quotation_accepted: true, jss_spec: 'A700', price_tiers: [{ qty: 0, price: 5 }], csa_request: { despatch_location: 'Nashik' } },
@@ -557,9 +557,9 @@ describe('QT7 — Enter PO', () => {
     const { saved } = openRep(sales);
     await tab('🧾 Enter PO');
     await userEvent.selectOptions(await screen.findByLabelText('PO customer'), 'L2');
-    expect(screen.getByLabelText('PO despatch location')).toHaveValue('');
+    expect(screen.getByLabelText('PO dispatch location')).toHaveValue('');
     await userEvent.selectOptions(screen.getByLabelText('PO SKU 1'), 'F1');
-    expect(screen.getByLabelText('PO despatch location')).toHaveValue('Nashik||');
+    expect(screen.getByLabelText('PO dispatch location')).toHaveValue('Nashik||');
     await userEvent.type(screen.getByLabelText('PO quantity 1'), '50');
     await waitFor(() => expect(screen.getByLabelText('PO price 1')).toHaveValue(5));
     await userEvent.click(screen.getByText('＋ Another SKU'));
@@ -638,7 +638,7 @@ describe('PE3 — the Superstar pushes a rep\'s PO onto the OAB', () => {
       <Routes><Route path="/po-to-so" element={<PoToSo />} /><Route path="/po" element={<NewPO />} /></Routes>,
       { modules: { sales: sales(), customers: KOVA, jss, fgLedger, prices: { A50: { price: 3.5 } }, oab: { OAB: { SF: [], OT: [] }, INV_REG: [], lastSO: { y: '26', n: 400 } } }, role: 'user', route: '/po-to-so' },
     );
-    expect(await screen.findByLabelText('Despatch location of PO-90')).toHaveTextContent('KOVAI OWN');
+    expect(await screen.findByLabelText('Dispatch location of PO-90')).toHaveTextContent('KOVAI OWN');
     await userEvent.click(screen.getByLabelText('Select PO PO-90'));
     await userEvent.click(screen.getByLabelText('Add to OAB'));
     expect(await screen.findByText(/From the sales rep/)).toBeInTheDocument();
@@ -770,7 +770,7 @@ describe('Quotations end to end — rep → QC → plant → quote desk → rep 
     await tab('🧾 Enter PO');
     await userEvent.selectOptions(await screen.findByLabelText('PO customer'), 'L2');
     await userEvent.selectOptions(screen.getByLabelText('PO SKU 1'), 'S1');
-    expect(screen.getByLabelText('PO despatch location')).toHaveValue('Nashik||');
+    expect(screen.getByLabelText('PO dispatch location')).toHaveValue('Nashik||');
     expect(screen.getByLabelText('PO JSS 1')).toHaveTextContent('A1');
     await userEvent.type(screen.getByLabelText('PO quantity 1'), '120000');
     await waitFor(() => expect(screen.getByLabelText('PO price 1')).toHaveValue(2.55));

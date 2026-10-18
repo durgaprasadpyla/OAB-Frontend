@@ -16,10 +16,16 @@ describe('calc', () => {
     expect(calcMetres(r, 1000).net).toBe(100);
     expect(calcMetres(r, 1000).withWastage).toBe(105);
   });
-  it('calcMetres roll = qty/(fw*gsm) in m/kg terms', () => {
-    const roll = { dispatchForm: 'roll', filmWidth: 1000, gsm: 100 };
+  // Issues 17.10 §2: a roll is ordered in metres — SO 26/909's 10,000 m read as kg
+  // came to 6.72 lakh m. Only a form literally named Kgs converts weight to metres.
+  it('calcMetres roll = the qty itself (metres)', () => {
+    const roll = { dispatchForm: 'roll', filmWidth: 435, gsm: 34.2 };
+    expect(calcMetres(roll, 10000)).toEqual({ net: 10000, withWastage: 10500 });
+  });
+  it('calcMetres Kgs = qty/(fw*gsm) in m/kg terms', () => {
+    const kgs = { dispatchForm: 'Kgs', filmWidth: 1000, gsm: 100 };
     // 1000 / ((1000/1000)*(100/1000)) = 1000 / 0.1 = 10000
-    expect(calcMetres(roll, 1000).net).toBe(10000);
+    expect(calcMetres(kgs, 1000).net).toBe(10000);
   });
   it('calcMetres prefers JSS values over the row', () => {
     const jss = { dispatchForm: 'bulk bag', height: 500 };
@@ -57,7 +63,7 @@ describe('pricing', () => {
     expect(getPM('A1', prices).price).toBe(75);
     expect(getPM('ZZ', prices)).toEqual({ price: 0, costPrice: 0, transport: 'At Actuals' });
   });
-  it('getUOM', () => { expect(getUOM('roll')).toBe('Kgs'); expect(getUOM('pouch')).toBe('Pcs'); });
+  it('getUOM', () => { expect(getUOM('roll')).toBe('Mtrs'); expect(getUOM('Kgs')).toBe('Kgs'); expect(getUOM('pouch')).toBe('Pcs'); });
   it('getDynamicCost from RM rate; multi-layer returns null', () => {
     const jss = [{ spec: 'A1', material: 'BOPP', pouchWeight: 10 }, { spec: 'A2', material: 'PET+POLY', pouchWeight: 12 }];
     expect(getDynamicCost('A1', { jss, matRates: { bopp: 100 } })).toBeCloseTo(1.0, 6); // 10g=0.01kg * 100

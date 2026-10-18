@@ -21,7 +21,8 @@ const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 /** Base unit of measure implied by a spec's dispatch form. (bomUOM 6380) */
 export function bomUOM(dispatchForm) {
   const df = String(dispatchForm || '').toLowerCase().trim();
-  if (df === 'roll' || df === 'rolls') return 'Kgs';
+  // Issues 17.10 §2: a roll SO's qty is metres, and a BOM scales straight off it
+  if (df === 'roll' || df === 'rolls') return 'Mtrs';
   if (df === 'pouch' || df === 'pouches') return 'Pouches';
   if (df === 'label' || df === 'labels') return 'Pieces';
   return 'Pcs';

@@ -20,19 +20,26 @@ function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.ge
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const rt = { textAlign: 'right' };
 
-// §46-50: the one dropdown the doc asks for.
-const READINESS_OPTIONS = [
-  { v: 'READY', label: 'Ready to plan' },
-  { v: 'PLATES', label: 'Not ready — plates' },
-  { v: 'MATERIAL', label: 'Not ready — material' },
-  { v: 'OTHERS', label: 'Not ready — others' },
+// Issues 17.10 §6: "the 'Ready to Plan' and whether we are planning for the entire
+// sale order, partial sale order … should be in the table header only. I could not
+// spot 'Ready to Plan', 'Plan Partial', or 'Plan Full'. Upon selecting a radio
+// button, the buttons on top should be enabled." So the per-row dropdowns at the far
+// right are gone: the radio picks the order and ONE action bar sitting directly above
+// the board (attached to the table's own scroll box, so it stays beside the header)
+// carries Full / Partial / Clear Ready and the not-ready reasons.
+const NOT_READY_OPTIONS = [
+  { v: 'PLATES', label: 'Plates' },
+  { v: 'MATERIAL', label: 'Material' },
+  { v: 'OTHERS', label: 'Others' },
 ];
 const REASON_LABEL = { PLATES: 'Plates', MATERIAL: 'Material', OTHERS: 'Others' };
 
 export default function PlanReadiness() {
   const { mods } = useData();
   const [board, setBoard] = useState([]);        // /readiness rows keyed by SO
-  const [draft, setDraft] = useState({});        // so -> { pick, mode, meters, date, note }
+  // Issues 17.10 §6: the action bar's inline form — '' | 'PARTIAL' | 'NOTREADY'.
+  const [act, setAct] = useState('');
+  const [form, setForm] = useState({ meters: '', reason: '', date: '', note: '' });
   const [busy, setBusy] = useState('');          // so currently saving
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
@@ -121,68 +128,104 @@ export default function PlanReadiness() {
     return list;
   }, [openRows, q, specFil]);
 
-  // The order whose material is being worked on — picked with the radio.
+  // The order picked with the radio — its material panel opens above, and the action
+  // bar over the board acts on it (Issues 17.10 §6).
   const pickedRow = useMemo(() => openRows.find((r) => r.so === matFor) || null, [openRows, matFor]);
+  const pickedState = pickedRow ? stateBySo[pickedRow.so] : null;
+
+  // Issues 17.10 §6: picking a row resets the bar's inline form to that order's state.
+  function pick(so) {
+    setMatFor(so);
+    setAct('');
+    setErr('');
+    const cur = stateBySo[so];
+    setForm({
+      meters: cur?.readyToPlan && cur.readyMode === 'PARTIAL' && cur.readyQty != null ? String(cur.readyQty) : '',
+      reason: cur && !cur.readyToPlan ? (cur.notReadyReason || '') : '',
+      date: cur && !cur.readyToPlan ? (cur.expectedReadyDate || '') : '',
+      note: cur && !cur.readyToPlan ? (cur.notReadyNote || '') : '',
+    });
+  }
 
   const readyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so]?.readyToPlan).length, [openRows, stateBySo]);
   const notReadyCount = useMemo(() => openRows.filter((r) => stateBySo[r.so] && !stateBySo[r.so].readyToPlan && stateBySo[r.so].notReadyReason).length, [openRows, stateBySo]);
 
-  const draftFor = (so) => {
-    if (draft[so]) return draft[so];
-    const cur = stateBySo[so];
-    if (!cur) return { pick: '', mode: '', meters: '', date: '', note: '' };
-    if (cur.readyToPlan) return { pick: 'READY', mode: cur.readyMode || 'COMPLETE', meters: cur.readyMode === 'PARTIAL' && cur.readyQty != null ? String(cur.readyQty) : '', date: '', note: '' };
-    if (cur.notReadyReason) return { pick: cur.notReadyReason, mode: '', meters: '', date: cur.expectedReadyDate || '', note: cur.notReadyNote || '' };
-    return { pick: '', mode: '', meters: '', date: '', note: '' };
-  };
-  const setDraftFor = (so, patch) => setDraft((d) => ({ ...d, [so]: { ...draftFor(so), ...patch } }));
-
-  async function apply(row) {
-    const so = row.so;
-    const d = draftFor(so);
-    setErr('');
-    if (!d.pick) { setErr(`Choose a readiness option for ${so}`); return; }
-    // Issues 2.4 §4: Partial is captured in METRES, so it is bounded by the order's
-    // metres — not by its piece count. Showing "of 50600" against a 12,650 m job read
-    // as though 50,600 metres could be entered, when 50,600 is the number of pouches.
-    const jobMetres = num(row.totalMt);
-    if (d.pick === 'READY') {
-      if (d.mode === 'PARTIAL') {
-        const q = num(d.meters);
-        if (!(q > 0)) { setErr(`Enter the metres ready for ${so} (must be greater than 0)`); return; }
-        if (jobMetres > 0 && q > jobMetres + 1e-9) {
-          setErr(`${so}: metres ready cannot exceed the ${Math.round(jobMetres).toLocaleString('en-IN')} m this order runs to`);
-          return;
-        }
-      } else if (d.mode !== 'COMPLETE') { setErr(`Choose Entire SO or Partial SO for ${so}`); return; }
-    } else {
-      if (!d.date) { setErr(`${so}: enter the tentative date it will be ready`); return; }
-      if (d.pick === 'OTHERS' && !String(d.note || '').trim()) { setErr(`${so}: describe what is stopping the planning`); return; }
-    }
+  // Issues 17.10 §6: the same POST /api/planning/ready calls the per-row controls made.
+  async function send(so, call, okMsg) {
     setBusy(so);
     try {
-      if (d.pick === 'READY') {
-        const qty = d.mode === 'PARTIAL' ? num(d.meters) : undefined;
-        await planningApi.setReady(so, true, d.mode, qty);
-        flash(d.mode === 'PARTIAL' ? `${so}: Ready to Plan — Partial (${qty} m)` : `${so}: Ready to Plan — Entire SO`);
-      } else {
-        await planningApi.setReady(so, false, undefined, undefined, {
-          notReadyReason: d.pick, expectedReadyDate: d.date, notReadyNote: d.note || undefined,
-        });
-        flash(`${so}: Not ready (${REASON_LABEL[d.pick]}) — tentative ${d.date}`);
-      }
-      setDraft((dd) => { const n = { ...dd }; delete n[so]; return n; });
+      await call();
+      flash(okMsg);
+      setAct('');
       await loadBoard();
     } catch (e) { setErr(e.message || `Could not update ${so}`); }
     finally { setBusy(''); }
   }
 
+  function markFull() {
+    if (!pickedRow) return;
+    const so = pickedRow.so;
+    setErr('');
+    send(so, () => planningApi.setReady(so, true, 'COMPLETE', undefined), `${so}: Ready to Plan — Entire SO`);
+  }
+
+  function savePartial() {
+    if (!pickedRow) return;
+    const so = pickedRow.so;
+    setErr('');
+    // Issues 2.4 §4: Partial is captured in METRES, so it is bounded by the order's
+    // metres — not by its piece count. Showing "of 50600" against a 12,650 m job read
+    // as though 50,600 metres could be entered, when 50,600 is the number of pouches.
+    const jobMetres = num(pickedRow.totalMt);
+    const qty = num(form.meters);
+    if (!(qty > 0)) { setErr(`Enter the metres ready for ${so} (must be greater than 0)`); return; }
+    if (jobMetres > 0 && qty > jobMetres + 1e-9) {
+      setErr(`${so}: metres ready cannot exceed the ${Math.round(jobMetres).toLocaleString('en-IN')} m this order runs to`);
+      return;
+    }
+    send(so, () => planningApi.setReady(so, true, 'PARTIAL', qty), `${so}: Ready to Plan — Partial (${qty} m)`);
+  }
+
+  function saveNotReady() {
+    if (!pickedRow) return;
+    const so = pickedRow.so;
+    setErr('');
+    if (!form.reason) { setErr(`${so}: choose why it is not ready (plates / material / others)`); return; }
+    if (!form.date) { setErr(`${so}: enter the tentative date it will be ready`); return; }
+    if (form.reason === 'OTHERS' && !String(form.note || '').trim()) { setErr(`${so}: describe what is stopping the planning`); return; }
+    send(so, () => planningApi.setReady(so, false, undefined, undefined, {
+      notReadyReason: form.reason, expectedReadyDate: form.date, notReadyNote: form.note || undefined,
+    }), `${so}: Not ready (${REASON_LABEL[form.reason]}) — tentative ${form.date}`);
+  }
+
+  // Clear Ready — the same un-mark the Production screen makes: ready=false, no reason.
+  function clearReady() {
+    if (!pickedRow) return;
+    const so = pickedRow.so;
+    setErr('');
+    setForm((f) => ({ ...f, meters: '' }));
+    send(so, () => planningApi.setReady(so, false), `${so}: Ready to Plan cleared`);
+  }
+
+  const statusTag = (cur) => (cur?.readyToPlan
+    ? <span className={'tag ' + (cur.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{cur.readyMode === 'PARTIAL' ? `Partial · ${cur.readyQty} m` : 'Entire SO'}</span>
+    : cur?.notReadyReason
+      ? <span className="tag tr" title={cur.notReadyNote || ''}>Not ready — {REASON_LABEL[cur.notReadyReason] || cur.notReadyReason} · by {cur.expectedReadyDate}</span>
+      : <span className="tag tgr">Not set</span>);
+
+  const noPick = !pickedRow;
+  const saving = !!pickedRow && busy === pickedRow.so;
+  const barBtn = { height: 28, fontSize: 12 };
+  // With an order picked, its messages show in the action bar the user is looking at
+  // (the board can sit a long scroll below the page title).
+  const msgInBar = !!pickedRow;
+
   return (
     <div id="app">
       <div className="pg-ttl">✅ Planning — Ready to Plan</div>
-      <div className="pg-sub">Mark each open sale order Ready to Plan (entire / partial SO), or record why it is not ready (plates / material / others) with the tentative ready date. Download the weekly / daily plans the PPC has saved.</div>
-      {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
-      {msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
+      <div className="pg-sub">Pick the radio button against a sale order, then use the buttons above the table to mark it Ready to Plan (full / partial SO), or record why it is not ready (plates / material / others) with the tentative ready date. Download the weekly / daily plans the PPC has saved.</div>
+      {!msgInBar && err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
+      {!msgInBar && msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
 
       <div className="stats">
         <div className="stat"><div className="sl">Open sale orders</div><div className="sv">{openRows.length}</div></div>
@@ -217,7 +260,7 @@ export default function PlanReadiness() {
 
       {/* The picked order's material — above the board, per §5. */}
       {pickedRow && (
-        <div className="card" style={{ marginTop: 12 }} aria-label="Material for the picked sale order">
+        <div className="card" id="plan-material-panel" style={{ marginTop: 12 }} aria-label="Material for the picked sale order">
           <div className="fbar" style={{ flexWrap: 'wrap' }}>
             <div className="ctitle" style={{ margin: 0 }}>
               Material for <span className="so-pill">{pickedRow.so}</span>
@@ -258,33 +301,106 @@ export default function PlanReadiness() {
             {specOptions.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
           </select>
         </div>
+        {/* Issues 17.10 §6: the action bar — directly on top of the board's scroll box,
+            so it always sits with the table header while the rows scroll beneath. */}
+        {openRows.length > 0 && (
+          <div role="toolbar" aria-label="Ready to Plan actions"
+            style={{ background: noPick ? 'var(--bg)' : '#fff8e1', border: '1px solid var(--bd)', borderBottom: 'none',
+              borderRadius: '8px 8px 0 0', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {noPick ? (
+                <span style={{ fontSize: 12, color: 'var(--i3)' }}>Pick the radio button against a sale order to mark it Ready to Plan.</span>
+              ) : (
+                <span style={{ fontSize: 12 }} aria-label="Selected sale order">
+                  Selected: <span className="so-pill">{pickedRow.so}</span>
+                  <span className="tag tb" style={{ marginLeft: 6, fontSize: 9 }}>{pickedRow.spec}</span>
+                  <span style={{ color: 'var(--i3)', marginLeft: 6 }}>{pickedRow.customer}</span>
+                  <span style={{ marginLeft: 6 }}>{statusTag(pickedState)}</span>
+                </span>
+              )}
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-g" style={barBtn} disabled={noPick || saving} onClick={markFull}>✓ Ready to Plan — Full</button>
+              <button className="btn btn-s" style={{ ...barBtn, ...(act === 'PARTIAL' ? { borderColor: 'var(--g)', color: 'var(--g)' } : null) }}
+                disabled={noPick || saving} aria-pressed={act === 'PARTIAL'}
+                onClick={() => setAct(act === 'PARTIAL' ? '' : 'PARTIAL')}>◐ Ready to Plan — Partial</button>
+              {pickedState?.readyToPlan && (
+                <button className="btn btn-s" style={barBtn} disabled={saving} onClick={clearReady}>Clear Ready</button>
+              )}
+              <button className="btn btn-s" style={{ ...barBtn, ...(act === 'NOTREADY' ? { borderColor: 'var(--red)', color: 'var(--red)' } : null) }}
+                disabled={noPick || saving} aria-pressed={act === 'NOTREADY'}
+                onClick={() => setAct(act === 'NOTREADY' ? '' : 'NOTREADY')}>✕ Not Ready…</button>
+              {!noPick && (
+                <button className="btn btn-s" style={barBtn} title="Show the material panel above"
+                  onClick={() => { try { document.getElementById('plan-material-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* jsdom */ } }}>📦 Material ↑</button>
+              )}
+            </div>
+            {!noPick && act === 'PARTIAL' && (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12 }}>Metres ready for <b>{pickedRow.so}</b>:</span>
+                <input type="number" step="any" min="0" className="nospin"
+                  max={pickedRow.totalMt ? Math.round(pickedRow.totalMt) : undefined}
+                  aria-label={`Metres ready for ${pickedRow.so}`}
+                  title={pickedRow.totalMt ? `This order runs to ${Math.round(pickedRow.totalMt).toLocaleString('en-IN')} metres` : undefined}
+                  placeholder={pickedRow.totalMt ? `metres (of ${Math.round(pickedRow.totalMt).toLocaleString('en-IN')} m)` : 'metres ready'}
+                  value={form.meters} autoFocus
+                  onChange={(e) => setForm((f) => ({ ...f, meters: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') savePartial(); }}
+                  style={{ width: 170, height: 28 }} />
+                <button className="btn btn-g" style={barBtn} disabled={saving} onClick={savePartial}>Save</button>
+                <button className="btn btn-s" style={barBtn} onClick={() => setAct('')}>Cancel</button>
+              </div>
+            )}
+            {!noPick && act === 'NOTREADY' && (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12 }}>Not ready — <b>{pickedRow.so}</b>:</span>
+                <select aria-label={`Not ready reason type for ${pickedRow.so}`} value={form.reason}
+                  onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} style={{ height: 28 }}>
+                  <option value="">— why? —</option>
+                  {NOT_READY_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+                </select>
+                <input type="date" aria-label={`Tentative ready date for ${pickedRow.so}`} title="Tentative ready date"
+                  value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} style={{ height: 28 }} />
+                {form.reason === 'OTHERS' && (
+                  <input placeholder="what is stopping planning?" aria-label={`Not ready reason for ${pickedRow.so}`} value={form.note}
+                    onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} style={{ width: 220, height: 28 }} />
+                )}
+                <button className="btn btn-g" style={barBtn} disabled={saving} onClick={saveNotReady}>Save</button>
+                <button className="btn btn-s" style={barBtn} onClick={() => setAct('')}>Cancel</button>
+              </div>
+            )}
+            {msgInBar && err && <div className="al al-r" style={{ margin: 0 }}>{err}</div>}
+            {msgInBar && msg && <div className="al al-g" style={{ margin: 0 }}>{msg}</div>}
+          </div>
+        )}
         {openRows.length === 0 ? <div className="al al-b">No open sale orders.</div> : (
           <div className="tw sy"><table>
             {/* Issues 2.2 §7: the PM board's display fields — SKU and FILM WIDTH above
                 all, since the planner judges plannability off the film width. */}
             <thead><tr>
-              <th style={{ width: 34, textAlign: 'center' }}>Material</th>
+              <th style={{ width: 34, textAlign: 'center' }}>Select</th>
               <th>Sale Order</th><th>Spec</th><th style={{ minWidth: 170 }}>SKU</th><th>Customer</th><th>Disp Loc</th>
               <th style={rt}>PO Qty</th><th style={rt}>Dispatched</th><th style={rt}>Balance</th>
               <th>Substrate</th><th style={rt}>Film W</th><th style={rt}>Thick (mic)</th><th style={rt}>GSM</th>
               <th style={rt}>Pouch W</th><th style={rt}>Pouch H</th><th style={rt}>Total Kg</th><th style={rt}>Total Mt</th>
-              <th>Readiness</th><th style={{ minWidth: 420 }}>Set readiness</th>
+              <th>Readiness</th>
             </tr></thead>
             <tbody>
               {visibleRows.length === 0 && (
-                <tr><td colSpan={19} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
+                <tr><td colSpan={18} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
               )}
               {visibleRows.map((r) => {
                 const cur = stateBySo[r.so];
-                const d = draftFor(r.so);
                 return (
                   <Fragment key={r.so}>
-                  <tr className={cur?.readyToPlan ? undefined : 'hi'}
-                      style={matFor === r.so ? { background: 'var(--gl)' } : undefined}>
+                  {/* Issues 17.10 §6: the picked row stands out from the not-ready 'hi'
+                      tint (both were --gl before), and a click anywhere on it picks it. */}
+                  <tr className={cur?.readyToPlan ? undefined : 'hi'} aria-selected={matFor === r.so}
+                      onClick={(e) => { if (e.target.tagName !== 'INPUT' && matFor !== r.so) pick(r.so); }}
+                      style={{ cursor: 'pointer', ...(matFor === r.so ? { background: '#fff3cd', boxShadow: 'inset 3px 0 0 var(--g)' } : null) }}>
                     <td style={{ textAlign: 'center' }}>
-                      <input type="radio" name="plan-material-so" checked={matFor === r.so}
-                        aria-label={`Material for ${r.so}`} style={{ cursor: 'pointer' }}
-                        onChange={() => { setMatFor(r.so); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ } }} />
+                      <input type="radio" name="plan-select-so" checked={matFor === r.so}
+                        aria-label={`Select ${r.so}`} style={{ cursor: 'pointer' }}
+                        onChange={() => pick(r.so)} />
                     </td>
                     <td><span className="so-pill">{r.so}</span></td>
                     <td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td>
@@ -303,46 +419,7 @@ export default function PlanReadiness() {
                     <td style={rt}>{r.pouchH || '—'}</td>
                     <td style={rt}>{r.totalKg ? r.totalKg.toFixed(1) : '—'}</td>
                     <td style={rt}>{r.totalMt ? Math.round(r.totalMt).toLocaleString('en-IN') : '—'}</td>
-                    <td>{cur?.readyToPlan
-                      ? <span className={'tag ' + (cur.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{cur.readyMode === 'PARTIAL' ? `Partial · ${cur.readyQty} m` : 'Entire SO'}</span>
-                      : cur?.notReadyReason
-                        ? <span className="tag tr" title={cur.notReadyNote || ''}>Not ready — {REASON_LABEL[cur.notReadyReason] || cur.notReadyReason} · by {cur.expectedReadyDate}</span>
-                        : <span className="tag tgr">Not set</span>}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <select aria-label={`Readiness for ${r.so}`} value={d.pick} onChange={(e) => setDraftFor(r.so, { pick: e.target.value })} style={{ height: 28 }}>
-                          <option value="">— select —</option>
-                          {READINESS_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-                        </select>
-                        {d.pick === 'READY' && (
-                          <select aria-label={`Ready mode for ${r.so}`} value={d.mode} onChange={(e) => setDraftFor(r.so, { mode: e.target.value })} style={{ height: 28 }}>
-                            <option value="">— entire / partial —</option>
-                            <option value="COMPLETE">Entire SO</option>
-                            <option value="PARTIAL">Partial SO</option>
-                          </select>
-                        )}
-                        {d.pick === 'READY' && d.mode === 'PARTIAL' && (
-                          <input type="number" step="any" min="0"
-                            max={r.totalMt ? Math.round(r.totalMt) : undefined}
-                            aria-label={`Metres ready for ${r.so}`}
-                            title={r.totalMt ? `This order runs to ${Math.round(r.totalMt).toLocaleString('en-IN')} metres` : undefined}
-                            placeholder={r.totalMt ? `metres (of ${Math.round(r.totalMt).toLocaleString('en-IN')} m)` : 'metres ready'}
-                            value={d.meters}
-                            onChange={(e) => setDraftFor(r.so, { meters: e.target.value })} style={{ width: 150, height: 28 }} />
-                        )}
-                        {d.pick && d.pick !== 'READY' && (
-                          <input type="date" aria-label={`Tentative ready date for ${r.so}`} title="Tentative ready date"
-                            value={d.date} onChange={(e) => setDraftFor(r.so, { date: e.target.value })} style={{ height: 28 }} />
-                        )}
-                        {d.pick === 'OTHERS' && (
-                          <input placeholder="what is stopping planning?" aria-label={`Not ready reason for ${r.so}`} value={d.note}
-                            onChange={(e) => setDraftFor(r.so, { note: e.target.value })} style={{ width: 200, height: 28 }} />
-                        )}
-                        <button className="btn btn-g" style={{ height: 28 }} disabled={busy === r.so || !d.pick} onClick={() => apply(r)}>
-                          {cur ? 'Update' : 'Save'}
-                        </button>
-                      </div>
-                    </td>
+                    <td>{statusTag(cur)}</td>
                   </tr>
                   </Fragment>
                 );

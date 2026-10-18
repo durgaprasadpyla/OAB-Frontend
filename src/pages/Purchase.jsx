@@ -18,6 +18,15 @@ import SupplierFinder from '../components/SupplierFinder.jsx';
 /** Quantity display: Indian grouping, up to 2 decimals, no forced trailing zeros. */
 const qtyStr = (v) => num(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
+// Issues 17.10 §7: the GRN Entry grid's tighter cells — headers may wrap too (the
+// global `thead th` is nowrap), so a two-word header never widens its column.
+const gc = { padding: '5px 6px', whiteSpace: 'normal' };
+
+/** A PO number that may wrap after each "/" (BLM/PUR/2026-2027/101) instead of mid-word. */
+const breakable = (s) => String(s || '').split('/').map((part, i, all) => (
+  <Fragment key={i}>{part}{i < all.length - 1 && <>/<wbr /></>}</Fragment>
+));
+
 /**
  * Days late/early vs expected delivery. Closed counts to the close date; open to today.
  * A cancelled PO is not expected any more, so it is neither late nor early. (purchDelayDays 6235)
@@ -347,6 +356,8 @@ export default function Purchase() {
 
   // GRN-link state
   const [grnFor, setGrnFor] = useState(null); // poNum whose GRN is being linked
+  // Issues 17.10 §7: the open PO picked by its radio — its actions sit above the table
+  const [selPo, setSelPo] = useState(null);
   const [docPo, setDocPo] = useState(null);   // PO being previewed as a document
   const [trackMsg, setTrackMsg] = useState(null);
   const [f, setF] = useState(EMPTY_PO_FILTERS); // the PO filter bar over both tracking cards
@@ -638,6 +649,11 @@ export default function Purchase() {
     return groupByPo(kept).sort((a, b) => (delayDays(b.po) ?? 0) - (delayDays(a.po) ?? 0)); // most overdue first
   }, [allLines, f]);
 
+  // Issues 17.10 §7: the picked PO, while it is still in the open list. A PO that
+  // leaves it (closed, cancelled, filtered out) drops the selection with it.
+  const selGroup = selPo ? openGroups.find((g) => g.po.poNum === selPo) || null : null;
+  useEffect(() => { if (selPo && !selGroup) setSelPo(null); }, [selPo, selGroup]);
+
   const closedGroups = useMemo(() => {
     const kept = filterPoLines(allLines, f).filter((r) => r.status === 'Closed' || r.status === 'Cancelled');
     const when = (po) => String(po.closedDate || po.cancelledDate || '');
@@ -659,7 +675,7 @@ export default function Purchase() {
   }, [pos, payStat, asl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const TABS = [['gen', '① Generate PO'], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments'], ['sup', '④ Suppliers by Item']];
-  const TRACK_COLS = 14;
+  const TRACK_COLS = 11; // Issues 17.10 §7: radio + 10 (Actions gone, receipt + material merged)
   const CLOSED_COLS = 13;
 
   function dueInCell(po) {
@@ -834,84 +850,135 @@ export default function Purchase() {
             {!openGroups.length ? (
               <div className="al al-y">{filterOn ? 'No open POs match the filters.' : 'No open or partially received purchase orders.'}</div>
             ) : (
-              <div className="tw sy">
-                <table aria-label="Open purchase orders">
-                  <thead>
-                    <tr>
-                      <th>PO #</th>
-                      <th>Supplier</th>
-                      <th>Item Code</th>
-                      <th style={{ minWidth: 160 }}>Item Description</th>
-                      <th>Material Type</th>
-                      <th>Speciality</th>
-                      <th style={{ textAlign: 'right' }}>Rate</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
-                      <th style={{ textAlign: 'right' }}>PO Qty</th>
-                      <th style={{ textAlign: 'right' }}>Qty Recd</th>
-                      <th>Expected</th>
-                      <th>Actual Receipt</th>
-                      <th style={{ textAlign: 'right' }}>Delay</th>
-                      <th style={{ textAlign: 'center' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {openGroups.map(({ po, rows }) => {
-                      const stage = stageOf(po);
-                      const dd = delayDays(po);
-                      return (
-                        <Fragment key={po.poNum}>
-                          {rows.map((r, ii) => {
-                            const it = r.line;
-                            const first = ii === 0;
-                            const rq = num(it.receivedQty), oq = num(it.qty);
-                            const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
-                            return (
-                              <tr key={r.key} style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
-                                <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', whiteSpace: 'nowrap' }}>
-                                  {first ? (
-                                    <>
-                                      {po.poNum}
-                                      <div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div>
-                                      <GrnRefs po={po} grnNos={storeGrnsForPo(storeGrns, po.poNum).map((g) => g.grnNo)} />
-                                    </>
-                                  ) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
-                                </td>
-                                <td style={{ fontSize: 11 }}>{first ? po.supplier : ''}</td>
-                                {identityCells(r)}
-                                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                                <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                                <td style={{ textAlign: 'right' }}>{qtyStr(oq)}</td>
-                                <td style={{ textAlign: 'right', fontWeight: 700, color: rColor }}>{qtyStr(rq)}</td>
-                                <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-') : ''}</td>
-                                <td style={{ whiteSpace: 'nowrap' }}>{first ? (po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '-') : ''}</td>
-                                <td style={{ textAlign: 'right', fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>
-                                  {first ? (dd == null ? '-' : (dd > 0 ? '⚠ +' + dd : dd)) : ''}
-                                </td>
-                                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                  {first && (
-                                    <>
-                                      <button className="btn btn-s" style={{ height: 27, padding: '0 8px', marginRight: 4 }}
-                                        onClick={() => setDocPo(po)} title={`Purchase Order document for ${po.poNum}`} aria-label={`Open PO document ${po.poNum}`}>📄 PO</button>
-                                      {/* §PU2: the stores desk receives; this links the GRN it booked. */}
-                                      <button className="btn btn-g" style={{ height: 27, padding: '0 10px' }} onClick={() => openGRN(po)}
-                                        title="Link the GRN the stores desk booked against this PO" aria-label={`Link GRN ${po.poNum}`}>🔗 Link GRN</button>
-                                    </>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
+              <>
+                {/* Issues 17.10 §7: "the horizontal scroll needs to be avoided … a radio
+                    button selection and once selected, the buttons can move to the top of
+                    the table." The Actions column is gone; the picked PO's actions live
+                    here, with the same handlers they had in the row. */}
+                <div className="fbar" role="toolbar" aria-label="Selected PO actions"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--bd)', borderRadius: 8, padding: '6px 10px', marginBottom: 8 }}>
+                  <span style={{ fontSize: 12 }} aria-live="polite">
+                    {selGroup
+                      ? <>Selected: <b style={{ fontFamily: 'monospace', color: 'var(--blu)' }}>{selGroup.po.poNum}</b>
+                          {selGroup.po.supplier ? <span style={{ color: 'var(--i2)' }}> · {selGroup.po.supplier}</span> : null}</>
+                      : <span style={{ color: 'var(--i3)' }}>Pick the radio button of a PO to view its PO document, link its GRN or close it.</span>}
+                  </span>
+                  <div className="fbar-actions">
+                    <button className="btn btn-s" disabled={!selGroup}
+                      onClick={() => selGroup && setDocPo(selGroup.po)}
+                      title={selGroup ? `Purchase Order document for ${selGroup.po.poNum}` : 'Pick a PO first'}
+                      aria-label={selGroup ? `Open PO document ${selGroup.po.poNum}` : 'Open PO document'}>📄 PO</button>
+                    {/* §PU2: the stores desk receives; this links the GRN it booked. */}
+                    <button className="btn btn-g" disabled={!selGroup}
+                      onClick={() => selGroup && openGRN(selGroup.po)}
+                      title={selGroup ? 'Link the GRN the stores desk booked against this PO' : 'Pick a PO first'}
+                      aria-label={selGroup ? `Link GRN ${selGroup.po.poNum}` : 'Link GRN'}>🔗 Link GRN</button>
+                    {/* Issues 17.10 §7: the client named "Close PO". Same forceClose as the
+                        Link GRN panel's Force Close (which asks nothing); one click on a
+                        toolbar is easier to misfire than inside the panel, so it confirms. */}
+                    <button className="btn btn-b" disabled={!selGroup || busy}
+                      onClick={() => {
+                        if (!selGroup) return;
+                        const po = selGroup.po;
+                        if (!window.confirm(`Close ${po.poNum} (${po.supplier || 'no supplier'}) without waiting for the rest of the receipt? It can be reopened from Recently Closed.`)) return;
+                        forceClose(po);
+                      }}
+                      title={selGroup ? 'Close this PO now (same as Force Close in the Link GRN panel)' : 'Pick a PO first'}
+                      aria-label={selGroup ? `Close PO ${selGroup.po.poNum}` : 'Close PO'}>✖ Close PO</button>
+                  </div>
+                </div>
+                <div className="tw sy">
+                  {/* Issues 17.10 §7: a FIXED layout with declared widths (an auto layout
+                      is what once squeezed the GRN price box to 27px) — the description
+                      takes what is left, long text wraps, and nothing pushes the table
+                      past the card. Expected / Actual / Delay share one Receipt cell and
+                      Material Type / Speciality one cell; every value is still shown. */}
+                  <table aria-label="Open purchase orders" style={{ tableLayout: 'fixed', width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...gc, width: 30 }} aria-label="Select"></th>
+                        <th style={{ ...gc, width: 128 }}>PO #</th>
+                        <th style={{ ...gc, width: 112 }}>Supplier</th>
+                        <th style={{ ...gc, width: 78 }}>Item Code</th>
+                        <th style={{ ...gc, width: 'auto' }}>Item Description</th>
+                        <th style={{ ...gc, width: 132 }}>Material Type / Speciality</th>
+                        <th style={{ ...gc, width: 78, textAlign: 'right' }}>Rate</th>
+                        <th style={{ ...gc, width: 92, textAlign: 'right' }}>Amount</th>
+                        <th style={{ ...gc, width: 66, textAlign: 'right' }}>PO Qty</th>
+                        <th style={{ ...gc, width: 70, textAlign: 'right' }}>Qty Recd</th>
+                        <th style={{ ...gc, width: 118 }}>Receipt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openGroups.map(({ po, rows }) => {
+                        const stage = stageOf(po);
+                        const dd = delayDays(po);
+                        const picked = selPo === po.poNum;
+                        return (
+                          <Fragment key={po.poNum}>
+                            {rows.map((r, ii) => {
+                              const it = r.line;
+                              const first = ii === 0;
+                              const rq = num(it.receivedQty), oq = num(it.qty);
+                              const rColor = oq > 0 && rq >= oq ? 'var(--g)' : (rq > 0 ? 'var(--blu)' : 'var(--i3)');
+                              const blank = r.empty ? '' : '—';
+                              return (
+                                <tr key={r.key} className={picked ? 'hi' : undefined}
+                                  style={first ? { borderTop: '2px solid var(--bd)' } : undefined}>
+                                  <td className="rowsel" style={{ ...gc, width: 30 }}>
+                                    {first && (
+                                      <input type="radio" name="grn-open-po" checked={picked} style={{ margin: 0, verticalAlign: 'middle' }}
+                                        aria-label={`Select PO ${po.poNum}`} onChange={() => setSelPo(po.poNum)} />
+                                    )}
+                                  </td>
+                                  <td style={{ ...gc, fontFamily: 'monospace', fontWeight: 700, color: 'var(--blu)', fontSize: 11, overflowWrap: 'anywhere' }}>
+                                    {first ? (
+                                      <>
+                                        {breakable(po.poNum)}
+                                        <div style={{ fontSize: 9, fontWeight: 700, color: stage.color }}>{stage.label}</div>
+                                        <GrnRefs po={po} grnNos={storeGrnsForPo(storeGrns, po.poNum).map((g) => g.grnNo)} />
+                                      </>
+                                    ) : <span style={{ color: 'var(--i3)', paddingLeft: 8 }}>↳</span>}
+                                  </td>
+                                  <td style={{ ...gc, fontSize: 11, overflowWrap: 'anywhere' }}>{first ? po.supplier : ''}</td>
+                                  <td style={{ ...gc, fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere' }}>{r.id.code || blank}</td>
+                                  <td style={{ ...gc, overflowWrap: 'anywhere' }}>
+                                    {r.id.description || it.item}{it.unit ? <span style={{ color: 'var(--i3)', fontSize: 10 }}> ({it.unit})</span> : null}
+                                  </td>
+                                  <td style={{ ...gc, fontSize: 11, overflowWrap: 'anywhere' }}>
+                                    <div title="Material Type">{r.id.materialType || blank}</div>
+                                    <div title="Speciality" style={{ color: 'var(--i2)', fontSize: 10 }}>{r.id.specialty || blank}</div>
+                                  </td>
+                                  <td style={{ ...gc, textAlign: 'right' }}>{num(it.rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                  <td style={{ ...gc, textAlign: 'right', fontWeight: 700 }}>{num(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                  <td style={{ ...gc, textAlign: 'right' }}>{qtyStr(oq)}</td>
+                                  <td style={{ ...gc, textAlign: 'right', fontWeight: 700, color: rColor }}>{qtyStr(rq)}</td>
+                                  <td style={{ ...gc, fontSize: 11, lineHeight: 1.35 }} aria-label={first ? `Receipt of ${po.poNum}` : undefined}>
+                                    {first && (
+                                      <>
+                                        <div><span style={{ color: 'var(--i3)' }}>Exp </span>{po.expectedDelivery ? fmtDate(po.expectedDelivery) : '-'}</div>
+                                        <div><span style={{ color: 'var(--i3)' }}>Act </span>{po.actualReceiptDate ? fmtDate(po.actualReceiptDate) : '-'}</div>
+                                        <div style={{ fontWeight: 700, color: dd == null ? 'var(--i3)' : (dd > 0 ? 'var(--red)' : 'var(--g)') }}>
+                                          <span style={{ color: 'var(--i3)', fontWeight: 400 }}>Delay </span>{dd == null ? '-' : (dd > 0 ? '⚠ +' + dd : dd)}
+                                        </div>
+                                      </>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
 
-                          {grnFor === po.poNum && (
-                            <GrnLinkPanel po={po} ctx={ctx} colSpan={TRACK_COLS} loadGrns={loadStoreGrns}
-                              onLink={linkGrn} onForceClose={forceClose} onCancel={closeGRN} busy={busy} />
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            {grnFor === po.poNum && (
+                              <GrnLinkPanel po={po} ctx={ctx} colSpan={TRACK_COLS} loadGrns={loadStoreGrns}
+                                onLink={linkGrn} onForceClose={forceClose} onCancel={closeGRN} busy={busy} />
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
 

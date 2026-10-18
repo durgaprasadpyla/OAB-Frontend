@@ -29,6 +29,8 @@ import {
   buildCsaReport, markSkuCsaReceived, answerCsaReport, csaStatusLabel,
 } from '../lib/csa.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
+import { csaDispatchForm, csaVisibleFields, csaFilmWidthChoices, requestedFilmWidth, widthKey } from '../lib/csaFields.js';
+import { subLayersFromStructure } from './SubstrateLayers.jsx';
 
 // CSA panels shared by QC and PM over the sales blob (module 12).
 //   <CsaPanel role="qc" />    QC writes the report from a pending sample
@@ -344,6 +346,9 @@ function CsaReportView({ report: r, sales, onClose }) {
     ['GSM', r.gsm], ['Pouch Weight', r.pouch_weight ? r.pouch_weight + 'g' : ''], ['Pouches/kg', r.pouches_per_kg],
     ['Glue / tape', r.glue_tape], ['Printed', r.printed],
     ['Print Repeat', r.print_repeat ? r.print_repeat + 'mm' : ''], ['Sleeve Repeat', r.sleeve_repeat ? r.sleeve_repeat + 'mm' : ''],
+    // Issues 17.10 §8: the roll / bag / sleeve measurements
+    ['Core', r.core_in ? r.core_in + ' in' : ''], ['Per Reel', r.per_reel_kg ? r.per_reel_kg + ' kg' : ''],
+    ['Gusset', r.gusset ? r.gusset + 'mm' : ''], ['Lay-flat Width', r.lay_flat ? r.lay_flat + 'mm' : ''],
   ].filter((f) => f[1] && String(f[1]) !== '0' && String(f[1]) !== '0mm');
   if (r.source === 'direct' && r.responsible_person) rows.unshift(['Responsible Person', r.responsible_person]);
 
@@ -400,6 +405,51 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
   const leadNames = [...new Set((sales.leads || []).map((l) => String((l && (l.client_name || l.company_name)) || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
   const partyOptions = party === 'lead' ? leadNames : custNames;
+
+  // Issues 17.10 §8: the measurements follow the dispatch form — a roll is not asked
+  // for pouch height or pouches per kg. Unknown form → every field.
+  const dispatchForm = csaDispatchForm(sku, f);
+  const visible = csaVisibleFields(dispatchForm);
+
+  // Issues 17.10 §8: film width is picked from the Item Master (the JSS / Add SKU
+  // widths), narrowed by the substrates chosen above. A site with no film in the
+  // Item Master keeps the typed number, as the micron does.
+  const film = csaFilmWidthChoices(items, f);
+  const filmNow = widthKey(f.film_width);
+  // the widths the rep's requisition structure already names ("… · 435 mm + …")
+  const reqLayers = sku && (Array.isArray(sku.structure_layers) && sku.structure_layers.length
+    ? sku.structure_layers : subLayersFromStructure(sku.structure));
+  const reqWidth = requestedFilmWidth(reqLayers);
+  useEffect(() => {
+    // a NEW report starts on the width the rep asked for; an edit keeps what was saved
+    if (!draft.editId && reqWidth && !widthKey(draft.form.film_width)) set('film_width', reqWidth);
+  }, [reqWidth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const field = (fd) => {
+    if (fd.type === 'yesno') return <S key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} opts={YES_NO} />;
+    if (fd.type === 'text') return <T key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} />;
+    if (fd.type === 'film' && fromMaster.length) {
+      return (
+        <div className="fg" key={fd.k}>
+          <label>Film width (mm)</label>
+          <select value={filmNow} aria-label="Film width" onChange={(e) => set('film_width', e.target.value)}>
+            <option value="">{film.options.length ? '— select —'
+              : film.basis === 'layers' ? '— no width stocked in every layer —' : '— no width in the Item Master —'}</option>
+            {/* a width saved before the master changed (or the substrates moved) stays selectable */}
+            {filmNow && !film.options.includes(filmNow) && <option value={filmNow}>(current) {filmNow}</option>}
+            {film.options.map((w) => <option key={w} value={w}>{w}</option>)}
+          </select>
+          {film.partial.length > 0 && (
+            <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }} aria-label="Film width note">
+              Stocked in some layers only: {film.partial.slice(0, 4).map((p) => `${p.width} mm (missing in ${p.missing.join(', ')})`).join('; ')}
+              {film.partial.length > 4 ? ' …' : ''}
+            </div>
+          )}
+        </div>
+      );
+    }
+    return <N key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} />;
+  };
 
   return (
     <div className="card">
@@ -510,22 +560,17 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
         );
       })}
 
-      <div className="ctitle" style={{ marginTop: 12 }}>Measurements</div>
+      <div className="ctitle" style={{ marginTop: 12 }}>
+        Measurements
+        {/* Issues 17.10 §8: which dispatch form the fields below are for */}
+        <span className="tag tgr" style={{ marginLeft: 8, fontSize: 9 }} aria-label="Measurements for dispatch form">
+          {!dispatchForm ? 'Dispatch form not set — all measurements'
+            : visible.kind === 'other' ? `Dispatch form: ${dispatchForm} — all measurements`
+              : `Dispatch form: ${dispatchForm}`}
+        </span>
+      </div>
       <div className="g4">
-        <N label="Ink GSM" v={f.ink_gsm} on={(v) => set('ink_gsm', v)} />
-        <N label="Adhesive GSM" v={f.adhesive_gsm} on={(v) => set('adhesive_gsm', v)} />
-        <T label="Coating" v={f.coating} on={(v) => set('coating', v)} />
-        <N label="Film width" v={f.film_width} on={(v) => set('film_width', v)} />
-        <N label="Pouch height" v={f.pouch_height} on={(v) => set('pouch_height', v)} />
-        <N label="Pouch width" v={f.pouch_width} on={(v) => set('pouch_width', v)} />
-        <N label="Seal width" v={f.seal_width} on={(v) => set('seal_width', v)} />
-        <N label="GSM" v={f.gsm} on={(v) => set('gsm', v)} />
-        <N label="Pouch weight" v={f.pouch_weight} on={(v) => set('pouch_weight', v)} />
-        <N label="Pouches per kg" v={f.pouches_per_kg} on={(v) => set('pouches_per_kg', v)} />
-        <N label="Print repeat" v={f.print_repeat} on={(v) => set('print_repeat', v)} />
-        <N label="Sleeve repeat" v={f.sleeve_repeat} on={(v) => set('sleeve_repeat', v)} />
-        <S label="Glue / tape" v={f.glue_tape} on={(v) => set('glue_tape', v)} opts={YES_NO} />
-        <S label="Printed" v={f.printed} on={(v) => set('printed', v)} opts={YES_NO} />
+        {visible.fields.map(field)}
       </div>
 
       <div className="fg">
