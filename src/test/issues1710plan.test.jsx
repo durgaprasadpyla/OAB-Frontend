@@ -19,14 +19,14 @@ const OAB = oabModule({ SF: [
   { so: '26/772', spec: 'A1405', customer: 'VSA Foods', jobName: 'Coconut water sleeve', dispLoc: 'Dindigul', poQty: 100000, invDisp: 0, manDisp: 0, fg: 0, closed: false, poDate: '2026-09-21' },
 ] });
 
-function mount(readiness = []) {
+function mount(readiness = [], { oab = OAB, jss = JSS } = {}) {
   const posted = [];
   // renderApp's harness, but with the planning endpoints wrapped in BEFORE the first
   // render — the board loads the stored readiness on mount.
   localStorage.setItem('blm_token', 't');
   localStorage.setItem('blm_user', 'plan');
   localStorage.setItem('blm_role', 'plan');
-  installFetch(JSON.parse(JSON.stringify({ oab: OAB, jss: JSS, customers: [], prices: {} })), { role: 'plan', user: 'plan' });
+  installFetch(JSON.parse(JSON.stringify({ oab, jss, customers: [], prices: {} })), { role: 'plan', user: 'plan' });
   const base = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -125,5 +125,22 @@ describe('PLAN — Ready to Plan actions sit above the board (Issues 17.10 §6)'
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]).toMatchObject({ so: '26/771', ready: false });
     expect(posted[0].notReadyReason).toBeUndefined();
+  });
+
+  // Issues 17.10: a roll is ordered in metres — the screen used qty × width for every
+  // form, so a 10,000 m roll on 435 mm film offered "of 4,35,000 m". It now agrees with
+  // the board and with the server's Ready check.
+  it('bounds a roll’s Partial by its ordered metres, not metres × film width', async () => {
+    const jss = [{ spec: 'R9', customer: 'Kovai', jobName: 'Roll job', dispatchForm: 'Roll', filmWidth: 435, width: 435, gsm: 34, status: 'Active' }];
+    const oab = oabModule({ SF: [{ so: '26/909', spec: 'R9', customer: 'Kovai', jobName: 'Roll job', poQty: 10000, invDisp: 0, manDisp: 0, fg: 0, closed: false, poDate: '2026-10-01' }] });
+    const { posted } = mount([], { oab, jss });
+    await userEvent.click(await screen.findByLabelText('Select 26/909'));
+    await userEvent.click(partial());
+    const box = screen.getByLabelText('Metres ready for 26/909');
+    expect(box).toHaveAttribute('max', '10000');
+    await userEvent.type(box, '10001');
+    await userEvent.click(within(bar()).getByRole('button', { name: /^Save$/ }));
+    expect(await screen.findByText(/cannot exceed the 10,000 m/)).toBeInTheDocument();
+    expect(posted.length).toBe(0);
   });
 });

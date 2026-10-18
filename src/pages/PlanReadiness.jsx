@@ -2,7 +2,7 @@ import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { useData } from '../data.jsx';
 import { planningApi } from '../api.js';
 import { dash, today } from '../lib/format.js';
-import { balance } from '../lib/calc.js';
+import { balance, calcMetres, calcKg } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoBomDownloads from '../components/SoBomDownloads.jsx';
@@ -94,8 +94,11 @@ export default function PlanReadiness() {
     ['SF', 'OT'].forEach((sh) => (oab[sh] || []).forEach((r) => {
       if (r.closed) return;
       const j = findSpecForRow(jss, r);
-      const pw = j ? num(j.pouchWeight) : 0;
-      const widthMm = j ? num(j.width) : 0;
+      // Issues 17.10: the job's metres and kg by its dispatch form, exactly as the OAB
+      // board and the server's Ready check work them out — this used qty × pouch width
+      // for every form, so a 10,000 m roll read as 4,35,000 m.
+      const mt = calcMetres(r, num(r.poQty), j);
+      const kg = calcKg(r, num(r.poQty), j);
       rows.push({
         ...r,
         sheet: sh,
@@ -112,8 +115,8 @@ export default function PlanReadiness() {
         gsm: (j && j.gsm) || '',
         pouchW: (j && j.width) || '',
         pouchH: (j && j.height) || '',
-        totalKg: pw > 0 ? num(r.poQty) * pw / 1000 : 0,
-        totalMt: widthMm > 0 ? num(r.poQty) * widthMm / 1000 : 0,
+        totalKg: kg ? kg.net : 0,
+        totalMt: mt.net,
       });
     }));
     return rows.sort((a, b) => String(b.so).localeCompare(String(a.so), undefined, { numeric: true }));
