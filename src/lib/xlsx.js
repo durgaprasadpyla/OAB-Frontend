@@ -25,6 +25,21 @@ export function exportAOA(rows, filename, sheetName = 'Sheet1') {
   x.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');
 }
 
+/**
+ * Download several sheets in one workbook: `[{ name, rows, widths? }]`, rows an
+ * array-of-arrays, widths optional column widths in characters.
+ */
+export function exportSheets(sheets, filename) {
+  const x = X();
+  const wb = x.utils.book_new();
+  (sheets || []).forEach((sh) => {
+    const ws = x.utils.aoa_to_sheet(sanitizeRows(sh.rows));
+    if (sh.widths) ws['!cols'] = sh.widths.map((w) => ({ wch: w }));
+    x.utils.book_append_sheet(wb, ws, sh.name);
+  });
+  x.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');
+}
+
 /** Download array-of-objects using explicit columns [{key,label}]. */
 export function exportObjects(items, columns, filename, sheetName = 'Sheet1') {
   const header = columns.map((c) => c.label);

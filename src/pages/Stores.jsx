@@ -7,7 +7,7 @@ import { isOpenPo, poStatus } from '../lib/poLines.js';
 import FgEntryPanel from '../components/FgEntryPanel.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
-import { exportAOA } from '../lib/xlsx.js';
+import { exportSheets } from '../lib/xlsx.js';
 import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
@@ -133,6 +133,8 @@ export function OnHand({ flash: flashProp, readOnly = false }) {
   const [fSpec, setFSpec] = useState('');
   const [fMic, setFMic] = useState('');
   const [fDept, setFDept] = useState('');
+  // Stock by item code: "I want a filter based on the item code" (BLM001, BLM002 …).
+  const [fCode, setFCode] = useState('');
   // Issues 3.1: "In the main page filters I need to have a filter for status to get
   // the amount that is in the moving stocks, non-moving stocks, rejected stocks, or
   // QC hold stocks." Status lives on each ROLL, so an item matches when it holds any
@@ -218,16 +220,17 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
    * sort as numbers — 100 does not belong before 12.
    */
   const opts = (key) => {
-    const others = { fMat, fSub, fSpec, fMic, fDept };
-    others[{ materialType: 'fMat', subGroup: 'fSub', specialtyName: 'fSpec', microns: 'fMic', departmentName: 'fDept' }[key]] = '';
+    const others = { fMat, fSub, fSpec, fMic, fDept, fCode };
+    others[{ materialType: 'fMat', subGroup: 'fSub', specialtyName: 'fSpec', microns: 'fMic', departmentName: 'fDept', code: 'fCode' }[key]] = '';
     const pool = rows.filter((r) => (
       (!others.fMat || String(r.materialType || '') === others.fMat)
       && (!others.fSub || String(r.subGroup || '') === others.fSub)
       && (!others.fSpec || String(r.specialtyName || '') === others.fSpec)
       && (!others.fMic || String(r.microns || '') === others.fMic)
       && (!others.fDept || String(r.departmentName || '') === others.fDept)
+      && (!others.fCode || String(r.code || '') === others.fCode)
     ));
-    const chosen = { materialType: fMat, subGroup: fSub, specialtyName: fSpec, microns: fMic, departmentName: fDept }[key];
+    const chosen = { materialType: fMat, subGroup: fSub, specialtyName: fSpec, microns: fMic, departmentName: fDept, code: fCode }[key];
     const set = new Set(pool.map((r) => String(r[key] || '').trim()).filter(Boolean));
     if (chosen) set.add(chosen);
     const list = [...set];
@@ -242,6 +245,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       if (fSpec && String(r.specialtyName || '') !== fSpec) return false;
       if (fMic && String(r.microns || '') !== fMic) return false;
       if (fDept && String(r.departmentName || '') !== fDept) return false;
+      if (fCode && String(r.code || '') !== fCode) return false;
       if (fStatus && !num(((r.byStatus || {})[fStatus] || {}).qty)) return false;
       if (!t) return true;
       if ([r.code, r.name, r.materialType, r.subGroup, r.specialtyName].some((v) => String(v || '').toLowerCase().includes(t))) return true;
@@ -250,7 +254,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       const tt = t.replace(/[\s-]/g, '');
       return codes.some((c) => c.includes(t) || c.replace(/[\s-]/g, '').includes(tt));
     });
-  }, [rows, q, fMat, fSub, fSpec, fMic, fDept, fStatus, codesByItem]);
+  }, [rows, q, fMat, fSub, fSpec, fMic, fDept, fCode, fStatus, codesByItem]);
 
   // With a disposition chosen the figures answer the question that was asked —
   // "the amount that is in the moving stocks, non-moving stocks, rejected stocks or
@@ -306,6 +310,11 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
    * Excel, with the location and also the status of the material, whether it is
    * moving, non-moving, sample, or rejected." One row per roll / can, for the items
    * the filters currently show, and — with a disposition chosen — only rolls of it.
+   *
+   * Grouped by item code: "how much 460 mm anti-fog BOPP is present" must be read
+   * straight off the sheet, so every item opens with an ITEM TOTAL row (its code,
+   * description, microns and total on hand) and its individual rolls follow it. A
+   * second sheet lists just the totals, one line per item code.
    */
   async function exportExcel() {
     setExporting(true);
@@ -314,18 +323,55 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
       const ids = new Set(visible.map((r) => String(r.id)));
       const picked = all.filter((u) => ids.has(String(u.itemId)) && (!fStatus || (u.status || 'MOVING') === fStatus));
       if (!picked.length) { flash('y', 'Nothing to export — no rolls or cans match these filters.'); return; }
+      const round2 = (v) => Math.round(v * 100) / 100;
+      const groups = new Map();
+      picked.forEach((u) => {
+        const k = String(u.itemId);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(u);
+      });
+      const items = [...groups.values()].map((us) => {
+        us.sort((a, b) => String(a.receivedAt || '').localeCompare(String(b.receivedAt || '')));   // FIFO, as issued
+        return {
+          u0: us[0], units: us, uom: us[0].uom || '',
+          total: round2(us.reduce((t, u) => t + num(u.qtyRemaining), 0)),
+          value: round2(us.reduce((t, u) => t + num(u.qtyRemaining) * num(u.price), 0)),
+        };
+      }).sort((a, b) => String(a.u0.itemCode || '').localeCompare(String(b.u0.itemCode || ''), undefined, { numeric: true }));
+      const ident = (u) => [u.itemCode || '', u.itemName || '', u.materialType || '', u.subGroup || '', u.specialtyName || '', u.microns || '', u.departmentName || ''];
+
       const header = ['Item Code', 'Description', 'Material', 'Sub-Group', 'Speciality', 'Microns', 'Department',
-        'Internal Code', 'GRN', 'Supplier', 'Supplier Label', 'Location', 'Width (mm)', 'Received', 'Remaining', 'UOM',
+        'Total on hand', 'UOM', 'Rolls / cans', 'Line',
+        'Internal Code', 'GRN', 'Supplier', 'Supplier Label', 'Location', 'Width (mm)', 'Received', 'Remaining',
         'Price', 'Value', 'Status', 'Expiry', 'Received on'];
-      const body = picked.map((u) => [
-        u.itemCode || '', u.itemName || '', u.materialType || '', u.subGroup || '', u.specialtyName || '', u.microns || '',
-        u.departmentName || '', u.internalCode || '', u.grnNo || '', u.supplier || '', u.supplierCode || '', u.location || '',
-        num(u.widthMm) || '', num(u.qtyReceived), num(u.qtyRemaining), u.uom || '', num(u.price) || '',
-        Math.round(num(u.qtyRemaining) * num(u.price) * 100) / 100, statusLabel(u.status || 'MOVING'),
-        u.expiryDate || '', u.receivedAt ? String(u.receivedAt).slice(0, 10) : '',
-      ]);
-      exportAOA([header, ...body], `Raw_Material_On_Hand_${today()}.xlsx`, 'Material on hand');
-      flash('g', `Exported ${picked.length} roll(s) / can(s) to Excel.`);
+      const body = [];
+      items.forEach((g) => {
+        body.push([...ident(g.u0), g.total, g.uom, g.units.length, 'ITEM TOTAL',
+          '', '', '', '', '', '', '', g.total, '', g.value, '', '', '']);
+        g.units.forEach((u) => body.push([...ident(u), '', u.uom || '', '', 'Roll / can',
+          u.internalCode || '', u.grnNo || '', u.supplier || '', u.supplierCode || '', u.location || '',
+          num(u.widthMm) || '', num(u.qtyReceived), num(u.qtyRemaining), num(u.price) || '',
+          round2(num(u.qtyRemaining) * num(u.price)), statusLabel(u.status || 'MOVING'),
+          u.expiryDate || '', u.receivedAt ? String(u.receivedAt).slice(0, 10) : '']));
+      });
+      // Grand total in kilograms — metres, litres and numbers cannot be added to it.
+      const kgItems = items.filter((g) => isKgUom(g.uom));
+      const nonKg = items.length - kgItems.length;
+      body.push([]);
+      body.push(['GRAND TOTAL', `${items.length} item code(s)${nonKg ? ` — KG total excludes ${nonKg} non-kg item(s)` : ''}`,
+        '', '', '', '', '', round2(kgItems.reduce((t, g) => t + g.total, 0)), 'Kg', picked.length, '',
+        '', '', '', '', '', '', '', '', '', round2(items.reduce((t, g) => t + g.value, 0)), '', '', '']);
+
+      const sumHeader = ['Item Code', 'Description', 'Material', 'Sub-Group', 'Speciality', 'Microns', 'Department',
+        'Total on hand', 'UOM', 'Rolls / cans', 'Value'];
+      const sumBody = items.map((g) => [...ident(g.u0), g.total, g.uom, g.units.length, g.value]);
+
+      exportSheets([
+        { name: 'Material on hand', rows: [header, ...body],
+          widths: [11, 34, 10, 12, 14, 8, 12, 13, 6, 11, 11, 13, 14, 20, 14, 10, 10, 10, 11, 9, 11, 11, 11, 11] },
+        { name: 'Item totals', rows: [sumHeader, ...sumBody], widths: [11, 34, 10, 12, 14, 8, 12, 13, 6, 11, 12] },
+      ], `Raw_Material_On_Hand_${today()}.xlsx`);
+      flash('g', `Exported ${items.length} item code(s), ${picked.length} roll(s) / can(s) to Excel.`);
     } catch (e) { flash('r', e.message); } finally { setExporting(false); }
   }
 
@@ -403,6 +449,13 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
 
       <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
         <input placeholder="Search item / code / internal code (BLMU-…)…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 240 }} />
+        <select value={fCode} onChange={(e) => setFCode(e.target.value)} aria-label="Filter by item code">
+          <option value="">All item codes</option>
+          {opts('code').map((v) => {
+            const it = rows.find((x) => String(x.code) === v);
+            return <option key={v} value={v}>{v}{it && it.name ? ` — ${it.name}` : ''}</option>;
+          })}
+        </select>
         <select value={fMat} onChange={(e) => setFMat(e.target.value)} aria-label="Filter by material">
           <option value="">All materials</option>{opts('materialType').map((v) => <option key={v} value={v}>{v}</option>)}
         </select>

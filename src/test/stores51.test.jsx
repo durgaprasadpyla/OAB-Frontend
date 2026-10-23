@@ -39,8 +39,8 @@ let posted, exported;
 beforeEach(() => {
   posted = []; exported = [];
   window.XLSX = {
-    utils: { aoa_to_sheet: (rows) => ({ rows }), book_new: () => ({}), book_append_sheet: (wb, ws) => { wb.ws = ws; }, sheet_to_json: () => [] },
-    writeFile: (wb, name) => exported.push({ rows: wb.ws.rows, name }),
+    utils: { aoa_to_sheet: (rows) => ({ rows }), book_new: () => ({ sheets: {} }), book_append_sheet: (wb, ws, n) => { wb.ws = wb.ws || ws; wb.sheets[n] = ws.rows; }, sheet_to_json: () => [] },
+    writeFile: (wb, name) => exported.push({ rows: wb.ws.rows, sheets: wb.sheets, name }),
     read: () => ({ SheetNames: ['s'], Sheets: { s: {} } }),
   };
   vi.doMock('../data.jsx', () => ({ useData: () => ({ mods: { purchase: PURCHASE, oab: OAB }, save: vi.fn() }) }));
@@ -139,8 +139,9 @@ describe('Raw Material on Hand — figures first, filters by the table, Excel of
     await screen.findByText('BLM037');
     fireEvent.click(screen.getByLabelText('Export to Excel'));
     await waitFor(() => expect(exported.length).toBe(1));
-    const [header, ...rows] = exported[0].rows;
+    const [header, ...all] = exported[0].rows;
     expect(header).toEqual(expect.arrayContaining(['Item Code', 'Internal Code', 'Location', 'Status', 'Remaining', 'Value']));
+    const rows = all.filter((r) => r[header.indexOf('Line')] === 'Roll / can');
     expect(rows).toHaveLength(2);
     const film = rows.find((r) => r[0] === 'BLM037');
     expect(film[header.indexOf('Internal Code')]).toBe('BLMU-7');
@@ -158,8 +159,51 @@ describe('Raw Material on Hand — figures first, filters by the table, Excel of
     fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'SAMPLE' } });
     fireEvent.click(screen.getByLabelText('Export to Excel'));
     await waitFor(() => expect(exported.length).toBe(1));
-    const [, ...rows] = exported[0].rows;
+    const [header, ...all] = exported[0].rows;
+    const rows = all.filter((r) => r[header.indexOf('Line')] === 'Roll / can');
     expect(rows.map((r) => r[0])).toEqual(['INK099']);
+  });
+
+  // "How much 460 mm anti-fog BOPP is present" — answered by one row per item code.
+  it('opens every item code with an ITEM TOTAL row, its rolls under it, and a totals sheet', async () => {
+    const extra = { ...ALL_UNITS[0], id: 13, internalCode: 'BLMU-9', qtyRemaining: 250.5, qtyReceived: 300, location: 'B1', receivedAt: '2026-09-05T00:00:00Z' };
+    ALL_UNITS.push(extra);
+    try {
+      await mount();
+      await screen.findByText('BLM037');
+      fireEvent.click(screen.getByLabelText('Export to Excel'));
+      await waitFor(() => expect(exported.length).toBe(1));
+      const [header, ...rows] = exported[0].rows;
+      const col = (n) => header.indexOf(n);
+      // BLM037 first (sorted by code): its total, then its two rolls oldest-first
+      expect(rows[0][0]).toBe('BLM037');
+      expect(rows[0][col('Line')]).toBe('ITEM TOTAL');
+      expect(rows[0][col('Microns')]).toBe('35');
+      expect(rows[0][col('Total on hand')]).toBe(650.5);
+      expect(rows[0][col('Rolls / cans')]).toBe(2);
+      expect(rows.slice(1, 3).map((r) => r[col('Internal Code')])).toEqual(['BLMU-7', 'BLMU-9']);
+      expect(rows[3][0]).toBe('INK099');
+      expect(rows[3][col('Line')]).toBe('ITEM TOTAL');
+      const grand = rows.find((r) => r[0] === 'GRAND TOTAL');
+      expect(grand[col('Total on hand')]).toBe(660.5);
+      // second sheet: one line per item code
+      const totals = exported[0].sheets['Item totals'];
+      expect(totals.slice(1).map((r) => [r[0], r[7]])).toEqual([['BLM037', 650.5], ['INK099', 10]]);
+    } finally { ALL_UNITS.pop(); }
+  });
+
+  it('filters the board, and the Excel, by item code', async () => {
+    await mount();
+    await screen.findByText('BLM037');
+    const pick = screen.getByLabelText('Filter by item code');
+    expect([...pick.options].map((o) => o.value)).toEqual(expect.arrayContaining(['BLM033', 'BLM037', 'INK099']));
+    fireEvent.change(pick, { target: { value: 'BLM037' } });
+    await waitFor(() => expect(screen.queryByText('BLM034')).toBeNull());
+    expect(screen.getByText('BLM037')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Export to Excel'));
+    await waitFor(() => expect(exported.length).toBe(1));
+    const [, ...rows] = exported[0].rows;
+    expect(new Set(rows.filter((r) => r.length && r[0] !== 'GRAND TOTAL').map((r) => r[0]))).toEqual(new Set(['BLM037']));
   });
 });
 
