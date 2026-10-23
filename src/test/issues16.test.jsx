@@ -137,4 +137,33 @@ describe('PM login — Raw Material on Hand (¶4)', () => {
     expect(screen.queryByLabelText('Status of BLMU-7')).toBeNull();
     expect(within(screen.getByText('BLMU-7').closest('tr')).getByText('Non-moving')).toBeInTheDocument();
   });
+
+  it('has the item-code filter and the Excel with an ITEM TOTAL row per item code', async () => {
+    vi.doMock('../auth.jsx', () => ({ useAuth: () => ({ role: 'pm', user: 'pm1' }) }));
+    const exported = [];
+    window.XLSX = { utils: { aoa_to_sheet: (rows) => ({ rows }), book_new: () => ({ sheets: {} }), book_append_sheet: (wb, ws, n) => { wb.sheets[n] = ws.rows; } },
+      writeFile: (wb) => exported.push(wb.sheets) };
+    const unit = (id, code, qty) => ({ id, itemId: 37, itemCode: 'BLM037', itemName: '1200 MM', materialType: 'FILM', subGroup: 'AF BOPP', microns: '35',
+      internalCode: code, qtyRemaining: qty, qtyReceived: qty, uom: 'Kg', location: 'A2', status: 'MOVING', receivedAt: '2026-09-0' + id + 'T00:00:00Z' });
+    globalThis.fetch.mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/stores/on-hand')) return res(ON_HAND);
+      if (u.includes('/api/stores/units')) return res([unit(1, 'BLMU-1', 120), unit(2, 'BLMU-2', 80.5)]);
+      return res([]);
+    });
+    const { default: PM } = await import('../pages/PM.jsx');
+    render(<PM />);
+    fireEvent.click(await screen.findByText('📦 Raw Material on Hand'));
+    await screen.findByText('BLM037');
+    sel('Filter by item code', 'BLM037');
+    await waitFor(() => expect(screen.queryByText('INK01')).toBeNull());
+    fireEvent.click(screen.getByLabelText('Export to Excel'));
+    await waitFor(() => expect(exported.length).toBe(1));
+    const [header, total, r1, r2] = exported[0]['Material on hand'];
+    expect(total[0]).toBe('BLM037');
+    expect(total[header.indexOf('Line')]).toBe('ITEM TOTAL');
+    expect(total[header.indexOf('Total on hand')]).toBe(200.5);
+    expect([r1, r2].map((r) => r[header.indexOf('Internal Code')])).toEqual(['BLMU-1', 'BLMU-2']);
+    expect(exported[0]['Item totals'][1].slice(0, 1)).toEqual(['BLM037']);
+  });
 });
