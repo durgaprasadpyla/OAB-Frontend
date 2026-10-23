@@ -125,11 +125,26 @@ input.kam-numinput,input.nospin{-moz-appearance:textfield;appearance:textfield}
   /* The invoice is authored at a fixed 210mm; inside the 7mm print margins that
      overflows the 196mm printable width and the browser scales/clips it (blurry,
      misaligned). Pin it to the printable width so it lands 1:1 on A4. */
-  body.printing .inv{width:196mm;min-height:0;border:none;margin:0 auto}
+  body.printing .inv{width:196mm;min-height:0;margin:0 auto}
+  body.printing .inv.inv-a4{min-height:281mm}
   @page{size:A4;margin:7mm}
 }
 /* Invoice document styles - A4 */
-.inv{width:210mm;min-height:280mm;background:#fff;margin:0 auto;font-family:Arial,Helvetica,sans-serif;font-size:10.5pt;color:#000;border:1px solid #999;position:relative}
+.inv{width:210mm;min-height:280mm;background:#fff;margin:0 auto;font-family:Arial,Helvetica,sans-serif;font-size:10.5pt;color:#000;border:1pt solid #000;position:relative;box-sizing:border-box}
+/* Tax invoice: one A4 sheet. The frame is the .inv border; every inner block drops
+   its own outer left/right edge so the frame is one crisp line instead of a grey
+   line doubled against a black one. 303mm tall = the 194x281mm PDF content box at
+   210mm wide, so the captured sheet fills the page. The items table takes up the
+   slack (inv-fill) so totals + signature sit at the foot of the page. */
+.inv.inv-a4{min-height:303mm;display:flex;flex-direction:column}
+.inv.inv-a4 .inv-items-wrap{flex:1 1 auto;display:flex;flex-direction:column}
+.inv.inv-a4 .inv-items-tbl{flex:1 1 auto;height:100%}
+.inv-items-tbl tr.inv-fill td{border-top:none;border-bottom:none;height:100%;padding:0}
+.inv table tr>td:first-child,.inv table tr>th:first-child{border-left:none}
+.inv table tr>td:last-child,.inv table tr>th:last-child{border-right:none}
+.inv .inv-bottom,.inv .inv-words-row,.inv .inv-bank-row,.inv .inv-sign,.inv .inv-cert-row{border-left:none;border-right:none}
+.inv-cert-row{border:1pt solid #000;border-top:none;padding:4pt 7pt;font-size:8pt;line-height:1.5}
+.inv-items-tbl td.c,.inv-items-tbl td.r{white-space:nowrap}
 .inv table{border-collapse:collapse;width:100%}
 .inv-top{border-bottom:2px solid #000;padding:6pt 10pt 4pt;text-align:center}
 .inv-brand{font-size:20pt;font-weight:900;letter-spacing:3pt;color:#0e6fb8}

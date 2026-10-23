@@ -12,7 +12,7 @@
 // is clipped at the page edge. INVOICE_PDF below is that exact recipe.
 
 /** The invoice recipe: 300-dpi-class capture, 8 mm margins, compressed. */
-export const INVOICE_PDF = { scale: 3, margin: 8, compress: true };
+export const INVOICE_PDF = { scale: 3, margin: 8, compress: true, onePage: true };
 /** The proforma / packing-list recipe production uses: scale 2, full bleed. */
 export const PLAIN_PDF = { scale: 2, margin: 0, compress: false };
 
@@ -28,7 +28,7 @@ export async function saveDocPdf(el, filename, opts = {}) {
   if (!window.html2canvas) throw new Error('html2canvas is not loaded');
   const JsPDF = window.jspdf && window.jspdf.jsPDF;
   if (!JsPDF) throw new Error('jsPDF is not loaded');
-  const { scale = 3, margin = 8, compress = true } = opts;
+  const { scale = 3, margin = 8, compress = true, onePage = false } = opts;
 
   const canvas = await window.html2canvas(el, {
     scale,
@@ -48,6 +48,12 @@ export async function saveDocPdf(el, filename, opts = {}) {
 
   if (imgH <= contentH + 0.5) {
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH);
+  } else if (onePage) {
+    // A tax invoice is one sheet: a long one is scaled down to fit the page
+    // (centred), never sliced through a row onto a second page.
+    const k = contentH / imgH;
+    const w = imgW * k;
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', (pageW - w) / 2, margin, w, contentH);
   } else {
     const pxPerPage = Math.floor((contentH / imgH) * canvas.height);
     let srcY = 0;

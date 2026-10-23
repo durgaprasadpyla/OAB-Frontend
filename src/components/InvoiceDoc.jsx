@@ -44,7 +44,7 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
     // id="inv-doc" is what the design system keys its "leave formal documents
     // alone" rules off — hover, transition and focus effects must not reach a
     // customer-facing invoice.
-    <div className="inv" id="inv-doc" ref={ref}>
+    <div className="inv inv-a4" id="inv-doc" ref={ref}>
       <div className="inv-orig">
         {INVOICE_DOC.copies.map((c, i) => <span key={c}>{i ? <br /> : null}{c}</span>)}
       </div>
@@ -111,6 +111,10 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
         </tbody>
       </table>
 
+      {/* The items table stretches to fill the sheet (inv-fill row), so the totals
+          and signature always sit at the foot of one A4 page with the column rules
+          running unbroken down to them — no half-empty frame below the signature. */}
+      <div className="inv-items-wrap">
       <table className="inv-items-tbl">
         <thead>
           <tr>
@@ -146,6 +150,9 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
               </tr>
             );
           })}
+          <tr className="inv-fill" aria-hidden="true">
+            <td /><td /><td /><td /><td /><td /><td /><td /><td /><td />
+          </tr>
           <tr style={{ background: '#f5f5f5', fontWeight: 700 }}>
             <td colSpan={2} className="c" style={{ fontSize: '8pt' }}>Total No. Of Pouches</td>
             <td />
@@ -158,6 +165,7 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
           </tr>
         </tbody>
       </table>
+      </div>
 
       <div className="inv-bottom">
         <div className="inv-decl">
@@ -188,7 +196,7 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
       </div>
 
       <div className="inv-words-row"><strong>Invoice Value Rs. (In Words):</strong> {wordsStr}</div>
-      <div style={{ border: '1pt solid #000', borderTop: 'none', padding: '5pt 7pt', fontSize: '8pt', lineHeight: 1.6 }}>
+      <div className="inv-cert-row">
         <strong>Amount of Tax Subject to Reverse Charge:</strong> Nil &nbsp;&nbsp;
         <strong>Certified</strong> that the particulars given above are true and correct
       </div>
