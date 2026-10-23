@@ -6,7 +6,7 @@ import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
 import { specFor } from '../lib/specs.js';
 import { today, fmtDate, rupees, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
-import { saveDocPdf, PLAIN_PDF } from '../lib/invoicePdf.js';
+import { saveDocPdf, INVOICE_PDF } from '../lib/invoicePdf.js';
 import ProformaDoc from './ProformaDoc.jsx';
 
 // Proforma Invoice generator (native port of the legacy showProformaModal / pf*).
@@ -123,7 +123,7 @@ export default function ProformaModal({ onClose }) {
     try {
       await new Promise((r) => setTimeout(r, 60));   // let the document paint before capture
       const fname = 'Proforma_' + f.no.replace(/\//g, '-') + '_' + f.customer.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20) + '.pdf';
-      await saveDocPdf(docRef.current, fname, PLAIN_PDF);
+      await saveDocPdf(docRef.current, fname, INVOICE_PDF);   // one A4 page, like the tax invoice
       flash('g', '✓ PDF downloaded: ' + fname);
     } catch (e) {
       flash('r', 'PDF error: ' + e.message);

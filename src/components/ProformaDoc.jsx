@@ -36,7 +36,7 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
   const pre = { fontSize: '8.5pt', color: '#333', marginTop: '3pt', whiteSpace: 'pre-line' };
 
   return (
-    <div className="inv" id="pf-doc" ref={ref}>
+    <div className="inv inv-a4" id="pf-doc" ref={ref}>
       <div className="inv-orig">Proforma Copy<br />Not a Tax Invoice</div>
 
       <div className="inv-top">
@@ -93,6 +93,9 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
         </tbody>
       </table>
 
+      {/* Same one-page sheet as the tax invoice: the items table fills the page
+          (inv-fill) so totals and signature sit at its foot. */}
+      <div className="inv-items-wrap">
       <table className="inv-items-tbl">
         <thead>
           <tr>
@@ -126,6 +129,9 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
               </tr>
             );
           })}
+          <tr className="inv-fill" aria-hidden="true">
+            <td /><td /><td /><td /><td /><td /><td /><td /><td /><td />
+          </tr>
           <tr style={{ background: '#f5f5f5', fontWeight: 700 }}>
             <td colSpan={2} className="c" style={{ fontSize: '8pt' }}>Total No. Of Pouches</td>
             <td />
@@ -134,6 +140,7 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
           </tr>
         </tbody>
       </table>
+      </div>
 
       <div className="inv-bottom">
         <div className="inv-decl">
@@ -164,12 +171,12 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
 
       <div className="inv-words-row"><strong>Proforma Value Rs. (In Words):</strong> {wordsStr}</div>
       {d.notes ? (
-        <div style={{ border: '1pt solid #000', borderTop: 'none', padding: '5pt 7pt', fontSize: '8.5pt', lineHeight: 1.6, background: '#FFFBEA' }}>
+        <div className="inv-cert-row" style={{ fontSize: '8.5pt', background: '#FFFBEA' }}>
           <strong>Special Notes:</strong>{' '}
           {String(d.notes).split('\n').map((ln, i) => <span key={i}>{i ? <br /> : null}{ln}</span>)}
         </div>
       ) : null}
-      <div style={{ border: '1pt solid #000', borderTop: 'none', padding: '5pt 7pt', fontSize: '8pt', lineHeight: 1.6 }}>
+      <div className="inv-cert-row">
         <strong>Amount of Tax Subject to Reverse Charge:</strong> Nil &nbsp;&nbsp;
         This document is a quotation and is not to be treated as a demand for payment under GST law.
       </div>
