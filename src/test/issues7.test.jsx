@@ -98,7 +98,7 @@ describe('Sales Login — the CSA requisition', () => {
       gusset_type: 'Side gusset', pouch_width_mm: '300', gusset_mm: '50', pouch_height_mm: '400', packing_instructions: 'x' }, s, { now: new Date('2026-09-15T10:00:00Z'), user: 'rep1' });
     expect(req.kind).toBe('bulk');
     expect(req.details.totalWidth).toBe(500);
-    expect(req.details.packing_instructions).toBeUndefined();   // not a bulk-bag field
+    expect(req.details.packing_instructions).toBe('x');   // Issues 26.10: packing is given on Add SKU for a bulk bag too
     const skus = sendSkuForCsa([s], 'S1', req);
     expect(skus[0].csa_requested).toBe(true);
     expect(csaPendingForQc({ skus, qc_reports: [] }).map((x) => x.id)).toEqual(['S1']);
