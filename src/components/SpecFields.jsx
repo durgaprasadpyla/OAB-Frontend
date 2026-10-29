@@ -64,7 +64,7 @@ function Num({ label, value, onChange, required, hint, ariaLabel, placeholder })
  */
 export default function SpecFields({
   form, onChange, customers = [], jss = [], jobTypes = [], dispatchOptions = [], statuses = [],
-  canAddNew = false, specCode = '', showStatus = true, items: itemsProp = null,
+  canAddNew = false, specCode = '', showStatus = true, items: itemsProp = null, gsmAuto = 0,
 }) {
   // The item master, readable by every signed-in role (no pricing on it).
   const fetched = useApi(itemsProp ? '' : '/api/master/items');
@@ -214,7 +214,10 @@ export default function SpecFields({
             : '— pick the primary material first —'}
           hint={width.widths.length ? 'Widths stocked in every layer of this structure.' : ''} />
         <Num label="Ups" value={form.ups} onChange={(e) => set({ ups: val(e) })} />
-        <Num label="GSM" value={form.gsm} onChange={(e) => set({ gsm: val(e) })} />
+        {/* Issues 26.10: left blank, the spec takes the Specifications sheet's total GSM */}
+        <Num label="GSM" value={form.gsm} onChange={(e) => set({ gsm: val(e) })}
+          placeholder={gsmAuto > 0 ? `auto ${gsmAuto}` : undefined}
+          hint={gsmAuto > 0 ? `Total GSM from the sheet below: ${gsmAuto} — used when this is left blank.` : ''} />
         <div className="fg" />
       </div>
 

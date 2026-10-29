@@ -20,32 +20,67 @@ const CSA_COMPARED = [
   'party_kind', 'company_name', 'product_desc', 'dispatch_type',
   ...[1, 2, 3].flatMap((n) => [`substrate${n}`, `substrate${n}_specialty`, `substrate${n}_val`]),
   'ink_gsm', 'adhesive_gsm', 'plate_cost', 'cylinder_cost', 'remarks', 'plant_comment_req',
+  // Issues 26.10: the Specifications sheet and the QC's copy of the requisition
+  'spec', 'request',
 ];
+/** A field as compared for "did anything change" — objects by their content. */
+const cmp = (v) => (v && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''));
 import CsaRequestCard from './CsaRequestCard.jsx';
 import {
   CSA_BLANK, DISPATCH_TYPES, YES_NO,
   csaPendingForQc, csaPendingForPlant, csaDoneForPlant, csaSampleDate, csaDaysSince,
   ageColor, csaCompanyItem, csaStructure, substrateList, substrateUnit,
-  buildCsaReport, markSkuCsaReceived, answerCsaReport, csaStatusLabel,
+  buildCsaReport, markSkuCsaReceived, answerCsaReport, csaStatusLabel, csaLayers, csaRequestCopy,
 } from '../lib/csa.js';
+import SpecSheet, { SpecSummary } from './SpecSheet.jsx';
+import { blankSheet, sheetFromRequest, sheetErrors, sheetOf } from '../lib/specSheet.js';
+import { DESPATCH_FIELDS, despatchKind, tentativeUom } from '../lib/repFlow.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
-import { csaDispatchForm, csaVisibleFields, csaFilmWidthChoices, requestedFilmWidth, widthKey } from '../lib/csaFields.js';
+import { csaDispatchForm, requestedFilmWidth, widthKey } from '../lib/csaFields.js';
 import { subLayersFromStructure } from './SubstrateLayers.jsx';
 
 // CSA panels shared by QC and PM over the sales blob (module 12).
 //   <CsaPanel role="qc" />    QC writes the report from a pending sample
 //   <CsaPanel role="pm" />    the plant comments on it and prices the plates
 
-export default function CsaPanel({ role = 'qc' }) {
-  return role === 'pm' ? <PlantCsa /> : <QcCsa />;
+export default function CsaPanel({ role = 'qc', onConvertToJss = null }) {
+  return role === 'pm' ? <PlantCsa /> : <QcCsa onConvertToJss={onConvertToJss} />;
+}
+
+/**
+ * Issues 26.10: a new report for a rep's sample starts from everything the rep sent —
+ * the dispatch form, the requisition (editable here) and the pouch / sleeve / roll
+ * measurements and packing instructions, already on the Specifications sheet.
+ */
+export function csaFormForSku(sku) {
+  const req = csaRequestCopy(sku);
+  return {
+    ...CSA_BLANK,
+    dispatch_type: String((sku && (sku.dispatch_form || sku.dispatch_type)) || (req && req.despatch_form) || ''),
+    request: req,
+    spec: { ...blankSheet(), ...sheetFromRequest(req && req.details) },
+  };
 }
 
 function Age({ days }) {
   return <span style={{ color: ageColor(days), fontWeight: 700 }}>{days}d</span>;
 }
 
+const flagged = (v) => v === true || String(v || '').toLowerCase() === 'yes';
+/** "Sample received" / "Sample sent" as the rep marked them — highlighted for QC. */
+export function SampleFlags({ sku }) {
+  const rec = flagged(sku && sku.sample_received);
+  const sent = flagged(sku && sku.sample_sent);
+  return (
+    <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }} aria-label={`Sample status of ${(sku && sku.sku_name) || ''}`}>
+      <span className={'tag ' + (rec ? 'tg' : 'tgr')} style={{ fontSize: 9 }}>{rec ? '✓ Sample received' : 'Sample not received'}</span>
+      <span className={'tag ' + (sent ? 'tg' : 'tgr')} style={{ fontSize: 9 }}>{sent ? '✓ Sample sent' : 'Sample not sent'}</span>
+    </div>
+  );
+}
+
 /* ─────────────────────────── QC side ─────────────────────────── */
-function QcCsa() {
+function QcCsa({ onConvertToJss }) {
   const { mods, save } = useData();
   const { user } = useAuth();
   const sales = mods.sales || {};
@@ -53,6 +88,9 @@ function QcCsa() {
   // built from, so a CSA and the spec it becomes name the same film.
   const itemsApi = useApi('/api/master/items');
   const items = useMemo(() => (Array.isArray(itemsApi.data) ? itemsApi.data : []), [itemsApi.data]);
+  // Issues 26.10: the printing / lamination machines the Specifications sheet offers
+  const machinesApi = useApi('/api/master/machines');
+  const machines = useMemo(() => (Array.isArray(machinesApi.data) ? machinesApi.data : []), [machinesApi.data]);
 
   const [draft, setDraft] = useState(null);   // { skuId, form } — skuId '' = direct
   const [viewing, setViewing] = useState(null);   // a report shown read-only
@@ -97,6 +135,12 @@ function QcCsa() {
   function editReport(r) {
     const form = { ...CSA_BLANK };
     Object.keys(form).forEach((k) => { if (r[k] != null) form[k] = r[k]; });
+    // a report written before 26.10 has no sheet — it opens on a blank one
+    form.spec = sheetOf(r.spec);
+    if (r.source !== 'direct' && !r.request) {
+      const sk = (sales.skus || []).find((x) => x.id === r.sku_id);
+      form.request = csaRequestCopy(sk);
+    }
     // 30.09 QT2: linkDirectCsa writes sku_id onto a DIRECT report once the desk quotes
     // it — it is still a direct report (company, product, responsible person), so it
     // opens in the direct form; read off sku_id it rebuilt as a Sales-OS report, blanked
@@ -116,11 +160,16 @@ function QcCsa() {
    * for plant comments."
    */
   async function submit() {
+    // Issues 26.10: "the film width … should not be more than the maximum possible film
+    // width given by the super admin for that particular printing machine … it should not
+    // allow it"
+    const errs = sheetErrors(sales, draft.form.spec, machines);
+    if (errs.length) { setMsg({ t: 'r', text: errs.join(' ') }); return; }
     // Editing an existing report: nothing to save unless something actually moved.
     if (draft.editId) {
       const before = (sales.qc_reports || []).find((x) => x.id === draft.editId) || {};
       const after = buildCsaReport(draft.form, { sales, skuId: draft.skuId, user });
-      const changed = CSA_COMPARED.filter((k) => String(before[k] ?? '') !== String(after[k] ?? ''));
+      const changed = CSA_COMPARED.filter((k) => cmp(before[k]) !== cmp(after[k]));
       if (!changed.length) {
         setDraft(null);
         setMsg({ t: 'y', text: 'Nothing changed — the report is as it was.' });
@@ -220,14 +269,14 @@ function QcCsa() {
     return (
       <CsaForm
         draft={draft} setDraft={setDraft} sales={sales} msg={msg} busy={busy}
-        customers={mods.customers || []} items={items}
+        customers={mods.customers || []} items={items} machines={machines}
         onCancel={() => { setDraft(null); setMsg(null); }} onSubmit={submit}
       />
     );
   }
 
   if (viewing) {
-    return <CsaReportView report={viewing} sales={sales} onClose={() => setViewing(null)} />;
+    return <CsaReportView report={viewing} sales={sales} machines={machines} onClose={() => setViewing(null)} />;
   }
 
   return (
@@ -252,17 +301,22 @@ function QcCsa() {
                 : pending.map((sk) => {
                   const d = csaSampleDate(sk);
                   return (
-                    <tr key={sk.id}>
-                      <td style={{ fontWeight: 700 }}>{leadName(sk.lead_id)}</td>
+                    <tr key={sk.id} style={{ background: '#fff8e1' }}>
+                      <td style={{ fontWeight: 700 }}>
+                        {leadName(sk.lead_id)}
+                        {/* Issues 26.10: "when I selected that the sample has been received and the
+                            sample is sent, that should be highlighted in the QC login" */}
+                        <SampleFlags sku={sk} />
+                      </td>
                       <td>{sk.sku_name || '—'}</td>
                       <td style={{ fontSize: 11 }}>{sk.dispatch_form || sk.dispatch_type || '—'}</td>
                       <td style={{ fontSize: 11 }}>{(sk.csa_request || {}).despatch_location || '—'}</td>
-                      <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? Number(sk.csa_request.tentative_qty || 0).toLocaleString('en-IN') : '—'}</td>
+                      <td style={{ fontSize: 11, textAlign: 'right' }}>{sk.csa_request ? `${Number(sk.csa_request.tentative_qty || 0).toLocaleString('en-IN')} ${sk.csa_request.tentative_uom || tentativeUom(sk.csa_request.despatch_form, sk.csa_request.details)}`.trim() : '—'}</td>
                       <td style={{ fontSize: 11 }}>{d ? fmtDate(String(d).slice(0, 10)) : '—'}</td>
                       <td style={{ textAlign: 'center' }}><Age days={csaDaysSince(d)} /></td>
                       <td style={{ textAlign: 'center' }}>
                         <button className="btn btn-g" style={{ height: 26, fontSize: 11 }} aria-label={`Add CSA report for ${sk.sku_name}`}
-                          onClick={() => setDraft({ skuId: sk.id, form: { ...CSA_BLANK } })}>Add CSA Report</button>
+                          onClick={() => setDraft({ skuId: sk.id, form: csaFormForSku(sk) })}>Add CSA Report</button>
                       </td>
                     </tr>
                   );
@@ -316,6 +370,12 @@ function QcCsa() {
                       <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.plant_comments || <span style={{ color: 'var(--i3)' }}>awaiting plant</span>}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`View CSA for ${ci.item}`} onClick={() => setViewing(r)}>View</button>{' '}
+                        {/* Issues 26.10: "Convert this particular CSA to JSS" — every field filled in the JSS form, all editable */}
+                        {onConvertToJss && (
+                          <button className="btn btn-b" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`Convert CSA for ${ci.item} to JSS`}
+                            title="Open the JSS spec entry with everything on this CSA filled in"
+                            onClick={() => onConvertToJss(r)}>→ JSS</button>
+                        )}{' '}
                         <span style={{ fontSize: 10, color: 'var(--i3)' }} title="Pick the radio on the left to edit this report">edit ←</span>
                       </td>
                     </tr>
@@ -329,10 +389,15 @@ function QcCsa() {
   );
 }
 
+/** The SKU as the report shows it: the QC's corrected copy of the requisition, where one was saved. */
+function withQcRequest(sku, report) {
+  return sku && report && report.request ? { ...sku, csa_request: { ...(sku.csa_request || {}), ...report.request } } : sku;
+}
+
 /* ─────────────────────────── Read-only report view ─────────────────────────── */
 // Port of legacy qcCsaView: the CSA report shown read-only, with the plant's
 // answer (or an "awaiting plant" note) below it.
-function CsaReportView({ report: r, sales, onClose }) {
+function CsaReportView({ report: r, sales, machines = [], onClose }) {
   const ci = csaCompanyItem(sales, r);
   const rows = [
     // ¶6: the same names the form uses, with the speciality where one was recorded
@@ -363,7 +428,7 @@ function CsaReportView({ report: r, sales, onClose }) {
         {ci.company}{r.dispatch_type ? ' · ' + r.dispatch_type : ''}
         {' · '}<span className="tag tgr" style={{ fontSize: 9 }}>{r.source === 'direct' ? 'Direct / Walk-in' : 'Sales OS'}</span>
       </div>
-      <CsaRequestCard sku={(sales.skus || []).find((x) => x.id === r.sku_id)} compact />
+      <CsaRequestCard sku={withQcRequest((sales.skus || []).find((x) => x.id === r.sku_id), r)} compact />
       <div className="g2">
         {rows.map((f, i) => (
           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed var(--bd)', padding: '4px 0' }}>
@@ -372,6 +437,7 @@ function CsaReportView({ report: r, sales, onClose }) {
           </div>
         ))}
       </div>
+      <SpecSummary sales={sales} layers={csaLayers(r)} sheet={r.spec} dispatchForm={r.dispatch_type} machines={machines} />
       {r.plant_comment_req && <div className="al al-y" style={{ marginTop: 12 }}>QC asked: {r.plant_comment_req}</div>}
       {r.plant_comments
         ? <div className="al al-b" style={{ marginTop: 8 }}>🏭 Plant: {r.plant_comments}</div>
@@ -381,7 +447,7 @@ function CsaReportView({ report: r, sales, onClose }) {
 }
 
 /* ─────────────────────────── The CSA form ─────────────────────────── */
-function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, customers = [], items = [] }) {
+function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, customers = [], items = [], machines = [] }) {
   const direct = !draft.skuId;
   const f = draft.form;
   const set = (k, v) => setDraft((d) => ({ ...d, form: { ...d.form, [k]: v } }));
@@ -408,14 +474,8 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
 
   // Issues 17.10 §8: the measurements follow the dispatch form — a roll is not asked
   // for pouch height or pouches per kg. Unknown form → every field.
-  const dispatchForm = csaDispatchForm(sku, f);
-  const visible = csaVisibleFields(dispatchForm);
+  const dispatchForm = direct ? csaDispatchForm(null, f) : (String(f.dispatch_type || '').trim() || csaDispatchForm(sku, f));
 
-  // Issues 17.10 §8: film width is picked from the Item Master (the JSS / Add SKU
-  // widths), narrowed by the substrates chosen above. A site with no film in the
-  // Item Master keeps the typed number, as the micron does.
-  const film = csaFilmWidthChoices(items, f);
-  const filmNow = widthKey(f.film_width);
   // the widths the rep's requisition structure already names ("… · 435 mm + …")
   const reqLayers = sku && (Array.isArray(sku.structure_layers) && sku.structure_layers.length
     ? sku.structure_layers : subLayersFromStructure(sku.structure));
@@ -424,32 +484,6 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
     // a NEW report starts on the width the rep asked for; an edit keeps what was saved
     if (!draft.editId && reqWidth && !widthKey(draft.form.film_width)) set('film_width', reqWidth);
   }, [reqWidth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const field = (fd) => {
-    if (fd.type === 'yesno') return <S key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} opts={YES_NO} />;
-    if (fd.type === 'text') return <T key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} />;
-    if (fd.type === 'film' && fromMaster.length) {
-      return (
-        <div className="fg" key={fd.k}>
-          <label>Film width (mm)</label>
-          <select value={filmNow} aria-label="Film width" onChange={(e) => set('film_width', e.target.value)}>
-            <option value="">{film.options.length ? '— select —'
-              : film.basis === 'layers' ? '— no width stocked in every layer —' : '— no width in the Item Master —'}</option>
-            {/* a width saved before the master changed (or the substrates moved) stays selectable */}
-            {filmNow && !film.options.includes(filmNow) && <option value={filmNow}>(current) {filmNow}</option>}
-            {film.options.map((w) => <option key={w} value={w}>{w}</option>)}
-          </select>
-          {film.partial.length > 0 && (
-            <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }} aria-label="Film width note">
-              Stocked in some layers only: {film.partial.slice(0, 4).map((p) => `${p.width} mm (missing in ${p.missing.join(', ')})`).join('; ')}
-              {film.partial.length > 4 ? ' …' : ''}
-            </div>
-          )}
-        </div>
-      );
-    }
-    return <N key={fd.k} label={fd.label} v={f[fd.k]} on={(v) => set(fd.k, v)} />;
-  };
 
   return (
     <div className="card">
@@ -560,18 +594,23 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
         );
       })}
 
+      {/* Issues 26.10: the rep's requisition, editable by QC — the dispatch form included */}
+      {!direct && (
+        <CsaRequestEditor form={f} sales={sales}
+          onDispatch={(v) => set('dispatch_type', v)}
+          onChange={(request) => set('request', request)} />
+      )}
+
+      {/* Issues 26.10: "let us change the 'Measurements' header to 'Specifications'" */}
       <div className="ctitle" style={{ marginTop: 12 }}>
-        Measurements
-        {/* Issues 17.10 §8: which dispatch form the fields below are for */}
-        <span className="tag tgr" style={{ marginLeft: 8, fontSize: 9 }} aria-label="Measurements for dispatch form">
-          {!dispatchForm ? 'Dispatch form not set — all measurements'
-            : visible.kind === 'other' ? `Dispatch form: ${dispatchForm} — all measurements`
-              : `Dispatch form: ${dispatchForm}`}
+        Specifications
+        <span className="tag tgr" style={{ marginLeft: 8, fontSize: 9 }} aria-label="Specifications for dispatch form">
+          {!dispatchForm ? 'Dispatch form not set' : `Dispatch form: ${dispatchForm}`}
         </span>
       </div>
-      <div className="g4">
-        {visible.fields.map(field)}
-      </div>
+      <SpecSheet sales={sales} layers={csaLayers(f)} sheet={f.spec} onChange={(sheet) => set('spec', sheet)}
+        dispatchForm={dispatchForm} machines={machines} idPrefix="csa"
+        lockTracks={!!draft.editId && ((sales.qc_reports || []).find((x) => x.id === draft.editId) || {}).status === 'Quoted'} />
 
       <div className="fg">
         <label>Comment requested from the plant</label>
@@ -581,6 +620,59 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
       <div className="fbar">
         <span style={{ flex: 1 }} />
         <button className="btn btn-g" onClick={onSubmit} disabled={busy}>{busy ? 'Saving…' : '✓ Save CSA report'}</button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Issues 26.10: "all the details that are mentioned by the sales rep should also be
+ * present in the editable format in here - including the despatch form". QC's copy of
+ * the requisition; the rep's own stays on the SKU as sent.
+ */
+function CsaRequestEditor({ form, sales, onDispatch, onChange }) {
+  const req = form.request || { despatch_location: '', tentative_qty: '', tentative_date: '', details: {} };
+  const details = req.details || {};
+  const kind = despatchKind(form.dispatch_type);
+  const fields = DESPATCH_FIELDS[kind] || [];
+  const shown = fields.filter((fd) => !fd.when || String(details[fields[0].k] || '') === fd.when);
+  const put = (patch) => onChange({ ...req, ...patch });
+  const putD = (k, v) => onChange({ ...req, details: { ...details, [k]: v } });
+  const uom = tentativeUom(form.dispatch_type, details);
+  const forms = ddList(sales, 'despatch').map((d) => (Array.isArray(d) ? d[0] : d));
+  return (
+    <div style={{ marginTop: 10, padding: '8px 10px', border: '1px solid var(--bd)', borderRadius: 8 }} aria-label="Requisition from the sales rep (editable)">
+      <div className="ctitle" style={{ fontSize: 12, margin: 0 }}>📨 From the sales rep — correct anything here</div>
+      <div className="g4">
+        <div className="fg">
+          <label>Dispatch form</label>
+          <select value={form.dispatch_type || ''} aria-label="CSA dispatch form" onChange={(e) => onDispatch(e.target.value)}>
+            <option value="">—</option>
+            {form.dispatch_type && !forms.includes(form.dispatch_type) && <option value={form.dispatch_type}>{form.dispatch_type}</option>}
+            {forms.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div className="fg"><label>Dispatch location</label>
+          <input value={req.despatch_location || ''} aria-label="CSA dispatch location" onChange={(e) => put({ despatch_location: e.target.value })} /></div>
+        <div className="fg"><label>Tentative quantity{uom ? ` (${uom})` : ''}</label>
+          <input type="number" min="0" step="any" value={req.tentative_qty ?? ''} aria-label="CSA tentative quantity"
+            onChange={(e) => put({ tentative_qty: e.target.value, tentative_uom: uom })} /></div>
+        <div className="fg"><label>Tentative dispatch date</label>
+          <input type="date" value={req.tentative_date || ''} aria-label="CSA tentative dispatch date" onChange={(e) => put({ tentative_date: e.target.value })} /></div>
+        {shown.map((fd) => (
+          <div className="fg" key={fd.k}>
+            <label>{fd.label}</label>
+            {fd.type === 'radio' || fd.type === 'select' ? (
+              <select value={details[fd.k] || ''} aria-label={`CSA ${fd.label}`} onChange={(e) => putD(fd.k, e.target.value)}>
+                <option value="">—</option>
+                {fd.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : (
+              <input type={fd.type === 'number' ? 'number' : 'text'} step="any" value={details[fd.k] ?? ''} aria-label={`CSA ${fd.label}`}
+                onChange={(e) => putD(fd.k, e.target.value)} />
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

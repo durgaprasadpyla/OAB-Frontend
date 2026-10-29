@@ -11,6 +11,8 @@ import { layerFields, layersOfSpec, layerCountFor, materialOptions } from '../li
 import { ddList } from '../lib/dropdowns.js';
 import { specIndex, duplicateSpecs, specKey } from '../lib/specs.js';
 import { effectiveDespatchList } from '../lib/despatchSync.js';
+import SpecSheet from './SpecSheet.jsx';
+import { gsmBreakdown, jssWithSheet, sheetErrors } from '../lib/specSheet.js';
 
 /* ─────────────────────────── JSS Editor ───────────────────────────
  * Every JSS spec, edited with the same fields QC creates one with. Lived inside the
@@ -84,6 +86,9 @@ export default function JssEditor() {
   const master = useApi('/api/master/items');
   const items = useMemo(() => (Array.isArray(master.data) ? master.data : []), [master.data]);
   const materials = useMemo(() => new Set(materialOptions(items).map(specKey)), [items]);
+  // Issues 26.10: the machines the Specifications sheet offers
+  const machinesApi = useApi('/api/master/machines');
+  const machines = useMemo(() => (Array.isArray(machinesApi.data) ? machinesApi.data : []), [machinesApi.data]);
 
   const [q, setQ] = useState('');
   const [statusFil, setStatusFil] = useState('all');
@@ -220,6 +225,8 @@ export default function JssEditor() {
     const hadMaterial = String(rows[sel].material || '').trim();
     if (!material && hadMaterial) { setMsg('Material cannot be cleared — pick the film this spec runs on.'); return; }
     if (!String(form.dispatchForm || '').trim()) { setMsg('A Dispatch Form is required.'); return; }
+    const sheetErr = sheetErrors(mods.sales, form.specSheet, machines);
+    if (sheetErr.length) { setMsg(sheetErr.join(' ')); return; }
     // Re-using a code that another row already holds is how the master ended up with
     // two A1404s reading differently on different screens. Warn before allowing it.
     const clash = next.some((r, i) => i !== sel && specKey(r.spec) === specKey(spec));
@@ -227,7 +234,8 @@ export default function JssEditor() {
     // `layers` is the form's own working copy — the spec row keeps the composed
     // fields, not the draft.
     const { layers: _draftLayers, ...rest } = form;   // eslint-disable-line no-unused-vars
-    next[sel] = { ...rest, spec, ...composed, material };
+    // Issues 26.10: the Specifications sheet is kept with the spec and fills its blanks
+    next[sel] = jssWithSheet(mods.sales, { ...rest, spec, ...composed, material }, layers, form.specSheet);
     // The row to open after this one: the next in the list as it is shown now.
     const order = filtered.map(({ i }) => i);
     const at = order.indexOf(sel);
@@ -387,7 +395,13 @@ export default function JssEditor() {
             items={items}
             canAddNew
             showStatus
+            gsmAuto={gsmBreakdown(mods.sales, form.layers, form.specSheet).total}
           />
+
+          {/* Issues 26.10: the same Specifications sheet as QC's CSA report and JSS entry */}
+          <div className="ctitle" style={{ marginTop: 10 }}>Specifications</div>
+          <SpecSheet sales={mods.sales || {}} layers={(form.layers || []).slice(0, layerCountFor(form.jobType))} sheet={form.specSheet}
+            onChange={(sheet) => set({ specSheet: sheet })} dispatchForm={form.dispatchForm} machines={machines} idPrefix="jsse" />
 
           <div className="g4">
             <div className="fg">

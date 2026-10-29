@@ -63,6 +63,14 @@ export const DROPDOWN_DEFS = [
   { key: 'ping_types', label: 'Next Ping Types', where: 'Sales Rep — Log Visit', type: 'list' },
   { key: 'responsible', label: 'CSA Responsible Persons', where: 'QC — CSA report', type: 'list' },
   { key: 'substrates', label: 'CSA Substrates', where: 'QC · PM · Quote', type: 'substrate', store: 'substrate_options' },
+  // Issues 26.10: "I want densities to be added from the super admin page dropdown
+  // selections, where I should be able to give densities for all the film/paper" — GSM =
+  // density × micron on the CSA and the JSS.
+  { key: 'densities', label: 'Material Densities', where: 'QC — CSA · JSS (GSM)', type: 'density', store: 'material_densities', superadminOnly: true, panel: 'density' },
+  // Issues 26.10: the sleeves and the maximum film width of each printing machine, and
+  // the rollers of each lamination machine — what the CSA / JSS printing and lamination
+  // sections offer and check against.
+  { key: 'machineTooling', label: 'Printing sleeves & lamination rollers', where: 'QC — CSA · JSS (printing / lamination)', type: 'tooling', superadminOnly: true, panel: 'tooling' },
 ];
 
 /**

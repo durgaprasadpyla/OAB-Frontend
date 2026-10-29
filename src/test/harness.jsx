@@ -571,6 +571,8 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, { ok: true });
     }
     if (u.includes('/api/master/items')) return res(200, modules.masterItems || []);
+    // Issues 26.10: the printing / lamination machines of the Specifications sheet
+    if (u.includes('/api/master/machines')) return res(200, modules.masterMachines || []);
     if (u.includes('/api/master/')) return res(200, []);
     if (u.includes('/api/stock/alerts')) return res(200, []);
     if (u.includes('/api/notifications')) return res(200, []);

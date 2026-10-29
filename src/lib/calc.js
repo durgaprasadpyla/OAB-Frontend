@@ -88,6 +88,29 @@ export function calcKg(r, qty, jss) {
   return { net, withWastage: net * 1.05 };
 }
 
+/**
+ * Issues 26.10 (client, 2026-10-28: "meters to kgs conversion formula is needed - as
+ * other OAB the balance KGs is 1546 MT, whereas we hardly have much orders"). The
+ * balance in kilograms is the balance in METRES weighed out:
+ *
+ *   kg = metres × film width (mm) ÷ 1000 × GSM ÷ 1000
+ *
+ * — the film the board's own Bal Mtrs column says is still to run, at the spec's
+ * film width and GSM. It used to multiply a piece count by each spec's pouch weight,
+ * so one spec with a pouch weight typed in the wrong unit (kg for g, a box for a
+ * piece) swelled the whole board by tonnes while the metres stayed believable.
+ * `metres` should already carry the 5% wastage when the caller wants it (Bal Mtrs
+ * does). A spec without film width or GSM falls back to the pouch-weight rule
+ * (`calcKg`), flagged `basis: 'weight'`; with neither, null.
+ */
+export function kgFromMetres(r, metres, jss, qty) {
+  const fw = num((jss && jss.filmWidth) || r.filmWidth);
+  const gsm = num((jss && jss.gsm) || r.gsm);
+  if (fw > 0 && gsm > 0) return { kg: num(metres) * (fw / 1000) * (gsm / 1000), basis: 'metres' };
+  const k = calcKg(r, qty, jss);
+  return k ? { kg: k.withWastage, basis: 'weight' } : null;
+}
+
 function gussetSum(gusset) {
   return String(gusset ?? '').split('+').reduce((s, p) => s + (Number(p.trim()) || 0), 0);
 }

@@ -52,8 +52,12 @@ export function jssFieldsFromCsa({ sku, lead, report, customers }) {
     height: num(r.pouch_height) || num(d.pouch_height_mm) || num(d.totalHeight) || num(d.sleeve_height_mm),
     gusset: num(d.totalGusset) || num(d.gusset_mm),
     pouchWeight: num(r.pouch_weight),
-    dispatchForm: (sku && (sku.dispatch_form || sku.dispatch_type)) || r.dispatch_type || '',
+    ups: num(r.ups),
+    // Issues 26.10: the dispatch form QC settled on in the report wins over the rep's
+    dispatchForm: r.dispatch_type || (sku && (sku.dispatch_form || sku.dispatch_type)) || '',
     status: 'Active',
+    // Issues 26.10: the CSA's Specifications sheet carries straight into the JSS
+    specSheet: r.spec || null,
   };
 }
 

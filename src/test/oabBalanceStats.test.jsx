@@ -114,6 +114,17 @@ describe('OAB board — Bal Mtrs and Bal Kg\'s', () => {
     });
   });
 
+  // Issues 26.10: "meters to kgs conversion formula is needed" — a spec with a film
+  // width and GSM is weighed from its balance metres, not its pouch weight.
+  it('weighs a pouch with film width + GSM from its metres, not its pouch weight', async () => {
+    const pj = [{ spec: 'P1', dispatchForm: 'Pouch', width: 200, filmWidth: 600, gsm: 50, pouchWeight: 9999, customer: 'Acme' }];
+    const pr = [{ so: '26/7', spec: 'P1', customer: 'Acme', jobName: 'Pouch P', dispatchForm: 'Pouch', poQty: 10000, invDisp: 0, manDisp: 0, fg: 0, poDate: '2026-08-01' }];
+    renderApp(<OabBoard />, { modules: { oab: oabModule({ SF: pr }), jss: pj }, route: '/oab?sheet=SF' });
+    await screen.findByText('Pouch P');
+    // 10,000 × 200 mm = 2,000 m, 2,100 with wastage → 2,100 × 0.6 m × 50 g/m² = 63 kg
+    expect(statCard("Bal Kg's").querySelector('.sv').textContent).toMatch(/^63\s*kg$/);
+  });
+
   it('spells out the two formulas people plan against', async () => {
     renderApp(<OabBoard />, { modules: { oab: oabModule({ SF: rows }), jss }, route: '/oab?sheet=SF' });
     await screen.findByText('Pouch A');
@@ -121,6 +132,7 @@ describe('OAB board — Bal Mtrs and Bal Kg\'s', () => {
     expect(within(statCard('Bal Mtrs')).getByRole('note').getAttribute('aria-label'))
       .toMatch(/5% wastage allowance/);
     const kgInfo = within(statCard("Bal Kg's")).getByRole('note').getAttribute('aria-label');
+    expect(kgInfo).toMatch(/film width \(mm\) ÷ 1000 × GSM ÷ 1000/);   // Issues 26.10: metres → kg
     expect(kgInfo).toMatch(/pouch weight/);
     expect(kgInfo).toMatch(/5% wastage/);                       // consistent with Bal Mtrs
     expect(kgInfo).toMatch(/Rolls are ordered in metres/);       // the non-obvious rule

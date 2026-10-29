@@ -4,6 +4,9 @@ import { useAuth } from '../auth.jsx';
 import { masterApi, storesApi, hrApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, UOM_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
 import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
+import {
+  defaultDensity, densityList, printingMachines, laminationMachines, machineKey, machineLabel, parseWidths,
+} from '../lib/specSheet.js';
 
 // Super-admin editor for the nine shared dropdown lists (module 12).
 // Ported from the monolith's Dropdowns tab (ddRender / ddRenderEditor / ddSave).
@@ -208,7 +211,9 @@ export default function DropdownAdmin() {
                         : d.master === 'storeloc' ? locs.filter((x) => x.active !== false).length
                           : d.master === 'uom' ? (uoms.filter((x) => x.active !== false).length || UOM_DEFAULTS.length)
                             : d.master === 'designation' ? desigs.filter((x) => x.active !== false).length
-                              : d.master ? depts.filter((x) => x.active !== false).length : ddList(sales, d.key).length})</span>
+                              : d.master ? depts.filter((x) => x.active !== false).length
+                                : d.panel === 'tooling' ? Object.keys(sales.machine_tooling || {}).length
+                                  : d.panel === 'density' ? densityList(sales).length : ddList(sales, d.key).length})</span>
                       {!d.master && ddIsOverridden(sales, d.key) && <span className="tag tb" style={{ fontSize: 9, marginLeft: 6 }}>custom</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 1 }}>{d.where}</div>
@@ -220,7 +225,11 @@ export default function DropdownAdmin() {
         </div>
       </div>
 
-      {def.master === 'machine' ? (
+      {def.panel === 'density' ? (
+        <DensityPanel sales={sales} save={save} materials={filmSubstrates} />
+      ) : def.panel === 'tooling' ? (
+        <ToolingPanel sales={sales} save={save} machines={machines} error={machErr} />
+      ) : def.master === 'machine' ? (
         <MachinesPanel machines={machines} departments={depts} reload={loadMachines} error={machErr} />
       ) : def.master === 'storeloc' ? (
         <StoreLocationsPanel locations={locs} reload={loadLocs} error={locErr} />
@@ -305,6 +314,164 @@ export default function DropdownAdmin() {
         <button className="btn btn-s" style={{ marginTop: 8 }} onClick={addRow}>＋ Add</button>
       </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Issues 26.10 — the density of every film / paper the Item Master holds. GSM on the
+ * CSA and the JSS is density × micron. A material left blank uses the built-in rule
+ * shown beside it (LDPE natural 0.92, LDPE white / opaque 0.935, PET 1.4, BOPP 0.91).
+ * A row may also be "MATERIAL · SPECIALITY" to give one speciality its own density.
+ */
+function DensityPanel({ sales, save, materials }) {
+  const saved = useMemo(() => densityList(sales), [sales]);
+  const [work, setWork] = useState(null);
+  const [extra, setExtra] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const rows = work ?? saved;
+  const valueOf = (m) => { const hit = rows.find((r) => r.material.toLowerCase() === m.toLowerCase()); return hit ? String(hit.density) : ''; };
+  const names = [...new Set([...materials, ...rows.map((r) => r.material)])].sort((a, b) => a.localeCompare(b));
+  function setDensity(m, v) {
+    const rest = rows.filter((r) => r.material.toLowerCase() !== m.toLowerCase());
+    setWork(String(v).trim() === '' ? rest : [...rest, { material: m, density: v }]);
+  }
+  async function persist() {
+    const clean = rows.filter((r) => String(r.material).trim() && Number(r.density) > 0)
+      .map((r) => ({ material: String(r.material).trim(), density: Number(r.density) }));
+    setBusy(true);
+    try {
+      await save('sales', (prev) => ({ ...(prev || {}), material_densities: clean }));
+      setWork(null);
+      setMsg({ t: 'g', text: `✅ ${clean.length} densit${clean.length === 1 ? 'y' : 'ies'} saved.` });
+    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); } finally { setBusy(false); }
+  }
+  return (
+    <div className="card" aria-label="Material densities">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>Material Densities <span className="tag tgr">{saved.length}</span></div>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-g" onClick={persist} disabled={busy || work === null}>{busy ? 'Saving…' : '💾 Save'}</button>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        GSM = density × micron on the QC’s CSA report and the JSS. Leave a material blank to use the rule shown.
+      </div>
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      {work !== null && <div className="al al-y">Unsaved changes.</div>}
+      <div className="tw sy" style={{ maxHeight: 420 }}>
+        <table>
+          <thead><tr><th>Film / paper (Item Master)</th><th style={{ width: 140 }}>Density (g/cm³)</th><th style={{ width: 120 }}>Built-in rule</th></tr></thead>
+          <tbody>
+            {names.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 14, color: 'var(--i3)' }}>No film or paper in the Item Master yet.</td></tr>
+              : names.map((m) => {
+                const dflt = defaultDensity(m);
+                return (
+                  <tr key={m}>
+                    <td style={{ fontWeight: 600 }}>{m}</td>
+                    <td><input type="number" step="0.001" min="0" value={valueOf(m)} aria-label={`Density of ${m}`}
+                      placeholder={dflt != null ? String(dflt) : ''} onChange={(e) => setDensity(m, e.target.value)} /></td>
+                    <td style={{ fontSize: 11, color: 'var(--i3)' }}>{dflt != null ? dflt : 'none — GSM typed on the sheet'}</td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+      <div className="fbar" style={{ marginTop: 8 }}>
+        <input placeholder="Another material, or MATERIAL · SPECIALITY" value={extra} aria-label="New density material" onChange={(e) => setExtra(e.target.value)} style={{ flex: 1 }} />
+        <button className="btn btn-s" disabled={!extra.trim()} onClick={() => { setDensity(extra.trim(), defaultDensity(extra) || '1'); setExtra(''); }}>＋ Add</button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Issues 26.10 — printing and lamination tooling per machine. A printing machine has a
+ * maximum film width and the sleeves (repeat, mm) it can run; a lamination machine has
+ * its rollers (width, mm). The machines are the Machines master's Printing and
+ * Lamination departments.
+ */
+function ToolingPanel({ sales, save, machines, error }) {
+  const saved = sales.machine_tooling || {};
+  const [work, setWork] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const cur = work ?? saved;
+  const printers = printingMachines(machines);
+  const laminators = laminationMachines(machines);
+  const get = (key, field) => {
+    const v = (cur[key] || {})[field];
+    return Array.isArray(v) ? v.join(', ') : (v ?? '');
+  };
+  const put = (key, field, v) => setWork({ ...cur, [key]: { ...(cur[key] || {}), [field]: v } });
+  async function persist() {
+    const clean = {};
+    Object.entries(cur).forEach(([k, t]) => {
+      const row = {};
+      if (Number(t.max_width) > 0) row.max_width = Number(t.max_width);
+      const sleeves = parseWidths(t.sleeves); if (sleeves.length) row.sleeves = sleeves;
+      const rollers = parseWidths(t.rollers); if (rollers.length) row.rollers = rollers;
+      if (Object.keys(row).length) clean[k] = row;
+    });
+    setBusy(true);
+    try {
+      await save('sales', (prev) => ({ ...(prev || {}), machine_tooling: clean }));
+      setWork(null);
+      setMsg({ t: 'g', text: '✅ Sleeves, widths and rollers saved.' });
+    } catch (e) { setMsg({ t: 'r', text: 'Save failed: ' + (e.message || e) }); } finally { setBusy(false); }
+  }
+  return (
+    <div className="card" aria-label="Machine tooling">
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>Printing sleeves & lamination rollers</div>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-g" onClick={persist} disabled={busy || work === null}>{busy ? 'Saving…' : '💾 Save'}</button>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        Type sizes in mm separated by commas. The machines come from Drop-down selections → Machines: those under a
+        Printing department appear on top, those under a Lamination department below.
+      </div>
+      {error && <div className="al al-r">Couldn’t load the Machine master — {error}.</div>}
+      {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
+      {work !== null && <div className="al al-y">Unsaved changes.</div>}
+      <div className="ctitle" style={{ fontSize: 12 }}>Printing machines</div>
+      <div className="tw">
+        <table>
+          <thead><tr><th>Machine</th><th style={{ width: 140 }}>Max film width (mm)</th><th>Sleeves — repeat (mm)</th></tr></thead>
+          <tbody>
+            {printers.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', padding: 12, color: 'var(--i3)' }}>No machine under a Printing department yet.</td></tr>
+              : printers.map((m) => {
+                const k = machineKey(m);
+                return (
+                  <tr key={k}>
+                    <td style={{ fontWeight: 600 }}>{machineLabel(m)}</td>
+                    <td><input type="number" min="0" step="any" value={get(k, 'max_width')} aria-label={`Max film width of ${machineLabel(m)}`} onChange={(e) => put(k, 'max_width', e.target.value)} /></td>
+                    <td><input value={get(k, 'sleeves')} aria-label={`Sleeves of ${machineLabel(m)}`} placeholder="e.g. 400, 420, 450, 500" onChange={(e) => put(k, 'sleeves', e.target.value)} /></td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+      <div className="ctitle" style={{ fontSize: 12, marginTop: 10 }}>Lamination machines</div>
+      <div className="tw">
+        <table>
+          <thead><tr><th>Machine</th><th>Rollers — width (mm)</th></tr></thead>
+          <tbody>
+            {laminators.length === 0 ? <tr><td colSpan={2} style={{ textAlign: 'center', padding: 12, color: 'var(--i3)' }}>No machine under a Lamination department yet.</td></tr>
+              : laminators.map((m) => {
+                const k = machineKey(m);
+                return (
+                  <tr key={k}>
+                    <td style={{ fontWeight: 600 }}>{machineLabel(m)}</td>
+                    <td><input value={get(k, 'rollers')} aria-label={`Rollers of ${machineLabel(m)}`} placeholder="e.g. 610, 650, 910" onChange={(e) => put(k, 'rollers', e.target.value)} /></td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

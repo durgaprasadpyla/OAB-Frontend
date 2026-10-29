@@ -275,8 +275,13 @@ export const DESPATCH_FIELDS = {
     { k: 'reading_direction', label: 'Reading direction', type: 'select', options: ['Readable', 'Unreadable'] },
     { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
   ],
+  // Issues 26.10: "The same options that are present in the bulk bag despatch should be
+  // present in the pouch form despatch as well - for side gusset and bottom gusset
+  // entries." — the gusset radio and its width, with the same totals worked out.
   pouch: [
+    { k: 'gusset_type', label: 'Gusset', type: 'radio', options: ['Side gusset', 'Bottom gusset'] },
     { k: 'pouch_width_mm', label: 'Pouch width end to end (mm)', type: 'number', unit: 'mm' },
+    { k: 'gusset_mm', label: 'Gusset (mm)', type: 'number', unit: 'mm' },
     { k: 'pouch_height_mm', label: 'Pouch height end to end (mm)', type: 'number', unit: 'mm' },
     { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
     { k: 'other_specs', label: 'Other specifications', type: 'text' },
@@ -291,6 +296,8 @@ export const DESPATCH_FIELDS = {
     // 30.09 §SK2: "metres per core OR kgs per core" — a choice and a number, not free text
     { k: 'per_core_basis', label: 'Per core', type: 'radio', options: ['Metres per core', 'Kgs per core'], when: 'Roll form' },
     { k: 'per_core_qty', label: 'Metres / Kgs per core', type: 'number', when: 'Roll form' },
+    // Issues 26.10: packing "should be given by the marketing team in the Add SKU page itself"
+    { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
   ],
   labels: [
     { k: 'labels_per_bunch', label: 'Labels in a bunch', type: 'number' },
@@ -302,6 +309,7 @@ export const DESPATCH_FIELDS = {
     { k: 'pouch_width_mm', label: 'Pouch width (mm)', type: 'number', unit: 'mm' },
     { k: 'gusset_mm', label: 'Gusset (mm)', type: 'number', unit: 'mm' },
     { k: 'pouch_height_mm', label: 'Height of the pouch without gusset (mm)', type: 'number', unit: 'mm' },
+    { k: 'packing_instructions', label: 'Packing instructions', type: 'text' },
   ],
   // Issues 17.10 §1: "Others" had no field set at all (despatchKind gave 'other', this
   // map had no 'other'), so picking it showed nothing under Dispatch details. A form
@@ -374,6 +382,22 @@ export function despatchKind(form) {
 }
 
 /**
+ * Issues 26.10: "If it is in roll form then the despatch quantity would be in kgs and
+ * if it is in sleeve form then it will be in numbers. Based on the final selection the
+ * despatch quantity will be defined." Rolls go out by weight; everything cut and
+ * converted goes out by count. '' while the form (or the sleeve's Roll / Sleeve radio)
+ * is not chosen yet.
+ */
+export function tentativeUom(dispatchForm, details = {}) {
+  const k = despatchKind(dispatchForm);
+  const d = details || {};
+  if (k === 'shrink') return /roll/i.test(s(d.sleeve_form)) ? 'Kgs' : /sleeve/i.test(s(d.sleeve_form)) ? 'Nos' : '';
+  if (k === 'roll') return 'Kgs';
+  if (k === 'pouch' || k === 'bulk' || k === 'labels') return 'Nos';
+  return '';
+}
+
+/**
  * Issues 17.10 §1: a shrink-sleeve form named for its form ("Shrink sleeve in roll
  * form") answers the Sleeve / Roll radio itself, so its measurements show at once
  * instead of only the radio.
@@ -423,6 +447,8 @@ export function buildCsaRequest(form, sku, { now = new Date(), user = '' } = {})
     // 28.09 §Superstar ¶1: the warehouse behind the town travels with it
     warehouse_name: s(form.warehouse_name),
     tentative_qty: n(form.tentative_qty),
+    // Issues 26.10: the unit the quantity is in follows the dispatch form (Kgs / Nos)
+    tentative_uom: tentativeUom(sku.dispatch_form || sku.dispatch_type, form),
     tentative_date: s(form.tentative_date),
     target_price: n(form.target_price),
     despatch_form: s(sku.dispatch_form || sku.dispatch_type),
@@ -451,6 +477,8 @@ function despatchDetails(form, kind) {
   if (kind === 'shrink' && s(form.per_core) && details.per_core_qty == null
     && String(form[fields[0].k] || '') === 'Roll form') details.per_core = s(form.per_core);
   if (kind === 'bulk') Object.assign(details, bulkBagTotals(details));
+  // Issues 26.10: a pouch with a gusset gets the same totals; one without stays as typed
+  if (kind === 'pouch' && s(details.gusset_type)) Object.assign(details, bulkBagTotals(details));
   return details;
 }
 
@@ -468,6 +496,7 @@ export function buildCsaDraft(form, dispatchForm, { now = new Date() } = {}) {
     despatch_location: s(f.despatch_location),
     warehouse_name: s(f.warehouse_name),
     tentative_qty: num(f.tentative_qty),
+    tentative_uom: tentativeUom(dispatchForm, f),
     tentative_date: s(f.tentative_date),
     target_price: num(f.target_price),
     despatch_form: s(dispatchForm),

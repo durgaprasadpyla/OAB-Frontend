@@ -483,7 +483,8 @@ describe('SK1-SK4 — dispatch details on Add / Edit SKU', () => {
   };
   const fillSku = async (name, form) => {
     await userEvent.type(screen.getByLabelText('SKU Name'), name);
-    await userEvent.selectOptions(screen.getByLabelText('Category'), 'Dairy');
+    // Issues 26.10: the category comes from the lead's own categories
+    await userEvent.selectOptions(screen.getByLabelText('Category'), 'Juices');
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), form);
   };
   const details = () => screen.getByLabelText('Dispatch details');
@@ -508,16 +509,16 @@ describe('SK1-SK4 — dispatch details on Add / Edit SKU', () => {
     expect(within(details()).getByLabelText('Core width (inches)')).toHaveAttribute('type', 'number');
 
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Pouch');
-    expect(labelsShown()).toEqual(['Pouch width end to end (mm)', 'Pouch height end to end (mm)', 'Packing instructions', 'Other specifications']);
+    expect(labelsShown()).toEqual(['Gusset', 'Pouch width end to end (mm)', 'Gusset (mm)', 'Pouch height end to end (mm)', 'Packing instructions', 'Other specifications']);
 
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Label');
     expect(labelsShown()).toEqual(['Labels in a bunch', 'Labels per box', 'Packing instructions']);
 
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Shrink Sleeve');
     await userEvent.click(within(details()).getByLabelText('Sleeve form'));
-    expect(labelsShown()).toEqual(['Form', 'Height of the sleeve (mm)', 'Width of the sleeve (mm)', 'Open width (mm)']);
+    expect(labelsShown()).toEqual(['Form', 'Height of the sleeve (mm)', 'Width of the sleeve (mm)', 'Open width (mm)', 'Packing instructions']);
     await userEvent.click(within(details()).getByLabelText('Roll form'));
-    expect(labelsShown()).toEqual(['Form', 'Core (inches)', 'Per core', 'Metres / Kgs per core']);
+    expect(labelsShown()).toEqual(['Form', 'Core (inches)', 'Per core', 'Metres / Kgs per core', 'Packing instructions']);
     // §SK2: metres per core OR kgs per core — a choice and a number
     await userEvent.click(within(details()).getByLabelText('Kgs per core'));
     expect(within(details()).getByLabelText('Metres / Kgs per core')).toHaveAttribute('type', 'number');

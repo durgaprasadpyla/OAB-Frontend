@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
-import { balance, calcMetres, calcKg, num } from '../lib/calc.js';
+import { balance, calcMetres, kgFromMetres, num } from '../lib/calc.js';
 import { dash, fmtDate, inr } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { downloadOabPdf } from '../lib/oabPdf.js';
@@ -26,7 +26,7 @@ const STAT_INFO = {
   fg: 'Finished goods already allocated to these sale orders from the FG pool. Allocated FG counts as done, so it reduces the balance.',
   balProduce: 'PO Qty − Inv − Man − FG, per order, never below zero. What is still to be made.',
   balMtrs: 'Running metres for the balance, including the 5% wastage allowance. Pouches: qty × pouch width. Bulk bags: qty × height. Rolls: derived from film width and GSM. Labels contribute no metres.',
-  balKg: "Weight of the film for the balance, including the same 5% wastage as Bal Mtrs: qty × the spec's pouch weight from the JSS × 1.05. Rolls are ordered in metres, so their weight is metres × film width × GSM from the JSS. A spec with no weight (or, for a roll, no film width / GSM) on the JSS is left out and flagged below.",
+  balKg: "Weight of the film for the balance: Bal Mtrs (with its 5% wastage) × film width (mm) ÷ 1000 × GSM ÷ 1000, from each spec's JSS. Rolls are ordered in metres, so their metres are the balance itself. A spec with no film width or GSM on the JSS falls back to qty × its pouch weight × 1.05; one with neither is left out and flagged below.",
 };
 
 /** Whole days since an SO's PO date (null if no/invalid date), for the Age column. */
@@ -149,13 +149,18 @@ export default function OabBoard() {
   // Bal Kg's — the balance converted to weight. A spec with no pouch weight on the
   // JSS is counted separately rather than as zero, so an under-reported total is
   // visible instead of silent.
+  // Issues 26.10: weighed from the balance METRES (metres × film width × GSM), the
+  // same metres the Bal Mtrs tile and the Mtrs column show — see kgFromMetres.
   const kg = useMemo(() => filtered.reduce((acc, r) => {
     const b = balance(r);
-    const k = calcKg(r, b, jssBySpec[r.spec]);
-    if (k == null) { if (b > 0) acc.noWeight++; return acc; }
-    acc.total += k.withWastage;   // same 5% wastage allowance as Bal Mtrs
+    if (!(b > 0)) return acc;
+    const j = jssBySpec[r.spec];
+    const k = kgFromMetres(r, calcMetres(r, b, j).withWastage, j, b);
+    if (k == null) { acc.noWeight++; return acc; }
+    acc.total += k.kg;   // the metres already carry the 5% wastage
+    if (k.basis === 'weight') acc.byWeight++;
     return acc;
-  }, { total: 0, noWeight: 0 }), [filtered, jssBySpec]);
+  }, { total: 0, noWeight: 0, byWeight: 0 }), [filtered, jssBySpec]);
 
   const prodStatus = (so) => (mods.prodStatus && mods.prodStatus[so]) || 'Ready';
   const setSheet = (k) => { setSp({ sheet: k }); setShowClosed(false); };
@@ -167,12 +172,13 @@ export default function OabBoard() {
 
   function exportExcel() {
     const header = ['SO', 'Spec', 'Dispatch', 'Customer', 'Job', 'Sub Brand', 'Disp Loc', 'Loc Code', 'PO#', 'PO Date',
-      'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Metres+5%', 'Prod Status', 'Stage'];
+      'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Metres+5%', 'Kgs', 'Prod Status', 'Stage'];
     const body = filtered.map((r) => {
       const b = balance(r);
       const m = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
+      const k = b > 0 ? kgFromMetres(r, m, jssBySpec[r.spec], b) : null;
       return [r.so, r.spec, dispForm(r), r.customer, r.jobName, r.subBrand, r.dispLoc, locCode(r), r.poNum, fmtDate(r.poDate),
-        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, prodStatus(r.so), r.stage || ''];
+        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, k ? Math.round(k.kg) : '', prodStatus(r.so), r.stage || ''];
     });
     exportAOA([header, ...body], `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.xlsx`, sheet);
   }
@@ -305,7 +311,8 @@ export default function OabBoard() {
             <Stat label="Bal Mtrs" value={<>{dash(tM)}&nbsp;m</>} cls="red" info={STAT_INFO.balMtrs} />
             <Stat
               label="Bal Kg's" value={<>{dash(Math.round(kg.total))}&nbsp;kg</>} cls="red" info={STAT_INFO.balKg}
-              note={kg.noWeight ? `${kg.noWeight} spec${kg.noWeight === 1 ? ' has' : 's have'} no weight` : ''}
+              note={[kg.noWeight ? `${kg.noWeight} spec${kg.noWeight === 1 ? ' has' : 's have'} no weight (no film width / GSM or pouch weight)` : '',
+                kg.byWeight ? `${kg.byWeight} by pouch weight` : ''].filter(Boolean).join(' · ')}
             />
           </div>
 
@@ -325,14 +332,14 @@ export default function OabBoard() {
                   <th style={{ minWidth: 50, textAlign: 'right' }} title="Days since PO date">Age</th>
                   <th style={{ minWidth: 55, textAlign: 'right' }}>Qty</th><th style={{ minWidth: 50, textAlign: 'right' }}>Inv</th>
                   <th style={{ minWidth: 50, textAlign: 'right' }}>Man</th><th style={{ minWidth: 40, textAlign: 'right' }}>FG</th>
-                  <th style={{ minWidth: 50, textAlign: 'right' }}>Bal</th><th style={{ minWidth: 75, textAlign: 'right' }}>Mtrs</th>
+                  <th style={{ minWidth: 50, textAlign: 'right' }}>Bal</th><th style={{ minWidth: 75, textAlign: 'right' }}>Mtrs</th><th style={{ minWidth: 70, textAlign: 'right' }} title="Mtrs × film width × GSM">Kgs</th>
                   <th style={{ minWidth: 90, textAlign: 'center' }}>Status</th>
                   <th style={{ minWidth: 110, textAlign: 'center' }}>Stage</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={19} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>{rowsLoading ? 'Loading…' : 'No data'}</td></tr>
+                  <tr><td colSpan={20} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>{rowsLoading ? 'Loading…' : 'No data'}</td></tr>
                 ) : filtered.map((r, i) => {
                   const b = balance(r);
                   const mW = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
@@ -367,6 +374,11 @@ export default function OabBoard() {
                       <td style={{ textAlign: 'right' }}>{dash(r.fg)}</td>
                       <td style={{ textAlign: 'right' }}><BalanceBadge value={b}>{dash(b)}</BalanceBadge></td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap', minWidth: 90 }}>{mW > 0 ? <><strong>{dash(mW)}</strong>&nbsp;m</> : '-'}</td>
+                      {/* Issues 26.10: the row's balance in kg, weighed from its metres */}
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap', fontSize: 11 }}>{(() => {
+                        const k = b > 0 ? kgFromMetres(r, mW, jssBySpec[r.spec], b) : null;
+                        return k ? <span title={k.basis === 'weight' ? 'No film width / GSM on the JSS — from the pouch weight' : 'Mtrs × film width × GSM'}>{dash(Math.round(k.kg))}{k.basis === 'weight' ? '*' : ''}</span> : '-';
+                      })()}</td>
                       <td><ProdBadge status={st} /></td>
                       <td style={{ textAlign: 'center' }}>{r.stage ? <span className="tag tb" style={{ fontSize: 9, whiteSpace: 'nowrap' }}>{r.stage}</span> : <span style={{ color: 'var(--i3)', fontSize: 10 }}>-</span>}</td>
                     </tr>

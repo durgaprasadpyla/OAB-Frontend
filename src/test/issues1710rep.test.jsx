@@ -33,7 +33,7 @@ async function startSku(form) {
   await userEvent.click(screen.getByLabelText('SKU pick Lead'));
   await userEvent.selectOptions(screen.getByLabelText('SKU Lead'), 'L3');
   await userEvent.type(screen.getByLabelText('SKU Name'), 'X');
-  await userEvent.selectOptions(screen.getByLabelText('Category'), 'Dairy');
+  await userEvent.selectOptions(screen.getByLabelText('Category'), 'Juices');   // the lead's own category (26.10)
   if (form) await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), form);
 }
 
@@ -94,7 +94,7 @@ describe('Issues 17.10 §1 — every dispatch form has measurements', () => {
     // the roll-form shrink sleeve shows its roll measurements at once — not just the radio
     await userEvent.selectOptions(screen.getByLabelText('Dispatch Form'), 'Shrink sleeve in roll form');
     expect(within(details()).getByLabelText('Roll form')).toBeChecked();
-    expect(labelsShown()).toEqual(['Form', 'Core (inches)', 'Per core', 'Metres / Kgs per core']);
+    expect(labelsShown()).toEqual(['Form', 'Core (inches)', 'Per core', 'Metres / Kgs per core', 'Packing instructions']);
   });
 
   it('a plain Shrink Sleeve says the measurements wait on the form radio', async () => {

@@ -10,8 +10,9 @@ import {
 import {
   repBook, despatchLocationRowsFor, masterRowsFor, DESPATCH_FIELDS, despatchKind, bulkBagTotals,
   buildCsaRequest, buildCsaDraft, csaDetailsOf, sendSkuForCsa, quoteStatusOf, saveErrorText,
-  presetDespatchDetails, withCurrentDespatchKeys,
+  presetDespatchDetails, withCurrentDespatchKeys, tentativeUom,
 } from '../lib/repFlow.js';
+import { leadCategories } from '../lib/sales.js';
 import LeadCustomerPicker from './LeadCustomerPicker.jsx';
 import SubstrateLayers, { blankSubLayers, structureFromSubLayers, subLayersFromStructure } from './SubstrateLayers.jsx';
 
@@ -137,7 +138,7 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
   const setC = (patch) => setCsa((c) => ({ ...c, ...patch }));
   const flash = (t, text) => { setMsg({ t, text }); if (t === 'g') setTimeout(() => setMsg(null), 5000); };
 
-  const categories = ddList(sales, 'categories');
+  const allCategories = ddList(sales, 'categories');
   const despatchAll = useMemo(() => ddPairs(sales, 'despatch') || DESPATCH_FORMS, [sales]);
   const cityList = ddList(sales, 'locations');
 
@@ -156,6 +157,12 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
 
   // Sales Admin can restrict which despatch forms apply to a customer + category.
   const selectedLead = leadOf(form.leadId);
+  // Issues 26.10: "while adding an SKU for a lead, the category selection should be
+  // picked up from the lead category selection whereas now it is showing me the entire
+  // category list" — the categories chosen on the lead (as its dispatch forms already
+  // are); a lead with none recorded still offers the whole list.
+  const leadCats = leadCategories(selectedLead);
+  const categories = leadCats.length ? leadCats : allCategories;
   const despatchOptions = allowedDespatchForms(selectedLead, form.category, despatchAll);
   const restricted = despatchOptions.length !== despatchAll.length;
   // an edit must show the SKU's own form even if the category no longer allows it
@@ -172,7 +179,9 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
   const kind = despatchKind(form.dispatchForm);
   const fields = DESPATCH_FIELDS[kind] || [];
   const shown = fields.filter((f) => !f.when || String(csa[fields[0].k] || '') === f.when);
-  const bulk = kind === 'bulk' ? bulkBagTotals(csa) : null;
+  // Issues 26.10: a pouch has the bulk bag's side / bottom gusset, and its totals
+  const bulk = kind === 'bulk' || (kind === 'pouch' && csa.gusset_type) ? bulkBagTotals(csa) : null;
+  const qtyUom = tentativeUom(form.dispatchForm, csa);
 
   /** A new lead / category / despatch form: the measurements of the old form never leak into the new one. */
   function pickLead(id) {
@@ -372,8 +381,6 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
                     : 'Not in the Customer Master yet — the lead’s own city and the Super Admin’s Locations list.'}
               </div>
             </div>
-            <div className="fg"><label>Tentative order quantity *</label><input type="number" min="0" step="any" value={csa.tentative_qty} aria-label="Tentative order quantity" onChange={(e) => setC({ tentative_qty: e.target.value })} /></div>
-            <div className="fg"><label>Tentative dispatch date *</label><input type="date" value={csa.tentative_date} aria-label="Tentative dispatch date" onChange={(e) => setC({ tentative_date: e.target.value })} /></div>
             <div className="fg"><label>Target price (₹) *</label>
               <input type="number" min="0" step="0.01" value={csa.target_price} aria-label="Target price" onChange={(e) => setC({ target_price: e.target.value })} />
               {/* 29.09 ¶26: "Target price (This shall only be visible in quote login)." */}
@@ -399,6 +406,19 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
               {bulk && <BulkBagTotals bulk={bulk} csa={csa} />}
             </>
           )}
+          {/* Issues 26.10: "the tentative order quantity and tentative despatch date should
+              both be the last selections when I add an SKU because the tentative quantity
+              will be based on the despatch form that we select" — and its unit beside it. */}
+          <div className="g4" aria-label="Tentative quantity and date" style={{ marginTop: 6 }}>
+            <div className="fg"><label>Tentative order quantity *{qtyUom ? ` (${qtyUom})` : ''}</label>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="number" min="0" step="any" value={csa.tentative_qty} aria-label="Tentative order quantity" style={{ flex: 1, minWidth: 0 }} onChange={(e) => setC({ tentative_qty: e.target.value })} />
+                <span className="tag tgr" aria-label="Tentative quantity unit" style={{ flexShrink: 0 }}>{qtyUom || '—'}</span>
+              </div>
+              {!qtyUom && <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>{kind === 'shrink' ? 'Kgs for a roll form, Nos for a sleeve form.' : 'The unit follows the dispatch form.'}</div>}
+            </div>
+            <div className="fg"><label>Tentative dispatch date *</label><input type="date" value={csa.tentative_date} aria-label="Tentative dispatch date" onChange={(e) => setC({ tentative_date: e.target.value })} /></div>
+          </div>
         </div>
 
         <div className="act">
@@ -437,6 +457,12 @@ export default function RepSkusTab({ leads, sales, save, repId }) {   // eslint-
                     <td>
                       <span className="tag tb">{sku.category || '—'}</span>
                       <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 3 }}>{sku.dispatch_form || sku.dispatch_type || '—'}</div>
+                      {(() => {
+                        const d = csaDetailsOf(sku);
+                        if (!d || !(Number(d.tentative_qty) > 0)) return null;
+                        const u = d.tentative_uom || tentativeUom(sku.dispatch_form || sku.dispatch_type, d.details);
+                        return <div style={{ fontSize: 10, marginTop: 2 }} aria-label={`Tentative quantity of ${sku.sku_name}`}>Qty {Number(d.tentative_qty).toLocaleString('en-IN')}{u ? ' ' + u : ''}</div>;
+                      })()}
                     </td>
                     <td style={{ fontSize: 11 }}>{sku.structure || '—'}</td>
                     <td>{statusTag(sku)}</td>

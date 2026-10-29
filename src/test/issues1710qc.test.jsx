@@ -72,58 +72,41 @@ describe('csaFields', () => {
   });
 });
 
-describe('QC CSA form — Issues 17.10 §8', () => {
-  it('a Roll requisition shows roll measurements, a film-width dropdown from the Item Master, preselected from the structure', async () => {
+// Issues 26.10 replaced the Measurements grid with the Specifications sheet: the
+// dispatch form still decides which block shows, and a figure the sheet does not
+// recompute keeps its saved value through an edit.
+describe('QC CSA form — Issues 17.10 §8, as the 26.10 Specifications sheet', () => {
+  it('a Roll requisition shows the roll block and no pouch one, and saves the core', async () => {
     const { saved } = await openForm([sku('S1', 'Roll A', 'Roll', { structure: 'CC PET · 12 mic · 600 mm' })], 'Roll A');
-    expect(screen.getByLabelText('Measurements for dispatch form')).toHaveTextContent('Dispatch form: Roll');
-    expect(screen.queryByLabelText('Pouch height')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Pouches per kg')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Pouch weight')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Core (inches)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Specifications for dispatch form')).toHaveTextContent('Dispatch form: Roll');
+    expect(screen.getByLabelText('Roll specifications')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pouch specifications')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Per reel (Kgs)')).toBeInTheDocument();
-
-    const fw = await screen.findByLabelText('Film width');
-    expect(fw.tagName).toBe('SELECT');
-    await waitFor(() => expect(fw).toHaveValue('600'));
-    expect(within(fw).getAllByRole('option').map((o) => o.textContent)).toEqual(['— select —', '600', '700']);
-
-    await userEvent.selectOptions(fw, '700');
     await userEvent.type(screen.getByLabelText('Core (inches)'), '3');
     await userEvent.click(screen.getByText(/Save CSA report/));
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const r = saved.filter((s) => s.key === 'sales').pop().data.qc_reports[0];
-    expect(r).toMatchObject({ sku_id: 'S1', film_width: 700, core_in: 3, dispatch_type: 'Roll' });
+    expect(r).toMatchObject({ sku_id: 'S1', core_in: 3, dispatch_type: 'Roll' });
+    expect(r.spec.core_in).toBe('3');
   });
 
-  it('a Pouch requisition shows the pouch measurements and no roll ones', async () => {
+  it('a Pouch requisition shows the pouch block and no roll one', async () => {
     await openForm([sku('S1', 'Pouch A', 'Pouch')], 'Pouch A');
-    expect(screen.getByLabelText('Pouch height')).toBeInTheDocument();
+    expect(screen.getByLabelText('Pouch specifications')).toBeInTheDocument();
+    expect(screen.getByLabelText('Individual pouch height (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Pouches per kg')).toBeInTheDocument();
-    expect(screen.getByLabelText('Gusset')).toBeInTheDocument();
     expect(screen.queryByLabelText('Core (inches)')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Sleeve repeat')).not.toBeInTheDocument();
   });
 
-  it('a direct report with no dispatch form shows every measurement', async () => {
+  it('a direct report with no dispatch form says so and still has the printing section', async () => {
     await openForm([]);
     await userEvent.click(screen.getByText(/Direct CSA report/));
-    expect(screen.getByLabelText('Measurements for dispatch form')).toHaveTextContent('Dispatch form not set');
-    ['Pouch height', 'Core (inches)', 'Sleeve repeat', 'Lay-flat width', 'Print repeat'].forEach((l) => {
-      expect(screen.getByLabelText(l)).toBeInTheDocument();
-    });
+    expect(screen.getByLabelText('Specifications for dispatch form')).toHaveTextContent('Dispatch form not set');
+    expect(screen.getByLabelText('Single print repeat (mm)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Coating')).toBeInTheDocument();
   });
 
-  it('narrows the widths to the chosen substrates and keeps a width that dropped out as (current)', async () => {
-    await openForm([sku('S1', 'Roll A', 'Roll', { structure: 'CC PET · 12 mic · 600 mm' })], 'Roll A');
-    const fw = await screen.findByLabelText('Film width');
-    await waitFor(() => expect(fw).toHaveValue('600'));
-    await userEvent.selectOptions(screen.getByLabelText('Primary Substrate'), 'LDPE - NATURAL');
-    const opts = within(screen.getByLabelText('Film width')).getAllByRole('option').map((o) => o.textContent);
-    expect(opts).toEqual(['— select —', '(current) 600', '700']);
-    expect(screen.getByLabelText('Film width')).toHaveValue('600');
-  });
-
-  it('a hidden measurement keeps its saved value through an edit', async () => {
+  it('a figure the sheet does not recompute keeps its saved value through an edit', async () => {
     const report = {
       id: 'R1', source: 'sales_os', sku_id: 'S1', lead_id: 'L1', created_at: '2026-10-11T00:00:00Z',
       dispatch_type: 'Roll', substrate1: 'CC PET', substrate1_val: 12, ink_gsm: 2, film_width: 600,
@@ -131,15 +114,15 @@ describe('QC CSA form — Issues 17.10 §8', () => {
     };
     const { saved } = await openForm([sku('S1', 'Roll A', 'Roll', { csa_received: 'Yes' })], null, [report]);
     await userEvent.click(await screen.findByLabelText('Edit CSA for Roll A'));
-    expect(screen.queryByLabelText('Pouch height')).not.toBeInTheDocument();
-    const ink = screen.getByLabelText('Ink GSM');
-    await userEvent.clear(ink);
-    await userEvent.type(ink, '3');
+    expect(screen.queryByLabelText('Pouch specifications')).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Ink GSM'), '3');
     await userEvent.click(screen.getByText(/Save CSA report/));
     await userEvent.type(await screen.findByLabelText('Re-approve comments'), 'ink up');
     await userEvent.click(screen.getByText(/Save and send to the plant/));
     await waitFor(() => expect(saved.some((s) => s.key === 'sales')).toBe(true));
     const r = saved.filter((s) => s.key === 'sales').pop().data.qc_reports[0];
+    // the sheet's ink (3) now drives the flat ink GSM; the rest are as saved
     expect(r).toMatchObject({ ink_gsm: 3, pouch_height: 150, pouches_per_kg: 900, film_width: 600 });
+    expect(r.gsm).toBe(16.8 + 3);   // CC PET 1.4 × 12 + ink
   });
 });

@@ -7,7 +7,8 @@
 //
 // Ported from qcCsa* (QC side) and pmCsa* (plant side).
 
-import { salesUid, salesToday } from './sales.js';
+import { salesUid, salesToday, repName } from './sales.js';
+import { blankSheet, sheetOf, sheetIsBlank, flatFromSheet } from './specSheet.js';
 
 const s = (v) => String(v == null ? '' : v).trim();
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -88,6 +89,24 @@ export function csaPendingForQc(sales) {
     .sort((a, b) => csaDaysSince(csaSampleDate(b)) - csaDaysSince(csaSampleDate(a)));
 }
 
+/**
+ * Issues 26.10: the samples waiting on QC, counted by who asked — the rep who sent the
+ * requisition (else who made the SKU). Most requests first; `oldest` is the longest wait.
+ */
+export function csaRequestsByRequester(sales, pending = csaPendingForQc(sales)) {
+  const users = arr(sales && sales.sales_users);
+  const by = new Map();
+  arr(pending).forEach((sk) => {
+    const id = s((sk.csa_request && sk.csa_request.sent_by) || sk.created_by);
+    const name = (id && users.some((u) => String(u.id) === id) ? repName(users, id) : id) || 'Unknown';
+    const cur = by.get(name) || { name, count: 0, oldest: 0 };
+    cur.count += 1;
+    cur.oldest = Math.max(cur.oldest, csaDaysSince(csaSampleDate(sk)));
+    by.set(name, cur);
+  });
+  return [...by.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
 /** Reports the plant still owes an answer on. (pmCsaRenderPending) */
 export function csaPendingForPlant(sales) {
   return arr(sales && sales.qc_reports)
@@ -140,7 +159,36 @@ export const CSA_BLANK = {
   substrate3: '', substrate3_val: '', substrate3_specialty: '',
   coating: '', glue_tape: '', printed: '', plant_comment_req: '',
   ...Object.fromEntries(CSA_NUMERIC.map((k) => [k, ''])),
+  // Issues 26.10: the Specifications sheet (lib/specSheet.js) and, for a Sales-OS
+  // report, the QC's editable copy of the rep's requisition
+  spec: blankSheet(),
+  request: null,
 };
+
+/** The structure layers of a CSA form / report, as the spec sheet reads them. */
+export function csaLayers(form) {
+  const f = form || {};
+  return [1, 2, 3].map((n) => ({
+    material: s(f[`substrate${n}`]), specialty: s(f[`substrate${n}_specialty`]),
+    microns: f[`substrate${n}_val`] == null || f[`substrate${n}_val`] === 0 ? '' : String(f[`substrate${n}_val`]),
+  }));
+}
+
+/**
+ * Issues 26.10: "While creating the CSA report all the details that are mentioned by
+ * the sales rep should also be present in the editable format in here - including the
+ * despatch form." The rep's requisition, copied onto the form for QC to correct; the
+ * SKU's own requisition is left as the rep sent it.
+ */
+export function csaRequestCopy(sku) {
+  const r = (sku && sku.csa_request) || null;
+  if (!r) return null;
+  return {
+    despatch_location: s(r.despatch_location), warehouse_name: s(r.warehouse_name),
+    tentative_qty: r.tentative_qty ?? '', tentative_uom: s(r.tentative_uom), tentative_date: s(r.tentative_date),
+    despatch_form: s(r.despatch_form), details: { ...(r.details || {}) },
+  };
+}
 
 /**
  * Build a CSA report. An empty `skuId` means a direct report raised by QC, which
@@ -164,7 +212,9 @@ export function buildCsaReport(form, { sales, skuId = '', user = '', now = new D
     company_name: direct ? s(form.company_name) : null,
     product_desc: direct ? s(form.product_desc) : null,
     // 30.09 QT1: the rep's SKU form writes `dispatch_form`; older SKUs carry `dispatch_type`
-    dispatch_type: direct ? s(form.dispatch_type) : (sku ? (sku.dispatch_form || sku.dispatch_type || null) : null),
+    // Issues 26.10: QC may correct the rep's dispatch form on the report itself
+    dispatch_type: direct ? s(form.dispatch_type)
+      : (s(form.dispatch_type) || (sku ? (sku.dispatch_form || sku.dispatch_type || null) : null)),
     responsible_person: direct ? s(form.responsible_person) : null,
     party_kind: direct ? (s(form.party_kind) === 'lead' ? 'lead' : 'customer') : null,
     substrate1: s(form.substrate1), substrate2: s(form.substrate2), substrate3: s(form.substrate3),
@@ -184,6 +234,16 @@ export function buildCsaReport(form, { sales, skuId = '', user = '', now = new D
     created_at: now.toISOString(),
   };
   CSA_NUMERIC.forEach((k) => { report[k] = Number(form[k]) || 0; });
+  // Issues 26.10: the Specifications sheet, and the flat figures the quote desk and the
+  // JSS have always read (GSM, film width, pouch weight …) worked out from it
+  if (form.spec && !sheetIsBlank(form.spec)) {
+    report.spec = sheetOf(form.spec);
+    const flat = flatFromSheet(sales, csaLayers(form), report.spec, report.dispatch_type);
+    Object.entries(flat).forEach(([k, v]) => {
+      if (typeof v === 'number') { if (v > 0) report[k] = v; } else if (s(v)) report[k] = v;
+    });
+  }
+  if (!direct && form.request) report.request = { ...form.request, details: { ...(form.request.details || {}) } };
   return report;
 }
 

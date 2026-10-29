@@ -18,7 +18,10 @@ import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
 import CertificatePanel from '../components/CertificatePanel.jsx';
 import CsaPanel from '../components/CsaPanel.jsx';
-import CsaToJssPanel from '../components/CsaToJssPanel.jsx';
+import CsaToJssPanel, { jssFieldsFromCsa } from '../components/CsaToJssPanel.jsx';
+import SpecSheet from '../components/SpecSheet.jsx';
+import { blankSheet, gsmBreakdown, jssWithSheet, sheetErrors } from '../lib/specSheet.js';
+import { csaPendingForQc, csaRequestsByRequester } from '../lib/csa.js';
 
 // QC / JSS spec entry, ported from the legacy showQCView + initQCForm +
 // saveQCSpec + qcCalcPW + renderQCTable + exportJSSExcel. Persists to the
@@ -36,6 +39,8 @@ const BLANK = {
   layers: [blankLayer(), blankLayer(), blankLayer()],
   gsm: '', filmWidth: '', ups: '', width: '', height: '',
   gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: '', status: 'Active',
+  // Issues 26.10: the same Specifications sheet as the CSA report
+  specSheet: blankSheet(),
 };
 
 // Status -> legacy .tag colour class.
@@ -106,6 +111,14 @@ export default function QC() {
   const itemsApi = useApi('/api/master/items');
   const items = useMemo(() => (Array.isArray(itemsApi.data) ? itemsApi.data : []), [itemsApi.data]);
   const materials = useMemo(() => materialOptions(items), [items]);
+  // Issues 26.10: printing / lamination machines for the Specifications sheet
+  const machinesApi = useApi('/api/master/machines');
+  const machines = useMemo(() => (Array.isArray(machinesApi.data) ? machinesApi.data : []), [machinesApi.data]);
+  const sales = mods.sales || {};
+  // Issues 26.10: "the number of samples that are requested by various people should be
+  // highlighted in the QC main login dashboard itself, on the landing page"
+  const pendingSamples = useMemo(() => csaPendingForQc(sales), [sales]);
+  const requesters = useMemo(() => csaRequestsByRequester(sales, pendingSamples), [sales, pendingSamples]);
 
   const [form, setForm] = useState(BLANK);
   const [q, setQ] = useState('');
@@ -137,7 +150,10 @@ export default function QC() {
     const dispatch = rest.dispatchForm
       ? (dispatchOptions.find((o) => String(o).trim().toLowerCase() === String(rest.dispatchForm).trim().toLowerCase()) || '')
       : '';
-    setForm((f) => ({ ...f, ...rest, dispatchForm: dispatch || f.dispatchForm, layers: mapped.layers }));
+    setForm((f) => ({
+      ...f, ...rest, dispatchForm: dispatch || rest.dispatchForm || f.dispatchForm, layers: mapped.layers,
+      specSheet: rest.specSheet || blankSheet(),
+    }));
     const notes = ['Filled from the CSA — check the fields and press Add Spec.'];
     if (mapped.filled >= 2 && !isLaminateJobType(form.jobType)) {
       notes.push(`This CSA has ${mapped.filled} layers — pick a laminate Job Type to see layers 2 and 3.`);
@@ -147,6 +163,30 @@ export default function QC() {
     if (made) notes.push(`JSS ${made.spec} was already made from this CSA — Add Spec links it to the SKU without a new number.`);
     setMsg({ type: 'g', text: notes.join(' ') });
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ }
+  }
+
+  /**
+   * Issues 26.10: "When the QC clicks on 'Convert this particular CSA to JSS,' all the
+   * fields that are entered in the CSA should be populated in the JSS within every
+   * entry editable." A Sales-OS report links back to its SKU on Add Spec as before.
+   */
+  function convertCsa(r) {
+    const sku = (sales.skus || []).find((x) => x.id === r.sku_id) || null;
+    const lead = (sales.leads || []).find((l) => l.id === (r.lead_id || (sku && sku.lead_id))) || null;
+    const fields = jssFieldsFromCsa({ sku, lead, report: r, customers });
+    if (r.source === 'direct') {
+      const name = String(r.company_name || '').trim();
+      const master = r.party_kind !== 'lead'
+        ? customers.find((c) => String(c.customer || '').trim().toLowerCase() === name.toLowerCase()) : null;
+      fields.customer = master ? String(master.customer).trim() : '';
+      fields.group = master ? (master.group || '') : '';
+      fields.jobName = String(r.product_desc || '').trim();
+    }
+    setTab('spec');
+    pickCsa(r.source === 'direct' ? '' : (r.sku_id || ''), fields);
+    if (r.source === 'direct' && r.party_kind === 'lead') {
+      setMsg({ type: 'y', text: `Filled from the CSA for the lead ${r.company_name} — a JSS needs a customer, so pick it once the lead is converted.` });
+    }
   }
 
   /** §65: the JSS number goes onto the sales SKU, so the rep's PO can carry it. */
@@ -284,7 +324,9 @@ export default function QC() {
       setMsg({ type: 'r', text: 'Still to choose: ' + missing.join(', ') + '.' });
       return;
     }
-    const row = {
+    const sheetErr = sheetErrors(sales, form.specSheet, machines);
+    if (sheetErr.length) { setMsg({ type: 'r', text: sheetErr.join(' ') }); return; }
+    const baseRow = {
       jobType: String(form.jobType || '').trim(),
       group,
       customer,
@@ -301,13 +343,16 @@ export default function QC() {
       // material / mic / structure and the per-layer fields, from the layers above
       ...composed,
     };
+    // Issues 26.10: the sheet goes with the spec, and fills the figures left blank
+    const row = jssWithSheet(sales, baseRow, layers.slice(0, layerCountFor(form.jobType)), form.specSheet);
     // Manual pouch weight wins; otherwise fall back to the derived figure.
     // Packing standard: pcs per bag — drives the AUTO-GENERATED packing list.
     const qpb = parseInt(form.qtyPerBag, 10);
     if (qpb > 0) row.qtyPerBag = qpb;
     const pwManual = parseFloat(form.pouchWeight);
     const pw = (Number.isFinite(pwManual) && pwManual > 0) ? pwManual
-      : (Number.isFinite(autoGrams) && autoGrams > 0 ? Number(autoGrams.toFixed(6)) : 0);
+      : Number(row.pouchWeight) > 0 ? Number(row.pouchWeight)
+        : (Number.isFinite(autoGrams) && autoGrams > 0 ? Number(autoGrams.toFixed(6)) : 0);
     if (pw > 0) row.pouchWeight = pw;
     // 30.09 QT6: which accepted CSA this spec was made from — what lets a re-pick
     // link it instead of numbering a duplicate when the SKU link did not save
@@ -339,7 +384,7 @@ export default function QC() {
       }
       setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully.' + (fromSku ? ' The JSS number is on the sales SKU now.' : ' Next spec ready.') });
       // Reset entry fields but keep the group + customer for fast repeat entry.
-      setForm((f) => ({ ...BLANK, layers: [blankLayer(), blankLayer(), blankLayer()], group: f.group, customer: f.customer }));
+      setForm((f) => ({ ...BLANK, layers: [blankLayer(), blankLayer(), blankLayer()], specSheet: blankSheet(), group: f.group, customer: f.customer }));
     } catch (e) {
       setMsg({ type: 'r', text: 'Save failed: ' + (e && e.message ? e.message : String(e)) });
     } finally {
@@ -366,7 +411,8 @@ export default function QC() {
     return (
       <div id="app">
         <div className="pg-ttl">QC — Route and BOM</div>
-        <QcTabs tab={tab} setTab={setTab} />
+        <QcTabs tab={tab} setTab={setTab} pending={pendingSamples.length} />
+        <SampleBanner requesters={requesters} total={pendingSamples.length} onOpen={() => setTab('csa')} />
         <JssPlanningPanel />
         {/* Issues 3.0: QC writes the recipe, so QC can take the sale-order sheet too. */}
         <SoBomDownloads compact />
@@ -377,7 +423,8 @@ export default function QC() {
     return (
       <div id="app">
         <div className="pg-ttl">QC</div>
-        <QcTabs tab={tab} setTab={setTab} />
+        <QcTabs tab={tab} setTab={setTab} pending={pendingSamples.length} />
+        <SampleBanner requesters={requesters} total={pendingSamples.length} onOpen={() => setTab('csa')} />
         <CertificatePanel />
       </div>
     );
@@ -386,8 +433,9 @@ export default function QC() {
     return (
       <div id="app">
         <div className="pg-ttl">QC</div>
-        <QcTabs tab={tab} setTab={setTab} />
-        <CsaPanel role="qc" />
+        <QcTabs tab={tab} setTab={setTab} pending={pendingSamples.length} />
+        <SampleBanner requesters={requesters} total={pendingSamples.length} onOpen={null} />
+        <CsaPanel role="qc" onConvertToJss={convertCsa} />
       </div>
     );
   }
@@ -395,7 +443,8 @@ export default function QC() {
     return (
       <div id="app">
         <div className="pg-ttl">QC</div>
-        <QcTabs tab={tab} setTab={setTab} />
+        <QcTabs tab={tab} setTab={setTab} pending={pendingSamples.length} />
+        <SampleBanner requesters={requesters} total={pendingSamples.length} onOpen={() => setTab('csa')} />
         <CapaPanel />
       </div>
     );
@@ -404,7 +453,8 @@ export default function QC() {
   return (
     <div id="app">
       <div className="pg-ttl">QC — JSS Spec Entry</div>
-      <QcTabs tab={tab} setTab={setTab} />
+      <QcTabs tab={tab} setTab={setTab} pending={pendingSamples.length} />
+      <SampleBanner requesters={requesters} total={pendingSamples.length} onOpen={() => setTab('csa')} />
       <div className="pg-sub">Add a new JSS master spec and review the full spec list.</div>
 
       <CsaToJssPanel picked={fromSku} onPick={pickCsa} />
@@ -436,7 +486,14 @@ export default function QC() {
           canAddNew={false}
           specCode={nextSpec}
           showStatus
+          gsmAuto={gsmBreakdown(sales, form.layers, form.specSheet).total}
         />
+
+        {/* Issues 26.10: the CSA report's Specifications sheet, here too */}
+        <div className="ctitle" style={{ marginTop: 10 }}>Specifications</div>
+        <SpecSheet sales={sales} layers={(form.layers || []).slice(0, layerCountFor(form.jobType))} sheet={form.specSheet}
+          onChange={(sheet) => setForm((f) => ({ ...f, specSheet: sheet }))}
+          dispatchForm={form.dispatchForm} machines={machines} idPrefix="jss" />
 
         <div className="g4">
           <div className="fg">
@@ -564,12 +621,36 @@ const QC_TABS = [
   { k: 'csa', label: '🧪 CSA Reports' },
 ];
 
-function QcTabs({ tab, setTab }) {
+function QcTabs({ tab, setTab, pending = 0 }) {
   return (
     <div className="step-bar" style={{ flexWrap: 'wrap' }}>
       {QC_TABS.map((t) => (
-        <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
+        <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>
+          {t.label}
+          {t.k === 'csa' && pending > 0 && <span className="tag tr" style={{ marginLeft: 6, fontSize: 9 }} aria-label="Samples pending CSA">{pending}</span>}
+        </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Issues 26.10: the samples waiting for a CSA, and who asked for them, on every QC page —
+ * the landing page included — not only inside the CSA tab.
+ */
+function SampleBanner({ requesters, total, onOpen }) {
+  if (!total) return null;
+  return (
+    <div className="al al-y" role="status" aria-label="Samples waiting for a CSA report"
+      style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', border: '2px solid #E67E22' }}>
+      <b>🧪 {total} sample{total > 1 ? 's' : ''} received and sent — waiting for a CSA report</b>
+      <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {requesters.map((r) => (
+          <span key={r.name} className="tag tb" style={{ fontSize: 10 }}>{r.name}: {r.count}{r.oldest > 0 ? ` · oldest ${r.oldest}d` : ''}</span>
+        ))}
+      </span>
+      <span style={{ flex: 1 }} />
+      {onOpen && <button className="btn btn-b" style={{ height: 26, fontSize: 11 }} onClick={onOpen}>Open CSA Reports</button>}
     </div>
   );
 }

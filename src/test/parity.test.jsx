@@ -54,7 +54,8 @@ describe('ddList — overrides vs defaults', () => {
 
   it('covers all nine lists with a default each', () => {
     // Master-backed categories (e.g. Departments) draw from a live master, not DD_DEFAULTS.
-    DROPDOWN_DEFS.filter((d) => !d.master).forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
+    // Issues 26.10: densities and machine tooling have their own panels and built-in rules
+    DROPDOWN_DEFS.filter((d) => !d.master && !d.panel).forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
   });
 });
 
