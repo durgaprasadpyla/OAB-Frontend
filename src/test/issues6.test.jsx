@@ -177,13 +177,16 @@ describe('FG Entry — one figure in both logins', () => {
     const { default: FgEntryPanel } = await import('../components/FgEntryPanel.jsx');
     render(<FgEntryPanel heading={false} costing="none" />);
     await waitFor(() => expect(reloadModule).toHaveBeenCalledWith('fgLedger'));
+    // Issues 02.11: and the order book, so an invoice raised since sign-in counts
+    await waitFor(() => expect(reloadModule).toHaveBeenCalledWith('oab'));
+    const ledgerReads = () => reloadModule.mock.calls.filter((c) => c[0] === 'fgLedger').length;
     expect(await screen.findByLabelText('FG as of')).toHaveTextContent(/re-read from the server/);
     const flagsBefore = globalThis.fetch.mock.calls.filter((c) => String(c[0]).includes('/api/stores/fg-flags')).length;
     fireEvent.click(screen.getByLabelText('Refresh FG'));
-    await waitFor(() => expect(reloadModule).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(ledgerReads()).toBe(2));
     await waitFor(() => expect(globalThis.fetch.mock.calls.filter((c) => String(c[0]).includes('/api/stores/fg-flags')).length).toBe(flagsBefore + 1));
     window.dispatchEvent(new Event('focus'));
-    await waitFor(() => expect(reloadModule).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(ledgerReads()).toBe(3));
   });
 });
 

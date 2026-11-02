@@ -6,8 +6,8 @@ import { today, fmtDate, inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
 import { specGroup } from '../lib/master.js';
 import {
-  fgProduced, fgAllocated, fgAvail, fgAddProduction,
-  fgSpecsWithActivity, fgEntry, fgAgeingInfo, fgTodayISO,
+  fgAvail, fgAddProduction, fgSpecsWithActivity, fgEntry, fgAgeingInfo, fgTodayISO,
+  fgStock, fgDispatchedBySo, fgOrderIndex,
 } from '../lib/fg.js';
 
 /**
@@ -21,7 +21,9 @@ import {
  * So the Super Admin's FG Entry page and the Stores login's FG tab both render this
  * one component. Production is booked per spec on a date (append-only) into data
  * module 9 (`fgLedger`); available FG = produced − allocated, and is what the New-PO
- * drawdown and the Daily-Update allocation draw from.
+ * drawdown and the Daily-Update allocation draw from. FG allocated to an SO that has
+ * since gone out on an invoice has left the premises: it is shown in neither Produced
+ * nor Allocated (Issues 02.11, `fgStock`).
  *
  * Every booking says whether that FG is MOVING or NON-MOVING. The selection defaults
  * to Moving — fresh stock is moving stock — and can be changed to Non-moving at the
@@ -55,6 +57,8 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   const ledger = mods.fgLedger || {};
   const jss = Array.isArray(mods.jss) ? mods.jss : [];
   const prices = mods.prices || {};
+  // the order book — what each SO still holds as FG and has invoiced (fgStock)
+  const orders = useMemo(() => fgOrderIndex(mods.oab), [mods.oab]);
 
   const [custFilter, setCustFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');   // §43: search by Group as well as Customer
@@ -99,7 +103,11 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (typeof reloadModule === 'function') await reloadModule('fgLedger');
+      if (typeof reloadModule === 'function') {
+        await reloadModule('fgLedger');
+        // an invoice raised since sign-in moves FG out of Produced / Allocated
+        try { await reloadModule('oab'); } catch { /* the ledger figures still stand */ }
+      }
       await loadFlags();
       setAsOf(new Date());
     } catch (e) {
@@ -155,9 +163,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   const inactiveSpec = (sp) => { const j = jssFor(sp); return !!j.spec && !jssActive(j); };
   const selInactive = !!spec && inactiveSpec(spec);
 
-  const produced = fgProduced(ledger, spec);
-  const allocated = fgAllocated(ledger, spec);
-  const avail = fgAvail(ledger, spec);
+  const { produced, allocated, available: avail, dispatched } = fgStock(ledger, spec, orders);
 
   /**
    * Resolve typed text to a spec. Matching is loose (case/space/punctuation
@@ -294,9 +300,21 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     const e = fgEntry(ledger, spec);
     let run = 0;
     const prod = e.prod.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((p) => { run += Number(p.qty) || 0; return { ...p, run }; });
-    const alloc = e.alloc.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    return { prod, alloc };
-  }, [ledger, spec]);
+    // Issues 02.11: an allocation whose SO has been invoiced has left the premises —
+    // only what an SO still holds stays on the list. An SO's draws are used up oldest
+    // first, the way its invoices consumed them.
+    const gone = { ...fgDispatchedBySo(ledger, spec, orders) };
+    const alloc = [];
+    e.alloc.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0)).forEach((a) => {
+      const so = String(a.so || '').trim();
+      const used = Math.min(Number(a.qty) || 0, gone[so] || 0);
+      if (used > 0) gone[so] -= used;
+      const left = (Number(a.qty) || 0) - used;
+      if (left > 0) alloc.push({ ...a, qty: left });
+    });
+    const invoicedSos = Object.keys(fgDispatchedBySo(ledger, spec, orders));
+    return { prod, alloc, invoicedSos };
+  }, [ledger, spec, orders]);
 
   /**
    * The sale price a spec's FG is valued at: the Price Master where this login may
@@ -318,21 +336,22 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   const allRows = useMemo(() => fgSpecsWithActivity(ledger)
     .map((sp) => {
       const j = jssFor(sp);
-      const av = fgAvail(ledger, sp);
+      const st = fgStock(ledger, sp, orders);
+      const av = st.available;
       const price = priceOf(sp);
       const ag = fgAgeingInfo(ledger, sp);
       // "Customer Or Group": when a spec has no direct customer but belongs to a
       // buying group, show the group name (legacy custOrGroup) so it never reads "-".
       return {
         spec: sp, customer: j.customer || specGroup(j, mods.customers) || j.group || '', sku: j.jobName || '',
-        prod: fgProduced(ledger, sp), alloc: fgAllocated(ledger, sp), av,
+        prod: st.produced, alloc: st.allocated, av,
         price, value: av * price, agingDays: ag.days, ageing: ag.display,
         moving: isMoving(sp), inactive: !!j.spec && !jssActive(j),
       };
     })
     // Hide fully-consumed specs: once FG is allocated + dispatched the available
     // qty is zero, so the SKU drops off this stock summary (client 2026-08-22).
-    .filter((r) => r.av > 0.0001), [ledger, jss, prices, mods.customers, flags]); // eslint-disable-line react-hooks/exhaustive-deps
+    .filter((r) => r.av > 0.0001), [ledger, jss, prices, mods.customers, flags, orders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const summary = useMemo(() => {
     const s = sumQ.trim().toLowerCase();
@@ -460,7 +479,8 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
               <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--g)' }}>{nfmt(avail)}</span> <span style={{ fontSize: 12, color: 'var(--i2)' }}>pouches</span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--i2)' }}>
-              Produced (total): <strong>{nfmt(produced)}</strong><br />Allocated to SOs: <strong>{nfmt(allocated)}</strong>
+              Produced (in stock): <strong>{nfmt(produced)}</strong><br />Allocated to SOs: <strong>{nfmt(allocated)}</strong>
+              {dispatched > 0 && <><br /><span style={{ color: 'var(--i3)' }}>Dispatched on invoice (no longer counted): {nfmt(dispatched)}</span></>}
             </div>
             <div style={{ fontSize: 11, color: 'var(--i2)', borderLeft: '1px solid var(--bd)', paddingLeft: 24 }}>
               Spec: <strong>{spec}</strong>{selInactive && <> <span className="tag tr" style={{ fontSize: 9 }}>{jssStatus(selJss)} JSS</span></>}<br />Customer: {selJss.customer || '-'}<br />SKU: {selJss.jobName || '-'}
@@ -520,6 +540,13 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
                     <td style={{ fontSize: 11, color: 'var(--i3)' }}>{p.note || ''}</td>
                   </tr>
                 ))}
+                {dispatched > 0 && (
+                  <tr>
+                    <td colSpan={2} style={{ fontSize: 11, color: 'var(--i3)' }}>Less: dispatched on invoice (SO {hist.invoicedSos.join(', ')})</td>
+                    <td style={{ textAlign: 'right', color: 'var(--red)' }}>-{nfmt(dispatched)}</td>
+                    <td style={{ fontSize: 11, color: 'var(--i3)' }}>In stock: <strong>{nfmt(produced)}</strong></td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -529,7 +556,7 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
               <thead><tr><th style={{ width: 120 }}>Date</th><th>SO #</th><th>Source</th><th style={{ textAlign: 'right' }}>Qty Allocated</th></tr></thead>
               <tbody>
                 {hist.alloc.length === 0 ? (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>Nothing allocated yet</td></tr>
+                  <tr><td colSpan={4} style={{ textAlign: 'center', padding: 16, color: 'var(--i3)' }}>{dispatched > 0 ? 'Nothing allocated — every allocation has been invoiced' : 'Nothing allocated yet'}</td></tr>
                 ) : hist.alloc.map((a, i) => (
                   <tr key={a.ts || i}>
                     <td>{fmtDate(a.date)}</td>

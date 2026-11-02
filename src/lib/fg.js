@@ -9,7 +9,8 @@
 //
 // Production is append-only (a day's output is never edited or overwritten).
 // Once FG is allocated to an SO it has left the pool for good; invoicing does
-// NOT touch the pool (it only consumes the SO's own `row.fg`). Every function
+// NOT touch the pool (it only consumes the SO's own `row.fg`) — the FG sheet reads
+// what was invoiced off the order book instead (see fgStock). Every function
 // here is pure — it returns a NEW ledger object rather than mutating in place —
 // so it composes cleanly with React state and `save('fgLedger', next)`.
 
@@ -82,6 +83,71 @@ export function fgAddAllocation(ledger, spec, qty, so, src = '') {
   const cur = fgEntry(base, spec);
   const entry = { date: fgTodayISO(), qty: q, ts: Date.now(), so: so || '', src: src || '' };
   return { ...base, [spec]: { prod: [...cur.prod], alloc: [...cur.alloc, entry] } };
+}
+
+// ── Dispatched on an invoice ───────────────────────────────────────────────
+// Issues 02.11 (FG Entry): "as soon as an invoice happens, that means the allocated
+// quantity has left the premises, and I don't need its data here." An invoice
+// consumes the SO's own FG first (`row.fg -= fgToUse`, server-side) and never
+// touches this ledger — so FG allocated to an SO and then invoiced kept counting
+// in Produced and Allocated for ever (E1025: 629,800 produced, 352,400 allocated).
+//
+// The ledger stays append-only; what has gone out is READ off the order book:
+// for every SO this spec allocated to, the part of that allocation the SO no longer
+// holds as FG — capped at what it has actually invoiced — has left the premises.
+// It comes off Produced AND Allocated alike, so Available is unchanged (it was
+// never on hand to begin with). Working it out rather than recording it means the
+// invoices raised before this change are counted too.
+
+/** Every sale order on the OAB (both sheets, open and closed), keyed by SO number. */
+export function fgOrderIndex(oab) {
+  const sheets = (oab && oab.OAB) || {};
+  const out = {};
+  ['SF', 'OT'].forEach((sh) => (Array.isArray(sheets[sh]) ? sheets[sh] : []).forEach((r) => {
+    if (r && r.so != null && String(r.so).trim()) out[String(r.so).trim()] = r;
+  }));
+  return out;
+}
+
+/**
+ * `{so: qty}` — how much of each SO's allocation from this spec has gone out on an
+ * invoice. An SO the order book no longer has keeps its allocation (nothing says it
+ * left); an SO not yet invoiced has dispatched nothing.
+ */
+export function fgDispatchedBySo(ledger, spec, orders) {
+  const toSo = {};
+  fgEntry(ledger, spec).alloc.forEach((a) => {
+    const so = String(a.so || '').trim();
+    if (so) toSo[so] = (toSo[so] || 0) + n(a.qty);
+  });
+  const out = {};
+  Object.entries(toSo).forEach(([so, allocated]) => {
+    const row = orders && orders[so];
+    if (!row || allocated <= 0) return;
+    const gone = Math.min(allocated - n(row.fg), allocated, n(row.invDisp));
+    if (gone > 0) out[so] = gone;
+  });
+  return out;
+}
+
+/** Total of a spec's allocations that have left on an invoice. */
+export function fgDispatched(ledger, spec, orders) {
+  return Object.values(fgDispatchedBySo(ledger, spec, orders)).reduce((s, q) => s + q, 0);
+}
+
+/**
+ * What the FG sheet shows for a spec: what has been produced and is still with us,
+ * how much of it is promised to an SO, and what is free. Invoiced FG is gone from
+ * the first two; `dispatched` says how much that was.
+ */
+export function fgStock(ledger, spec, orders) {
+  const dispatched = fgDispatched(ledger, spec, orders);
+  return {
+    produced: fgProduced(ledger, spec) - dispatched,
+    allocated: fgAllocated(ledger, spec) - dispatched,
+    available: fgAvail(ledger, spec),
+    dispatched,
+  };
 }
 
 /** Specs that have any production or allocation recorded. */
