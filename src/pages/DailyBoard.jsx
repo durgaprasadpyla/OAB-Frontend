@@ -159,7 +159,7 @@ export default function DailyBoard({ embedded = false }) {
     if (busy.current) return;
     busy.current = true;
     try {
-      const r = await planningApi.assign({ so, departmentId: department.departmentId, machineId: machine.id, planDate: date, plannedQty: qty, shift });
+      const r = await planningApi.assign({ so, departmentId: department.departmentId, stageSeq: department.seq ?? undefined, machineId: machine.id, planDate: date, plannedQty: qty, shift });
       setDrop(null);
       if (r.capacity?.overbooked) setWarn({ machineId: machine.id, name: machine.name });
       flash(r.capacity?.overbooked

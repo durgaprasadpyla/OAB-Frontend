@@ -54,14 +54,15 @@ export default function WeeklyPlanner({ embedded = false }) {
   const capFor = (machineId, date) => (wk.capacity || []).find((c) => String(c.machineId) === String(machineId) && c.date === date);
   const overrideFor = (machineId, date) => (hours.overrides || []).find((o) => String(o.machineId) === String(machineId) && o.date === date);
 
-  const deptObj = (soPlan?.departments || []).find((d) => String(d.departmentId) === String(aDept));
+  // Issues 02.11: aDept holds the route stage (seq) — a department the route passes twice is two choices
+  const deptObj = (soPlan?.departments || []).find((d) => String(d.seq) === String(aDept));
   const deptMachines = deptObj?.machines || [];
 
   async function assign() {
     setErr('');
     if (!aDept || !aMachine || !aDate || !(Number(aQty) > 0)) { setErr('Pick a department, machine, date and a positive quantity'); return; }
     try {
-      const r = await planningApi.assign({ so, departmentId: Number(aDept), machineId: Number(aMachine), planDate: aDate, plannedQty: Number(aQty), shift: aShift });
+      const r = await planningApi.assign({ so, departmentId: Number(deptObj && deptObj.departmentId), stageSeq: Number(aDept), machineId: Number(aMachine), planDate: aDate, plannedQty: Number(aQty), shift: aShift });
       setLastCap(r.capacity);
       flash(r.capacity?.overbooked ? 'Assigned — but the machine is over-booked for that day' : 'Assigned');
       setAQty('');
@@ -143,7 +144,7 @@ export default function WeeklyPlanner({ embedded = false }) {
               <label>Department</label>
               <select value={aDept} onChange={(e) => { setADept(e.target.value); setAMachine(''); }}>
                 <option value="">— select —</option>
-                {(soPlan.departments || []).map((d) => <option key={d.departmentId} value={d.departmentId}>{d.seq}. {d.departmentName} (rem {d.remaining})</option>)}
+                {(soPlan.departments || []).map((d) => <option key={d.seq} value={d.seq}>{d.seq}. {d.departmentName} (rem {d.remaining})</option>)}
               </select>
             </div>
             <div className="fg">

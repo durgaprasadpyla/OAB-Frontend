@@ -34,10 +34,12 @@ export default function JssPlanningPanel() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
 
-  const [mSel, setMSel] = useState({});    // { [machineId]: { eligible, speed, changeover } }
+  // Issues 02.11: keyed by ROUTE STAGE and machine ("3:12") — a route that laminates
+  // twice picks each lamination's machine on its own
+  const [mSel, setMSel] = useState({});    // { ['seq:machineId']: { eligible, speed, changeover } }
   const [baseQty, setBaseQty] = useState('1');
   const [baseUom, setBaseUom] = useState('');
-  const [lines, setLines] = useState([]);  // [{ departmentId, itemId, qtyPerBase, uom, search }]
+  const [lines, setLines] = useState([]);  // [{ departmentId, stageSeq, itemId, qtyPerBase, uom, search }]
   const [setupMin, setSetupMin] = useState('');   // §22: QC-communicated job setup time
   const [deptFil, setDeptFil] = useState('all');  // stage filter for the machines card
   // Issues 2.0: the visible JSS list and its group / customer / status / number filters.
@@ -73,14 +75,27 @@ export default function JssPlanningPanel() {
     try {
       const [j, b] = await Promise.all([jssApi.get(s), bomApi.get(s)]);
       setJss(j);
+      // Issues 02.11: a machine or BOM line saved before stages existed (no stageSeq)
+      // was the department's — its machines open on every pass of the department, its
+      // lines on the first, and the next save writes each pass's own.
+      const stages = j.routeDepartments || [];
+      const seqsOf = (deptId) => stages.filter((d) => String(d.departmentId) === String(deptId)).map((d) => d.seq);
       const sel = {};
-      (j.machines || []).forEach((m) => { sel[m.machineId] = { eligible: m.eligible !== false, speed: m.speed ?? '', uom: m.speedUom ?? '', changeover: m.changeoverMin ?? '', setup: m.setupMin ?? '' }; });
+      (j.machines || []).forEach((m) => {
+        const seqs = m.stageSeq != null ? [m.stageSeq] : seqsOf(m.departmentId);
+        (seqs.length ? seqs : ['']).forEach((sq) => {
+          sel[`${sq}:${m.machineId}`] = { eligible: m.eligible !== false, speed: m.speed ?? '', uom: m.speedUom ?? '', changeover: m.changeoverMin ?? '', setup: m.setupMin ?? '' };
+        });
+      });
       setMSel(sel);
       setBaseQty(String(b.baseQty ?? 1));
       // Issues 1.0 #2: no stored base UOM yet → auto-pick it from the JSS's dispatch form.
       const row = specFor(specsRef.current, s);
       setBaseUom(b.baseUom || (row && row.dispatchForm ? bomUOM(row.dispatchForm) : ''));
-      setLines((b.items || []).map((it) => ({ departmentId: it.departmentId, itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '' })));
+      setLines((b.items || []).map((it) => ({
+        departmentId: it.departmentId, stageSeq: it.stageSeq != null ? it.stageSeq : (seqsOf(it.departmentId)[0] ?? null),
+        itemId: it.itemId, qtyPerBase: it.qtyPerBase, uom: it.uom || '',
+      })));
       setSetupMin(j.config?.setupMin != null ? String(j.config.setupMin) : '');
     } catch (e) { setErr(e.message || 'Failed to load JSS'); }
     finally { setLoading(false); }
@@ -133,6 +148,15 @@ export default function JssPlanningPanel() {
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(''), 2500); };
   const routeDepts = jss?.routeDepartments || [];
+  /**
+   * Issues 02.11: what a stage is called. A department the route passes once is just
+   * its name; one it passes twice is numbered — "Lamination 1", "Lamination 2".
+   */
+  const stageName = (d) => {
+    const same = routeDepts.filter((x) => String(x.departmentId) === String(d.departmentId));
+    if (same.length < 2) return d.departmentName;
+    return `${d.departmentName} ${same.findIndex((x) => x.seq === d.seq) + 1}`;
+  };
   // A different spec/route brings different departments — drop a stale stage filter.
   const routeId = jss?.config?.routeId;
   useEffect(() => { setDeptFil('all'); }, [spec, routeId]);
@@ -166,21 +190,25 @@ export default function JssPlanningPanel() {
 
   // Req #16: ticking a machine pre-fills the job speed with the Super Admin's ideal
   // speed — QC then overrides it per job without ever touching the machine default.
-  const toggleMachine = (mid) => setMSel((s) => {
-    const cur = s[mid] || { speed: '', uom: '', changeover: '', setup: '' };
+  const toggleMachine = (key, mid) => setMSel((s) => {
+    const cur = s[key] || { speed: '', uom: '', changeover: '', setup: '' };
     const turningOn = !cur.eligible;
     const mc = master.machines.find((x) => String(x.id) === String(mid));
     const speed = turningOn && (cur.speed === '' || cur.speed == null) && mc?.defaultSpeed != null
       ? String(mc.defaultSpeed) : cur.speed;
-    return { ...s, [mid]: { ...cur, eligible: turningOn, speed } };
+    return { ...s, [key]: { ...cur, eligible: turningOn, speed } };
   });
-  const setMField = (mid, k, v) => setMSel((s) => ({ ...s, [mid]: { ...(s[mid] || { eligible: true, speed: '', uom: '', changeover: '', setup: '' }), [k]: v } }));
+  const setMField = (key, k, v) => setMSel((s) => ({ ...s, [key]: { ...(s[key] || { eligible: true, speed: '', uom: '', changeover: '', setup: '' }), [k]: v } }));
   async function saveMachines() {
     setErr('');
-    const payload = Object.entries(mSel).filter(([, v]) => v.eligible).map(([mid, v]) => {
+    // only the stages of the route as it stands — a machine ticked under a stage the
+    // route no longer has is not written back
+    const live = new Set(routeDepts.map((d) => String(d.seq)));
+    const payload = Object.entries(mSel).filter(([key, v]) => v.eligible && live.has(key.split(':')[0])).map(([key, v]) => {
+      const [seq, mid] = key.split(':');
       const mc = master.machines.find((x) => String(x.id) === String(mid));
       const dep = master.departments.find((x) => String(x.id) === String(mc?.departmentId));
-      return { departmentId: mc?.departmentId, machineId: Number(mid), eligible: true,
+      return { departmentId: mc?.departmentId, machineId: Number(mid), stageSeq: Number(seq), eligible: true,
         speed: v.speed === '' ? undefined : Number(v.speed),
         // Issues 1.0 #3: the chosen unit; department default when QC left it alone.
         speedUom: v.uom || deptSpeedUnit(mc?.departmentName || dep?.name),
@@ -191,7 +219,7 @@ export default function JssPlanningPanel() {
     catch (e) { setErr(e.message); }
   }
 
-  const addLine = (departmentId) => setLines((l) => [...l, { departmentId, itemId: '', qtyPerBase: '', uom: '' }]);
+  const addLine = (departmentId, stageSeq) => setLines((l) => [...l, { departmentId, stageSeq, itemId: '', qtyPerBase: '', uom: '' }]);
   const setLine = (i, k, v) => setLines((l) => l.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const rmLine = (i) => setLines((l) => l.filter((_, j) => j !== i));
   /**
@@ -205,21 +233,25 @@ export default function JssPlanningPanel() {
    */
   async function saveBom() {
     setErr('');
-    const deptName = (id) => (routeDepts.find((d) => String(d.departmentId) === String(id)) || {}).departmentName || 'this department';
+    const deptName = (id, seq) => {
+      const d = routeDepts.find((x) => x.seq === seq) || routeDepts.find((x) => String(x.departmentId) === String(id));
+      return d ? stageName(d) : 'this department';
+    };
     const started = lines.filter((x) => x.itemId || x._search || x._codeSearch || String(x.qtyPerBase || '').trim());
     const broken = [];
     started.forEach((x) => {
       if (!x.itemId) {
         const typed = (x._search || x._codeSearch || '').trim();
-        broken.push(`${deptName(x.departmentId)}: ${typed ? `"${typed}" is not an item in the master` : 'no item chosen'} — pick one from the list`);
+        broken.push(`${deptName(x.departmentId, x.stageSeq)}: ${typed ? `"${typed}" is not an item in the master` : 'no item chosen'} — pick one from the list`);
       } else if (!(Number(x.qtyPerBase) > 0)) {
-        broken.push(`${deptName(x.departmentId)}: enter the quantity per base`);
+        broken.push(`${deptName(x.departmentId, x.stageSeq)}: enter the quantity per base`);
       }
     });
     if (broken.length) { setErr('Nothing was saved. ' + broken.join('; ') + '.'); return; }
 
     const items = started.map((x) => ({
       departmentId: Number(x.departmentId), itemId: Number(x.itemId),
+      stageSeq: x.stageSeq == null || x.stageSeq === '' ? undefined : Number(x.stageSeq),
       qtyPerBase: Number(x.qtyPerBase), uom: x.uom || undefined,
     }));
     if (!items.length && lines.length) { setErr('Nothing to save — add an item to a department first.'); return; }
@@ -432,7 +464,7 @@ export default function JssPlanningPanel() {
               <div className="fg">
                 <label>Departments (in order)</label>
                 <div style={{ paddingTop: 8 }}>
-                  {routeDepts.length ? routeDepts.map((d) => <span key={d.departmentId} className="tag tb" style={{ marginRight: 4 }}>{d.seq}. {d.departmentName}</span>)
+                  {routeDepts.length ? routeDepts.map((d) => <span key={d.seq} className="tag tb" style={{ marginRight: 4 }}>{d.seq}. {stageName(d)}</span>)
                     : <span className="tag ty">Pick a dispatch type or route</span>}
                 </div>
               </div>
@@ -463,21 +495,21 @@ export default function JssPlanningPanel() {
                   style={deptFil === 'all' ? { background: 'var(--g)', color: '#fff' } : undefined}
                   onClick={() => setDeptFil('all')}>All stages</button>
                 {routeDepts.map((d) => (
-                  <button key={d.departmentId}
-                    className={'btn btn-s' + (String(deptFil) === String(d.departmentId) ? ' on' : '')}
-                    style={String(deptFil) === String(d.departmentId) ? { background: 'var(--g)', color: '#fff' } : undefined}
-                    aria-label={`Show ${d.departmentName} machines`}
-                    onClick={() => setDeptFil(String(d.departmentId))}>{d.seq}. {d.departmentName}</button>
+                  <button key={d.seq}
+                    className={'btn btn-s' + (String(deptFil) === String(d.seq) ? ' on' : '')}
+                    style={String(deptFil) === String(d.seq) ? { background: 'var(--g)', color: '#fff' } : undefined}
+                    aria-label={`Show ${stageName(d)} machines`}
+                    onClick={() => setDeptFil(String(d.seq))}>{d.seq}. {stageName(d)}</button>
                 ))}
               </div>
             )}
             {!routeDepts.length ? (
               <div className="al al-y">Set the route first to list its departments.</div>
-            ) : routeDepts.filter((d) => deptFil === 'all' || String(d.departmentId) === String(deptFil)).map((d) => {
+            ) : routeDepts.filter((d) => deptFil === 'all' || String(d.seq) === String(deptFil)).map((d) => {
               const list = machinesByDept[d.departmentId] || [];
               return (
-                <div key={d.departmentId} style={{ marginBottom: 12 }}>
-                  <div className="ctitle" style={{ fontSize: 12 }}>{d.seq}. {d.departmentName}</div>
+                <div key={d.seq} style={{ marginBottom: 12 }} aria-label={`Machines for ${d.seq}. ${stageName(d)}`}>
+                  <div className="ctitle" style={{ fontSize: 12 }}>{d.seq}. {stageName(d)}</div>
                   {list.length === 0 ? (
                     <div className="al al-y">No machines in this department yet — add them in Master Data.</div>
                   ) : (
@@ -486,18 +518,19 @@ export default function JssPlanningPanel() {
                         <thead><tr><th style={{ width: 44 }}>Use</th><th>Machine</th><th style={{ width: 110 }}>Speed unit</th><th style={{ width: 140 }}>Ideal speed</th><th style={{ width: 150 }}>Job speed / min</th><th style={{ width: 150 }}>Setup time (min)</th><th style={{ width: 150 }}>Changeover (min)</th></tr></thead>
                         <tbody>
                           {list.map((mc) => {
-                            const sel = mSel[mc.id] || {};
+                            const key = `${d.seq}:${mc.id}`;
+                            const sel = mSel[key] || {};
                             const on = !!sel.eligible;
                             const unit = sel.uom || deptSpeedUnit(d.departmentName);
                             return (
                               <tr key={mc.id} className={on ? 'hi' : undefined}>
-                                <td><input type="checkbox" checked={on} onChange={() => toggleMachine(mc.id)} /></td>
+                                <td><input type="checkbox" checked={on} aria-label={`Use ${mc.name} for ${stageName(d)}`} onChange={() => toggleMachine(key, mc.id)} /></td>
                                 <td>{mc.code} — {mc.name}</td>
                                 {/* Issues 1.0 #3: unit BEFORE the ideal speed — pcs/min for
                                     pouching / sleeving / die punching / packing by default. */}
                                 <td>
                                   <select disabled={!on} value={unit} aria-label={`Speed unit for ${mc.name}`}
-                                    onChange={(e) => setMField(mc.id, 'uom', e.target.value)}>
+                                    onChange={(e) => setMField(key, 'uom', e.target.value)}>
                                     <option value="m/min">m/min</option>
                                     <option value="pcs/min">pcs/min</option>
                                   </select>
@@ -505,12 +538,12 @@ export default function JssPlanningPanel() {
                                 {/* Req #16: the Super Admin's ideal speed — read-only for QC. */}
                                 <td style={{ fontWeight: 600, color: 'var(--i2)' }}>{mc.defaultSpeed != null ? `${mc.defaultSpeed} ${unit}` : '—'}</td>
                                 <td><input type="number" min="0" step="any" disabled={!on} placeholder={mc.defaultSpeed ?? ''} value={sel.speed ?? ''}
-                                  aria-label={`Job speed for ${mc.name}`} onChange={(e) => setMField(mc.id, 'speed', e.target.value)} /></td>
+                                  aria-label={`Job speed for ${mc.name}`} onChange={(e) => setMField(key, 'speed', e.target.value)} /></td>
                                 {/* Req #17: QC's job setup time for THIS job on THIS machine. */}
                                 <td><input type="number" min="0" step="1" disabled={!on} value={sel.setup ?? ''} placeholder={setupMin || ''}
-                                  aria-label={`Setup time for ${mc.name}`} onChange={(e) => setMField(mc.id, 'setup', e.target.value)} /></td>
+                                  aria-label={`Setup time for ${mc.name}`} onChange={(e) => setMField(key, 'setup', e.target.value)} /></td>
                                 <td><input type="number" min="0" step="1" disabled={!on} value={sel.changeover ?? ''}
-                                  aria-label={`Changeover for ${mc.name}`} onChange={(e) => setMField(mc.id, 'changeover', e.target.value)} /></td>
+                                  aria-label={`Changeover for ${mc.name}`} onChange={(e) => setMField(key, 'changeover', e.target.value)} /></td>
                               </tr>
                             );
                           })}
@@ -585,14 +618,17 @@ export default function JssPlanningPanel() {
             ) : !machinesSaved ? (
               <div className="al al-b">Select and SAVE the eligible machines above first — the BOM selection opens after the machines are saved.</div>
             ) : routeDepts.map((d) => {
-              const deptLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => String(l.departmentId) === String(d.departmentId));
+              // Issues 02.11: each pass of the route has its own lines — Lamination 2's
+              // film is not Lamination 1's
+              const deptLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => String(l.departmentId) === String(d.departmentId)
+                && (l.stageSeq == null || String(l.stageSeq) === String(d.seq)));
               const deptItems = itemsForDept(d.departmentId);
               return (
-                <div key={d.departmentId} style={{ marginBottom: 12 }}>
+                <div key={d.seq} style={{ marginBottom: 12 }} aria-label={`BOM for ${d.seq}. ${stageName(d)}`}>
                   <div className="fbar" style={{ justifyContent: 'space-between' }}>
-                    <div className="ctitle" style={{ margin: 0, fontSize: 12 }}>{d.seq}. {d.departmentName}
+                    <div className="ctitle" style={{ margin: 0, fontSize: 12 }}>{d.seq}. {stageName(d)}
                       <span className="tag tgr" style={{ marginLeft: 6 }}>{deptItems.length} item(s) tagged</span></div>
-                    <button className="btn btn-s" onClick={() => addLine(d.departmentId)}>＋ Add item</button>
+                    <button className="btn btn-s" onClick={() => addLine(d.departmentId, d.seq)}>＋ Add item</button>
                   </div>
                   {deptLines.length === 0 ? <div className="al al-y">No items for this department.</div> : (
                     <div className="tw">
@@ -643,7 +679,7 @@ export default function JssPlanningPanel() {
                             return (
                               <tr key={i}>
                                 <td>
-                                  <select style={{ width: '100%' }} aria-label={`Material type for ${d.departmentName} row`}
+                                  <select style={{ width: '100%' }} aria-label={`Material type for ${stageName(d)} row`}
                                     value={rowMat} onChange={(e) => setLineFil(i, '_mat', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(deptItems, 'materialType').map((v) => <option key={v} value={v}>{v}</option>)}
@@ -651,7 +687,7 @@ export default function JssPlanningPanel() {
                                   </select>
                                 </td>
                                 <td>
-                                  <select style={{ width: '100%' }} aria-label={`Sub group for ${d.departmentName} row`}
+                                  <select style={{ width: '100%' }} aria-label={`Sub group for ${stageName(d)} row`}
                                     value={rowSub} onChange={(e) => setLineFil(i, '_sub', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(byMat, 'subGroup').map((v) => <option key={v} value={v}>{v}</option>)}
@@ -659,7 +695,7 @@ export default function JssPlanningPanel() {
                                   </select>
                                 </td>
                                 <td>
-                                  <select style={{ width: '100%' }} aria-label={`Specialty for ${d.departmentName} row`}
+                                  <select style={{ width: '100%' }} aria-label={`Specialty for ${stageName(d)} row`}
                                     value={rowSpl} onChange={(e) => setLineFil(i, '_spl', e.target.value)}>
                                     <option value="">Any</option>
                                     {distinct(bySub, 'specialtyName').map((v) => <option key={v} value={v}>{v}</option>)}
@@ -668,9 +704,9 @@ export default function JssPlanningPanel() {
                                 </td>
                                 <td>
                                   {/* Type-and-search by item NAME — codes are not shown here. */}
-                                  <input list={`bom-items-${d.departmentId}-${i}`}
+                                  <input list={`bom-items-${d.seq}-${i}`}
                                     style={{ width: '100%', ...(!sel && l._search ? { borderColor: 'var(--red)' } : null) }}
-                                    aria-label={`BOM item for ${d.departmentName}`}
+                                    aria-label={`BOM item for ${stageName(d)}`}
                                     placeholder={deptItems.length ? 'type to search…' : `no items tagged to ${d.departmentName} — tag them in Master Data → Items`}
                                     value={sel ? itemName(sel) : (l._search || '')}
                                     onChange={(e) => {
@@ -680,7 +716,7 @@ export default function JssPlanningPanel() {
                                       if (hit) pickItem(i, hit.id);
                                       else setLines((ls) => ls.map((x, j) => (j === i ? { ...x, itemId: '', uom: '', _search: v } : x)));
                                     }} />
-                                  <datalist id={`bom-items-${d.departmentId}-${i}`}>
+                                  <datalist id={`bom-items-${d.seq}-${i}`}>
                                     {/* 100+ items are named only as a number ("700"), so the
                                         hint carries what tells them apart. */}
                                     {narrowed.map((it) => (
@@ -701,18 +737,18 @@ export default function JssPlanningPanel() {
                                     here and the item (and its UOM/microns) follow; pick
                                     the item above and the code fills itself in. */}
                                 <td>
-                                  <input list={`bom-codes-${d.departmentId}-${i}`} style={{ width: '100%' }}
-                                    aria-label={`Item code for ${d.departmentName}`}
+                                  <input list={`bom-codes-${d.seq}-${i}`} style={{ width: '100%' }}
+                                    aria-label={`Item code for ${stageName(d)}`}
                                     placeholder={deptItems.length ? 'code…' : '—'}
                                     value={sel ? (sel.code || '') : (l._codeSearch || '')}
                                     onChange={(e) => pickItemByCode(i, e.target.value, deptItems)} />
-                                  <datalist id={`bom-codes-${d.departmentId}-${i}`}>
+                                  <datalist id={`bom-codes-${d.seq}-${i}`}>
                                     {deptItems.map((it) => <option key={it.id} value={it.code}>{itemName(it)}</option>)}
                                   </datalist>
                                 </td>
                                 <td>{sel && sel.microns ? sel.microns : '—'}</td>
                                 <td><input type="number" step="any" value={l.qtyPerBase}
-                                  aria-label={`Qty per base for ${d.departmentName}`}
+                                  aria-label={`Qty per base for ${stageName(d)}`}
                                   onChange={(e) => setLine(i, 'qtyPerBase', e.target.value)} /></td>
                                 {/* Issues 2.0: UOM comes from the item master — not typed. */}
                                 <td><input value={l.uom} readOnly aria-label="Line UOM (from item master)"
