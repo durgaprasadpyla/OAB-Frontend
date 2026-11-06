@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { storesApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { bomMaterialForSOByDept, hasBOM, plannedBomMap, NO_DEPARTMENT } from '../lib/bom.js';
-import { asSoMaterial, codeKey, isComplete, netOut, sourceLabel } from '../lib/soMaterial.js';
+import { asSoMaterial, codeKey, isComplete, isInk, netOut, sourceLabel } from '../lib/soMaterial.js';
 import { useData } from '../data.jsx';
 
 // Assigning material to a sale order, from the PLAN login.
@@ -82,6 +82,7 @@ function Line({ it, so, needs, held, issued, rolls, pick, setPickFor, busy, cove
   const out = issued.reduce((t, l) => t + netOut(l), 0);
   const onHand = rolls.reduce((t, u) => t + num(u.free), 0);
   const short = Math.max(0, num(needs) - allocated - out);
+  const onTheSpot = onHand <= 0 && isInk(it);   // no ink in stores: mixed on the spot
   const p = pick || { unitId: '', qty: '' };
   const chosen = rolls.find((u) => String(u.unitId) === String(p.unitId));
   return (
@@ -93,10 +94,12 @@ function Line({ it, so, needs, held, issued, rolls, pick, setPickFor, busy, cove
         <td style={{ ...rt, fontWeight: 700 }}>{qty(needs)} {it.uom || ''}</td>
         <td style={{ ...rt, color: allocated > 0 ? 'var(--g)' : undefined }}>{allocated ? qty(allocated) : '—'}</td>
         <td style={{ ...rt, color: out > 0 ? '#1e7e34' : undefined, fontWeight: out > 0 ? 700 : undefined }}>{out ? qty(out) : '—'}</td>
-        <td style={{ ...rt, color: short > 0 ? '#B7770D' : '#1e7e34' }}>{short > 0 ? qty(short) : '✓'}</td>
+        <td style={{ ...rt, color: onTheSpot ? 'var(--i3)' : short > 0 ? '#B7770D' : '#1e7e34' }}>{onTheSpot ? '—' : short > 0 ? qty(short) : '✓'}</td>
         <td style={rt}>{onHand > 0
           ? <>{qty(onHand)} <span style={{ color: 'var(--i3)', fontSize: 10 }}>({rolls.length} roll{rolls.length === 1 ? '' : 's'})</span></>
-          : <span style={{ color: 'var(--red)' }}>none in stores</span>}</td>
+          : onTheSpot
+            ? <span className="tag tb" style={{ fontSize: 9 }} title="An ink the stores do not hold does not hold up planning">mixed on the spot</span>
+            : <span style={{ color: 'var(--red)' }}>none in stores</span>}</td>
         <td>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <select value={p.unitId} aria-label={`Rolls of ${it.itemCode} for ${so}`}

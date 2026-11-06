@@ -3,7 +3,7 @@ import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
 import { specFor } from '../lib/specs.js';
 import { sheetForJobType } from '../lib/jssSpec.js';
-import { getPM } from '../lib/pricing.js';
+import { orderPrice } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { getCustByLoc, getCustLocations } from '../lib/master.js';
@@ -92,7 +92,7 @@ export default function Invoice() {
       gstType: billingGstin ? (billingGstin.startsWith('36') ? 'CGST_SGST' : 'IGST') : x.gstType,
     }));
     const l = {};
-    rows.forEach((r) => { l[r.so] = { checked: false, qty: '', fg: '', rate: getPM(r.spec, mods.prices).price || '' }; });
+    rows.forEach((r) => { l[r.so] = { checked: false, qty: '', fg: '', rate: orderPrice(r.spec, r.poQty, mods.prices) || '' }; });
     setLines(l);
     setPosOptions(opts);
     setPendInv(null);

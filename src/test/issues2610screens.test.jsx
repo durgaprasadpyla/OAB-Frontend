@@ -66,8 +66,8 @@ describe('QC CSA report — the Specifications sheet', () => {
     expect(within(ed).getByLabelText('CSA dispatch form')).toHaveValue('Pouch');
     expect(within(ed).getByLabelText('CSA tentative quantity')).toHaveValue(100);
     expect(screen.getByLabelText('Individual pouch height (mm)')).toHaveValue(200);
-    expect(screen.getByLabelText('Total gusset (mm)')).toHaveValue(60);
-    expect(screen.getByLabelText('Each gusset fold (mm)')).toHaveValue('30');
+    expect(screen.getByLabelText('Total gusset (mm)')).toHaveValue('60');
+    expect(screen.getByLabelText('One gusset (mm)')).toHaveValue(30);
     expect(screen.getByLabelText('Packing specifications')).toHaveValue('500 per box');
     expect(screen.getByLabelText('Specifications for dispatch form')).toHaveTextContent('Dispatch form: Pouch');
   });

@@ -28,7 +28,7 @@ describe('New PO flow', () => {
 
     const checks = screen.getAllByRole('checkbox');
     await user.click(checks[checks.length - 1]);                  // the SKU row (last checkbox)
-    await user.type(screen.getByRole('spinbutton'), '500');       // PO qty
+    await user.type(screen.getByLabelText(/^PO qty for /), '500');       // PO qty
     await user.click(screen.getByRole('button', { name: /Review →/ }));
 
     expect(await screen.findByText('26/401')).toBeInTheDocument();

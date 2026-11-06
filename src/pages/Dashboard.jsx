@@ -3,10 +3,10 @@ import { useData } from '../data.jsx';
 import { rmRatesApi, adminApi, ordersApi, field } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { balance, num, calcMetres } from '../lib/calc.js';
-import { getPM, getCostPrice } from '../lib/pricing.js';
+import { getCostPrice, orderPrice, priceBandsText, priceDateOf, stampPriceDates } from '../lib/pricing.js';
 import { custGroups, custGroupOf } from '../lib/master.js';
 import { computeKPIs, dashRange } from '../lib/dashboard.js';
-import { dash, rupees, fmtDate, inr } from '../lib/format.js';
+import { dash, rupees, fmtDate, inr, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { STAGES } from '../lib/constants.js';
 import { materialKey, materialLabel } from '../lib/material.js';
@@ -301,7 +301,7 @@ function Summary() {
   // the PO date; SO margin = (sale − cost) × balance. (legacy dash 5109-5137)
   const openRow = (r) => {
     const b = balance(r);
-    const pr = getPM(r.spec, mods.prices).price || 0;
+    const pr = orderPrice(r.spec, r.poQty, mods.prices) || 0;
     const cp = getCostPrice(r.spec, ctx) || 0;
     const soMargin = (pr > 0 && cp > 0) ? (pr - cp) * num(r.poQty) : null;   // × PO Qty, matching legacy (5120) + the SO-Margin KPI total
     const age = r.poDate ? Math.floor((Date.now() - new Date(r.poDate).getTime()) / 86400000) : null;
@@ -314,7 +314,7 @@ function Summary() {
   const shortRows = k.shortClosed.map((r) => {
     const disp = num(r.invDisp) + num(r.manDisp);
     const shortBy = Math.max(0, num(r.poQty) - disp);
-    const rate = getPM(r.spec, mods.prices).price || 0;
+    const rate = orderPrice(r.spec, r.poQty, mods.prices) || 0;
     const lostVal = shortBy * rate;
     shortTotalLost += lostVal;
     return { r, disp, shortBy, rate, lostVal };
@@ -477,6 +477,9 @@ function PriceMaster() {
   const [statusF, setStatusF] = useState('all');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  // Issues 05.11: "a radio button selection before the spec number … that particular
+  // spec number should be visible at the top" — like the Item Master.
+  const [picked, setPicked] = useState('');
 
   const rows = useMemo(() => {
     const jss = (mods.jss || []).filter((j) => String(j.spec || '').trim());
@@ -502,23 +505,32 @@ function PriceMaster() {
     [spec]: { price: 0, costPrice: 0, transport: 'At Actuals', ...e[spec], [field]: field === 'transport' ? val : num(val) },
   }));
 
+  const setSlabs = (spec, tiers) => setEdits((e) => ({
+    ...e,
+    [spec]: { price: 0, costPrice: 0, transport: 'At Actuals', ...e[spec], tiers },
+  }));
+
   async function saveAll() {
     setBusy(true);
-    try { await save('prices', edits); setMsg('✅ Price Master saved'); setTimeout(() => setMsg(''), 4000); }
-    catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
+    try {
+      const next = stampPriceDates(mods.prices, edits, today());
+      await save('prices', next);
+      setEdits(next);
+      setMsg('✅ Price Master saved'); setTimeout(() => setMsg(''), 4000);
+    } catch (e) { setMsg('Save failed: ' + e.message); } finally { setBusy(false); }
   }
 
   // Export the currently-visible rows with their live (edited) sale/cost/margin.
   // (legacy exportPMExcel 8259)
   function exportPM() {
-    const header = ['Spec No.', 'Customer', 'Sub Brand', 'Job Name', 'Dispatch Form', 'Sale Price', 'Cost Price', 'Transport', 'Margin'];
+    const header = ['Spec No.', 'Customer', 'Sub Brand', 'Job Name', 'Dispatch Form', 'Sale Price', 'Quantity Slabs', 'Price Date', 'Cost Price', 'Transport', 'Margin'];
     const body = filtered.map((j) => {
       const spec = String(j.spec).trim();
       const e = edits[spec] || {};
       const sp = num(e.price);
       const cp = num(e.costPrice);
       const margin = (sp && cp) ? +(sp - cp).toFixed(2) : '';
-      return [spec, j.customer || '', j.subBrand || '', j.jobName || '', j.dispatchForm || '', sp || '', cp || '', e.transport || 'At Actuals', margin];
+      return [spec, j.customer || '', j.subBrand || '', j.jobName || '', j.dispatchForm || '', sp || '', priceBandsText(e), e.priceDate || '', cp || '', e.transport || 'At Actuals', margin];
     });
     exportAOA([header, ...body], 'PriceMaster', 'Price Master');
   }
@@ -537,16 +549,22 @@ function PriceMaster() {
         <button className="btn btn-g" onClick={saveAll} disabled={busy}>{busy ? 'Saving…' : '💾 Save Price Master'}</button>
       </div>
       {msg && <div className="al al-g">{msg}</div>}
+      {picked && (
+        <PriceSlabs spec={picked} jss={(mods.jss || []).find((j) => String(j.spec || '').trim() === picked)}
+          entry={edits[picked] || {}} date={priceDateOf(picked, edits, mods.sales)}
+          onPrice={(v) => setCell(picked, 'price', v)} onSlabs={(t) => setSlabs(picked, t)}
+          onClose={() => setPicked('')} onSave={saveAll} busy={busy} />
+      )}
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
         <table>
           <thead><tr>
-            <th>Spec</th><th>Customer</th><th>Sub Brand</th><th style={{ minWidth: 220 }}>Job Name</th><th>Dispatch Form</th>
-            <th style={{ width: 110, textAlign: 'right' }}>Sale ₹</th><th style={{ width: 110, textAlign: 'right' }}>Cost ₹</th>
+            <th style={{ width: 34 }} /><th>Spec</th><th>Customer</th><th>Sub Brand</th><th style={{ minWidth: 220 }}>Job Name</th><th>Dispatch Form</th>
+            <th style={{ width: 110, textAlign: 'right' }}>Sale ₹</th><th style={{ width: 90 }}>Price date</th><th style={{ width: 110, textAlign: 'right' }}>Cost ₹</th>
             <th style={{ width: 120 }}>Transport</th><th style={{ width: 100, textAlign: 'right' }}>Margin</th>
           </tr></thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
+              <tr><td colSpan={11} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No specs match</td></tr>
             ) : filtered.map((j, i) => {
               const spec = String(j.spec).trim();
               const e = edits[spec] || {};
@@ -554,14 +572,19 @@ function PriceMaster() {
               const cp = num(e.costPrice);
               // A margin needs BOTH figures — one alone would read as a full profit.
               const margin = (sp && cp) ? sp - cp : null;
+              const date = priceDateOf(spec, edits, mods.sales);
               return (
-                <tr key={spec + '|' + i}>
+                <tr key={spec + '|' + i} className={picked === spec ? 'hi' : ''}>
+                  <td style={{ textAlign: 'center' }}><input type="radio" name="pm-pick" checked={picked === spec} aria-label={`Select ${spec}`} onChange={() => setPicked(spec)} /></td>
                   <td><span className="tag tb" style={{ fontSize: 10 }}>{spec}</span></td>
                   <td style={{ fontSize: 11 }}>{j.customer || '-'}</td>
                   <td style={{ fontSize: 11, color: 'var(--i3)' }}>{j.subBrand || '-'}</td>
                   <td style={{ fontSize: 11, whiteSpace: 'normal', wordBreak: 'break-word' }}>{j.jobName || '-'}</td>
                   <td style={{ fontSize: 11 }}>{j.dispatchForm || '-'}</td>
-                  <td><input type="number" step="0.01" aria-label={`Sale price for ${spec}`} value={e.price ?? ''} onChange={(ev) => setCell(spec, 'price', ev.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+                  <td><input type="number" step="0.01" aria-label={`Sale price for ${spec}`} value={e.price ?? ''} onChange={(ev) => setCell(spec, 'price', ev.target.value)} style={{ width: '100%', textAlign: 'right' }} />
+                    {(e.tiers || []).length > 0 && <div style={{ fontSize: 9, color: 'var(--i3)', textAlign: 'right' }}>+ {e.tiers.length} quantity slab{e.tiers.length === 1 ? '' : 's'}</div>}
+                  </td>
+                  <td style={{ fontSize: 11, color: 'var(--i3)' }}>{date ? fmtDate(date) : '—'}</td>
                   <td><input type="number" step="0.01" aria-label={`Cost price for ${spec}`} value={e.costPrice ?? ''} onChange={(ev) => setCell(spec, 'costPrice', ev.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
                   <td>
                     <select value={e.transport ?? 'At Actuals'} aria-label={`Transport for ${spec}`} onChange={(ev) => setCell(spec, 'transport', ev.target.value)} style={{ width: '100%' }}>
@@ -576,6 +599,52 @@ function PriceMaster() {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Issues 05.11: the spec picked with the radio — its base price and quantity slabs. The
+ * base price runs up to the first slab; each slab is the price from that quantity upward.
+ */
+function PriceSlabs({ spec, jss, entry, date, onPrice, onSlabs, onClose, onSave, busy }) {
+  const slabs = entry.tiers || [];
+  const change = (i, k, v) => onSlabs(slabs.map((t, j) => (j === i ? { ...t, [k]: v } : t)));
+  const bands = priceBandsText(entry);
+  return (
+    <div className="card" style={{ background: 'var(--bg)', marginTop: 8 }} aria-label={`Quantity pricing for ${spec}`}>
+      <div className="fbar">
+        <div className="ctitle" style={{ margin: 0 }}>
+          <span className="tag tb" style={{ fontSize: 10 }}>{spec}</span> {jss?.customer || ''}{jss?.jobName ? ` — ${jss.jobName}` : ''}
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--i3)' }}>{date ? `Price entered ${fmtDate(date)}` : 'Price date not recorded'}</span>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" onClick={onClose}>✕ Close</button>
+      </div>
+      <div className="g4" style={{ alignItems: 'end' }}>
+        <div className="fg">
+          <label>Sale price (₹) — up to the first quantity</label>
+          <input type="number" step="0.01" min="0" value={entry.price ?? ''} aria-label="Base sale price" onChange={(e) => onPrice(e.target.value)} />
+        </div>
+      </div>
+      <div className="tw" style={{ maxWidth: 460 }}><table>
+        <thead><tr><th style={{ textAlign: 'right' }}>From quantity (this much or more)</th><th style={{ textAlign: 'right' }}>Sale price (₹)</th><th style={{ width: 40 }} /></tr></thead>
+        <tbody>
+          {slabs.map((t, i) => (
+            <tr key={i}>
+              <td><input type="number" min="0" value={t.qty ?? ''} aria-label={`Slab ${i + 1} from quantity`} onChange={(e) => change(i, 'qty', e.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+              <td><input type="number" step="0.01" min="0" value={t.price ?? ''} aria-label={`Slab ${i + 1} price`} onChange={(e) => change(i, 'price', e.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
+              <td><button className="btn btn-s" style={{ height: 24, color: 'var(--red)' }} aria-label={`Remove slab ${i + 1}`} onClick={() => onSlabs(slabs.filter((_, j) => j !== i))}>✕</button></td>
+            </tr>
+          ))}
+          {slabs.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--i3)', padding: 10 }}>One price at every quantity</td></tr>}
+        </tbody>
+      </table></div>
+      <div className="fbar" style={{ marginTop: 6 }}>
+        <button className="btn btn-s" onClick={() => onSlabs([...slabs, { qty: '', price: '' }])}>＋ Add quantity slab</button>
+        <span style={{ flex: 1, fontSize: 11, color: 'var(--i2)' }} aria-label="Slabs in words">{bands}</span>
+        <button className="btn btn-g" onClick={onSave} disabled={busy}>{busy ? 'Saving…' : '💾 Save'}</button>
       </div>
     </div>
   );
@@ -798,7 +867,7 @@ function Trends() {
     openRows.forEach((r) => {
       const c = r.customer || '—';
       const m = map[c] || (map[c] = { customer: c, orders: 0, poQty: 0, balQty: 0, value: 0, balValue: 0 });
-      const rate = getPM(r.spec, mods.prices).price || 0;
+      const rate = orderPrice(r.spec, r.poQty, mods.prices) || 0;
       m.orders++; m.poQty += num(r.poQty); m.balQty += balance(r);
       // §37: PO value AND Balance value, listed separately side by side.
       m.value += num(r.poQty) * rate;

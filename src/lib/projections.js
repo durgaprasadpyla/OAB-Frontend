@@ -17,6 +17,7 @@
 // Storing a second copy would mean two numbers that could disagree, and the OAB is
 // the one that is true.
 
+import { priceForQty } from './pricing.js';
 import { specFor, specIsActive } from './specs.js';
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -300,7 +301,7 @@ export function projFilterOptions(rows) {
  * COUNTED as unpriced rather than silently booked at zero.
  */
 export function projectionValue(r, prices) {
-  const price = r.spec ? n((prices && prices[s(r.spec)] && prices[s(r.spec)].price)) : 0;
+  const price = r.spec ? n(priceForQty(prices && prices[s(r.spec)], r.qty)) : 0;
   const priced = price > 0;
   return {
     price, priced,

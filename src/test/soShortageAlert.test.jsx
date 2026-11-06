@@ -54,7 +54,7 @@ async function addOneSaleOrder(user) {
   await user.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
   const checks = screen.getAllByRole('checkbox');
   await user.click(checks[checks.length - 1]);
-  await user.type(screen.getByRole('spinbutton'), '500');
+  await user.type(screen.getByLabelText(/^PO qty for /), '500');
   await user.click(screen.getByRole('button', { name: /Review →/ }));
   await screen.findByText('26/401');
   await user.click(screen.getByRole('button', { name: /Add to OAB/ }));

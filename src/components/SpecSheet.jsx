@@ -3,7 +3,7 @@ import { useApi } from '../lib/useApi.js';
 import {
   LAYER_NAMES, GUSSET_TYPES, SEAL_TYPES, gsmBreakdown, layerCount, printingMachines, laminationMachines,
   machineKey, machineLabel, toolingFor, printFigures, sleeveChoices, laminatedWidth, rollerChoices,
-  sheetKind, gussetSplit, pouchFigures, sleeveFigures, labelFigures, sheetOf, sheetIsBlank, missingRollers,
+  sheetKind, gussetSplit, gussetEach, gussetTotal, pouchFigures, sleeveFigures, labelFigures, sheetOf, sheetIsBlank, missingRollers,
 } from '../lib/specSheet.js';
 
 // Issues 26.10 — the SPECIFICATIONS sheet, one component on both the QC's CSA report
@@ -16,6 +16,8 @@ import {
 //     onChange (nextSheet) => void
 
 const fmt = (v) => (v > 0 ? String(v) : '');
+// Issues 05.11: every dispatch form reads this one figure, worked out, never typed.
+const TOTAL_GSM_HOW = 'substrates + ink + adhesive, from above';
 
 function Num({ label, value, onChange, unit, aria, disabled, width }) {
   return (
@@ -289,10 +291,12 @@ export default function SpecSheet({
         <div style={box} aria-label="Pouch specifications">
           <div className="ctitle" style={{ fontSize: 12, margin: 0 }}>{dispatchForm || 'Pouch'} — specifications</div>
           <div className="g4">
-            <Radios label="Gusset" name={`${idPrefix}-gusset`} value={sh.gusset_type} options={GUSSET_TYPES} onChange={(v) => set({ gusset_type: v })} />
-            <Num label="Total gusset" unit="mm" value={sh.gusset_total} onChange={(v) => set({ gusset_total: v })} />
-            <Out label="Each gusset fold (mm)" value={g.each}
-              how={g.folds ? `${g.total} ÷ ${g.folds} (${/bottom/i.test(sh.gusset_type) ? 'bottom' : 'side'} gusset)` : 'Pick side or bottom gusset'} />
+            <Radios label="Gusset" name={`${idPrefix}-gusset`} value={sh.gusset_type} options={GUSSET_TYPES}
+              onChange={(v) => set({ gusset_type: v, gusset_total: gussetTotal(v, gussetEach(sh)) || '' })} />
+            <Num label={sh.gusset_type || 'Gusset'} unit="mm" aria="One gusset (mm)" value={gussetEach(sh)} disabled={!g.folds}
+              onChange={(v) => set({ gusset_each: v, gusset_total: gussetTotal(sh.gusset_type, v) || '' })} />
+            <Out label="Total gusset (mm)" value={g.total}
+              how={g.folds ? `${gussetEach(sh) || 0} × ${g.folds} (${/bottom/i.test(sh.gusset_type) ? 'bottom' : 'side'} gusset)` : 'Pick side or bottom gusset'} />
             <div />
             <Radios label="Seal" name={`${idPrefix}-seal`} value={sh.seal_type} options={SEAL_TYPES} onChange={(v) => set({ seal_type: v })} />
             <Toggle label="With glue" value={sh.with_glue} onChange={(v) => set({ with_glue: v })} />
@@ -320,16 +324,15 @@ export default function SpecSheet({
             </div>
             <Out label="Total seal width (mm)" value={pouch.seal} how={`${sh.seal_a || 0} + ${sh.seal_b || 0}`} />
             {pouch.three ? <Num label="Bottom seal width" unit="mm" value={sh.bottom_seal} onChange={(v) => set({ bottom_seal: v })} /> : <div />}
-            <Num label="GSM for the weight" value={sh.gsm_override} aria="GSM for the weight" onChange={(v) => set({ gsm_override: v })} />
+            <Out label="Total Product GSM" value={pouch.gsm} how={TOTAL_GSM_HOW} />
           </div>
           <div className="g4" aria-label="Pouch weight">
-            <Out label="Height (mm)" value={pouch.height}
-              how={`${sh.pouch_height || 0}${pouch.three ? ` + ${pouch.bottomSeal} × 2 bottom seal` : ''} + ${g.bottom} bottom gusset + ${sh.flap || 0} flap`} />
-            <Out label="Width (mm)" value={pouch.width} how={`${sh.pouch_width || 0} + ${pouch.seal} seal + ${g.side} side gusset`} />
-            <Out label="Pouch weight (g)" value={pouch.weight} how={`height × width × ${pouch.gsm || 0} GSM × 1.02 ÷ 1,000,000`} />
+            <Out label="Total Open Height (mm)" value={pouch.height}
+              how={`${sh.pouch_height || 0} × 2${pouch.three ? ` + ${pouch.bottomSeal} × 2 bottom seal` : ''} + ${sh.flap || 0} flap + ${g.bottom} bottom gusset`} />
+            <Out label="Open Width (mm)" value={pouch.width} how={`${sh.pouch_width || 0} + ${g.side} side gusset + ${pouch.seal} seal`} />
+            <Out label="Pouch weight (g)" value={pouch.weight} how={`open height × open width × ${pouch.gsm || 0} GSM × 1.02 ÷ 1,000,000`} />
             <Out label="Pouches per kg" value={pouch.perKg} how="1000 ÷ pouch weight" />
           </div>
-          {!(Number(sh.gsm_override) > 0) && <div style={{ fontSize: 10, color: 'var(--i3)' }}>The weight uses the total GSM of the substrates ({gsm.total || 0}) — type a GSM above to use another.</div>}
         </div>
       )}
 
@@ -342,7 +345,7 @@ export default function SpecSheet({
             <Num label="Overlap width" unit="mm" value={sh.overlap} onChange={(v) => set({ overlap: v })} />
             <Num label="Open width" unit="mm" value={sh.open_width} onChange={(v) => set({ open_width: v })} />
             <Toggle label="Reverse glue" value={sh.reverse_glue} onChange={(v) => set({ reverse_glue: v })} />
-            <Num label="GSM for the weight" value={sh.gsm_override} aria="GSM for the weight" onChange={(v) => set({ gsm_override: v })} />
+            <Out label="Total Product GSM" value={sleeve.gsm} how={TOTAL_GSM_HOW} />
             <Out label="Sleeve weight (g)" value={sleeve.weight} how={`${sh.sleeve_height || 0} × ${sh.open_width || 0} × ${sleeve.gsm || 0} GSM × 1.02 ÷ 1,000,000`} />
             <Out label="Sleeves per kg" value={sleeve.perKg} how="1000 ÷ sleeve weight" />
           </div>
@@ -356,7 +359,7 @@ export default function SpecSheet({
             <Num label="Label height" unit="mm" value={sh.label_height} onChange={(v) => set({ label_height: v })} />
             <Num label="Bleed (height)" unit="mm" value={sh.bleed_h} onChange={(v) => set({ bleed_h: v })} />
             <Out label="Effective height (mm)" value={label.effH} how={`${sh.label_height || 0} + ${sh.bleed_h || 0} bleed`} />
-            <Num label="GSM for the weight" value={sh.gsm_override} aria="GSM for the weight" onChange={(v) => set({ gsm_override: v })} />
+            <Out label="Total Product GSM" value={label.gsm} how={TOTAL_GSM_HOW} />
             <Num label="Label width" unit="mm" value={sh.label_width} onChange={(v) => set({ label_width: v })} />
             <Num label="Bleed (width)" unit="mm" value={sh.bleed_w} onChange={(v) => set({ bleed_w: v })} />
             <Out label="Effective width (mm)" value={label.effW} how={`${sh.label_width || 0} + ${sh.bleed_w || 0} bleed`} />
@@ -415,10 +418,10 @@ export function SpecSummary({ sales, layers, sheet, dispatchForm = '', machines 
   });
   if (kind === 'pouch') {
     const p = pouchFigures(sh, gsm.total);
-    add('Gusset', sh.gusset_type ? `${sh.gusset_type} ${sh.gusset_total || 0} mm` : '');
+    add('Gusset', sh.gusset_type ? `${sh.gusset_type} ${gussetEach(sh) || 0} mm · total ${sh.gusset_total || 0} mm` : '');
     add('Seal', [sh.seal_type, p.seal ? `${p.seal} mm` : '', p.three && sh.bottom_seal ? `bottom ${sh.bottom_seal} mm` : ''].filter(Boolean).join(' · '));
     add('With glue', sh.with_glue === 'Yes' ? 'Yes' : ''); add('Zipper', sh.zipper === 'Yes' ? 'Yes' : '');
-    add('Pouch (H × W)', p.height && p.width ? `${p.height} × ${p.width} mm` : '');
+    add('Total open height × open width', p.height && p.width ? `${p.height} × ${p.width} mm` : '');
     add('Flap', sh.flap ? sh.flap + ' mm' : '');
     add('Pouch weight', p.weight ? p.weight + ' g' : ''); add('Pouches per kg', p.perKg);
   } else if (kind === 'sleeve') {

@@ -12,7 +12,7 @@ import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
 import StoresIssueHistory, { HISTORY_LIMIT } from '../components/StoresIssueHistory.jsx';
-import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
+import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, isInk, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
 
 // Stores Login. Four desks, in the order the day runs:
 //   Material on Hand — the landing board: every item with its characteristics,
@@ -1939,7 +1939,7 @@ function IssuesReturns({ flash }) {
     if (!(mode === 'issue' && soChosen)) return [];
     const inStock = new Set(items.map((it) => String(it.id)));
     const seen = new Set();
-    return bomItems.filter((b) => !inStock.has(String(b.itemId)) && !seen.has(String(b.itemId)) && seen.add(String(b.itemId)));
+    return bomItems.filter((b) => !isInk(b) && !inStock.has(String(b.itemId)) && !seen.has(String(b.itemId)) && seen.add(String(b.itemId)));
   }, [bomItems, items, mode, soChosen]);
   /** Each picker offers only what the other two leave — the same narrowing as the board. */
   const opts = (key) => {

@@ -19,6 +19,12 @@
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const fmt = (v) => Number(num(v)).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
+/**
+ * Issues 05.11: "there will be some inks which shall be mixed on the spot itself" — an
+ * ink the stores do not hold is not a shortage. Whole words: SHRINK film is no ink.
+ */
+export const isInk = (it) => /\binks?\b/i.test([it && it.materialType, it && it.subGroup, it && it.itemDescription].filter(Boolean).join(' '));
+
 /** Item codes compared the way the stores and the BOM both mean them. */
 export const codeKey = (v) => String(v || '').trim().toUpperCase();
 

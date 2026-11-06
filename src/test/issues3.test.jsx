@@ -208,7 +208,7 @@ describe('Issues 3.0 §5 — base price and both grand totals on a new sale orde
 
     const checks = screen.getAllByRole('checkbox');
     await user.click(checks[checks.length - 1]);
-    await user.type(screen.getByRole('spinbutton'), '500');
+    await user.type(screen.getByLabelText(/^PO qty for /), '500');
 
     // Step 2 already carries the running value: 500 × ₹75 = ₹37,500 base,
     // ₹6,750 GST @ 18%, ₹44,250 gross.

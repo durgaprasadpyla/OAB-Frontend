@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { fmtDate, inr } from '../lib/format.js';
-import { getPM } from '../lib/pricing.js';
+import { orderPrice } from '../lib/pricing.js';
 import { pendingRepPos } from '../lib/repFlow.js';
 import { repName } from '../lib/sales.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
@@ -86,7 +86,7 @@ export default function PoToSo() {
                       <td style={{ fontSize: 11 }}>{repName(sales.sales_users, p.created_by)}</td>
                       <td style={{ fontSize: 11 }}>
                         {p.lines.map((l) => {
-                          const pm = Number(getPM(l.jss_spec, prices).price) || 0;
+                          const pm = Number(orderPrice(l.jss_spec, l.qty, prices)) || 0;
                           return (
                             <div key={l.id}>
                               {l.sku_name} <span style={{ fontFamily: 'monospace', color: 'var(--blu)' }}>{l.jss_spec || 'no JSS'}</span> · {inr(l.qty)} @ ₹{inr(l.price, 2)}

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { dash } from '../lib/format.js';
-import { getPM } from '../lib/pricing.js';
+import { orderPrice } from '../lib/pricing.js';
 
 // Dispatch by Sale Order — every OPEN sale order with ordered qty, dispatched
 // (invoiced + manual), balance and ageing since the PO date.
@@ -114,7 +114,7 @@ export default function DispatchBySO() {
   // "By value" sort has something to order on; both default to 0 when a spec has no
   // price, which is harmless for the other sort modes.
   const all = useMemo(() => dispatchRows(mods.oab && mods.oab.OAB, undefined, mods.jss).map((r) => {
-    const rate = num(getPM(r.spec, mods.prices).price);
+    const rate = num(orderPrice(r.spec, r.poQty, mods.prices));
     return { ...r, rate, value: r.bal * rate };
   }), [mods.oab, mods.prices, mods.jss]);
   const rows = useMemo(() => sortDispatchRows(all, { q, overOnly, sort }), [all, q, overOnly, sort]);

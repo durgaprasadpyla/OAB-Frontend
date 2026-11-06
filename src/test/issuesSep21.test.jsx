@@ -90,7 +90,7 @@ describe('one name, two customers — the locations follow the group', () => {
     await user.click(screen.getByRole('button', { name: /Next: Select SKUs/ }));
     const checks = screen.getAllByRole('checkbox');
     await user.click(checks[checks.length - 1]);
-    await user.type(screen.getByRole('spinbutton'), '100');
+    await user.type(screen.getByLabelText(/^PO qty for /), '100');
     await user.click(screen.getByRole('button', { name: /Review →/ }));
     // the confirm step names the warehouse on the order line, so the desk can see
     // WHICH "Dharapuram" this order is going to before it is created

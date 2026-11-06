@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
-import { getPM } from '../lib/pricing.js';
+import { orderPrice } from '../lib/pricing.js';
 import { gstBreakup } from '../lib/calc.js';
 import { getCustLocations, getCustByLoc, jssCustomers } from '../lib/master.js';
 import { specFor } from '../lib/specs.js';
@@ -64,8 +64,14 @@ export default function ProformaModal({ onClose }) {
   }
   const setRow = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   function onSku(i, spec) {
-    const rate = spec ? (getPM(spec, mods.prices).price || 0) : 0;
+    const rate = spec ? (orderPrice(spec, rows[i].qty, mods.prices) || 0) : 0;
     setRow(i, { spec, rate: spec ? String(rate) : '' });
+  }
+  /** Issues 05.11: a new quantity moves a rate still at the Price Master's figure. */
+  function onQty(i, qty) {
+    const r = rows[i];
+    const auto = r.spec && num(r.rate) === num(orderPrice(r.spec, r.qty, mods.prices));
+    setRow(i, auto ? { qty, rate: String(orderPrice(r.spec, qty, mods.prices) || 0) } : { qty });
   }
   const addRow = () => setRows((rs) => [...rs, blankRow()]);
   const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : rs));
@@ -206,7 +212,7 @@ export default function ProformaModal({ onClose }) {
                         {skuOptions.map((j) => <option key={j.spec} value={j.spec}>{j.spec}{j.jobName ? ' — ' + j.jobName : ''}{j.subBrand ? ' [' + j.subBrand + ']' : ''}</option>)}
                       </select>
                     </td>
-                    <td><input type="number" min="0" value={r.qty} onChange={(e) => setRow(i, { qty: e.target.value })} style={{ width: '100%', textAlign: 'right' }} /></td>
+                    <td><input type="number" min="0" value={r.qty} onChange={(e) => onQty(i, e.target.value)} style={{ width: '100%', textAlign: 'right' }} /></td>
                     <td><input type="number" step="0.01" min="0" value={r.rate} onChange={(e) => setRow(i, { rate: e.target.value })} style={{ width: '100%', textAlign: 'right' }} /></td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{rupees(num(r.qty) * num(r.rate))}</td>
                     <td style={{ textAlign: 'center' }}><button className="btn btn-s" style={{ height: 24, fontSize: 11, padding: '0 6px', color: 'var(--red)' }} onClick={() => removeRow(i)}>✕</button></td>

@@ -2,7 +2,7 @@
 // All figures use the *current* Price Master + RM rates, exactly as the legacy
 // dashboard recomputed them on each render.
 import { balance, num } from './calc.js';
-import { getPM, getCostPrice } from './pricing.js';
+import { orderPrice, getCostPrice } from './pricing.js';
 
 const sum = (arr, k) => (arr || []).reduce((s, x) => s + (Number(x[k]) || 0), 0);
 
@@ -28,7 +28,7 @@ export function manualDispatchEntries(oab, from, to, client, ctx) {
       (r.manDispLog || []).forEach((entry) => {
         if (from && entry.date < from) return;
         if (to && entry.date > to) return;
-        const rate = getPM(r.spec, ctx.prices).price || 0;
+        const rate = orderPrice(r.spec, r.poQty, ctx.prices) || 0;
         const cost = getCostPrice(r.spec, ctx) || 0;
         const qty = num(entry.qty);
         out.push({ no: entry.invNo || '(Manual)', date: entry.date, po: r.poNum || '', customer: r.customer || '', spec: r.spec || '', jobName: r.jobName || '', qty, rate, amount: rate * qty, _dynMargin: (rate - cost) * qty, isManual: true });
@@ -43,7 +43,7 @@ export function computeKPIs(oab, { from, to, client }, ctx) {
   const INV_REG = (oab && oab.INV_REG) || [];
   const allRows = ['SF', 'OT'].flatMap((k) => (oab && oab.OAB && oab.OAB[k]) || []);
   const inRange = (d) => !!d && d >= from && d <= to;
-  const price = (r) => getPM(r.spec, ctx.prices).price || 0;
+  const price = (r) => orderPrice(r.spec, r.poQty, ctx.prices) || 0;
 
   const periodInv = INV_REG.filter((inv) => inRange(inv.date) && (!client || inv.customer === client)).map((inv) => ({
     ...inv,

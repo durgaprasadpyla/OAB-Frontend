@@ -12,8 +12,8 @@
 //   lamination   film width + 10 mm per lamination; the roller has to be more than
 //                5 mm wider than the print (single width × tracks, no tracker line)
 //                and narrower than the stage-1 film width
-//   pouch        height = pouch height + bottom seal × 2 + bottom gusset + flap,
-//                width  = pouch width + side seal + side gusset,
+//   pouch        open height = pouch height × 2 + bottom seal × 2 + flap + bottom gusset,
+//                open width  = pouch width + side gusset + total seal,
 //                weight = height × width × GSM × 1.02 / 1,000,000 g
 //   sleeve       height × open width × GSM × 1.02 / 1,000,000 g
 //   label        (height + bleed) × (width + bleed) × GSM × 1.02 / 1,000,000 g
@@ -213,13 +213,34 @@ export function gussetSplit(type, total) {
   return { total: t, folds: 0, each: 0, side: 0, bottom: 0 };
 }
 
-/** The GSM a weight is worked out on: the typed override, else the structure's total. */
-export const weightGsm = (sheet, totalGsm) => (n(sheet && sheet.gsm_override) > 0 ? n(sheet.gsm_override) : n(totalGsm));
+/**
+ * Issues 05.11: "we will give one gusset width and total gusset should be computed" —
+ * the QC types one gusset; a side gusset has four of them, a bottom gusset two.
+ */
+export function gussetTotal(type, each) {
+  const folds = /bottom/i.test(s(type)) ? 2 : /side/i.test(s(type)) ? 4 : 0;
+  return folds ? r2(n(each) * folds) : 0;
+}
+
+/** The one gusset the box shows: as typed, else read back off a saved total. */
+export function gussetEach(sheet) {
+  const sh = sheet || {};
+  if (sh.gusset_each !== '' && sh.gusset_each != null) return sh.gusset_each;
+  const each = gussetSplit(sh.gusset_type, sh.gusset_total).each;
+  return each > 0 ? String(each) : '';
+}
+
+/**
+ * The Total Product GSM a weight is worked out on. Issues 05.11: "individual substrate
+ * GSM + GSM + other sub GSM" — the total above. A GSM typed under the old "GSM for the
+ * weight" box only stands in when the sheet has no total of its own.
+ */
+export const weightGsm = (sheet, totalGsm) => (n(totalGsm) > 0 ? n(totalGsm) : n(sheet && sheet.gsm_override));
 
 /**
  * The pouch / bulk bag: seal widths, finished height and width, weight and pouches per kg.
- *   height = pouch height + bottom seal × 2 (three side seal only) + bottom gusset + flap
- *   width  = pouch width + side / centre seal (both fields) + side gusset
+ *   open height = pouch height × 2 + bottom seal × 2 (three side seal only) + flap + total bottom gusset
+ *   open width  = pouch width + total side gusset + side / centre seal (both fields)
  *   weight = height × width × GSM × 1.02 / 1,000,000 g
  */
 export function pouchFigures(sheet, totalGsm) {
@@ -228,7 +249,7 @@ export function pouchFigures(sheet, totalGsm) {
   const three = /three/i.test(s(sh.seal_type));
   const bottomSeal = three ? n(sh.bottom_seal) : 0;
   const g = gussetSplit(sh.gusset_type, sh.gusset_total);
-  const height = r2(n(sh.pouch_height) + bottomSeal * 2 + g.bottom + n(sh.flap));
+  const height = r2(n(sh.pouch_height) * 2 + bottomSeal * 2 + n(sh.flap) + g.bottom);
   const width = r2(n(sh.pouch_width) + seal + g.side);
   const gsm = weightGsm(sh, totalGsm);
   const weight = n(sh.pouch_height) > 0 && n(sh.pouch_width) > 0 && gsm > 0 ? r4((height * width * gsm * 1.02) / 1e6) : 0;
@@ -265,7 +286,7 @@ export const blankSheet = () => ({
   layer_gsm: ['', '', ''], ink_gsm: '', adhesive_gsm2: '', adhesive_gsm3: '',
   coating: '', single_repeat: '', single_width: '',
   print: {}, lam1: {}, lam2: {},
-  gusset_type: '', gusset_total: '', seal_type: '', seal_a: '', seal_b: '', bottom_seal: '',
+  gusset_type: '', gusset_each: '', gusset_total: '', seal_type: '', seal_a: '', seal_b: '', bottom_seal: '',
   with_glue: 'No', zipper: 'No', pouch_height: '', pouch_width: '', flap: '', gsm_override: '',
   sleeve_height: '', sleeve_width: '', overlap: '', open_width: '', reverse_glue: 'No',
   label_height: '', label_width: '', bleed_h: '', bleed_w: '',

@@ -89,21 +89,22 @@ describe('dispatch-form specifications', () => {
     expect(gussetSplit('Bottom gusset', 80)).toMatchObject({ each: 40, bottom: 80, side: 0 });
     expect(gussetSplit('Side gusset', 80)).toMatchObject({ each: 20, side: 80, bottom: 0 });
   });
-  it('pouch weight = (height + bottom seal × 2 + bottom gusset + flap) × (width + seal + side gusset) × GSM × 1.02 / 1e6', () => {
+  it('pouch weight = (height × 2 + bottom seal × 2 + flap + bottom gusset) × (width + side gusset + seal) × GSM × 1.02 / 1e6', () => {
     const p = pouchFigures({
       seal_type: 'Three side seal', seal_a: 5, seal_b: 5, bottom_seal: 8, gusset_type: 'Bottom gusset', gusset_total: 60,
       pouch_height: 200, pouch_width: 150, flap: 10,
     }, 100);
     expect(p.seal).toBe(10);
-    expect(p.height).toBe(200 + 16 + 60 + 10);
+    expect(p.height).toBe(400 + 16 + 10 + 60);
     expect(p.width).toBe(160);
-    expect(p.weight).toBeCloseTo((286 * 160 * 100 * 1.02) / 1e6, 4);
+    expect(p.weight).toBeCloseTo((486 * 160 * 100 * 1.02) / 1e6, 4);
     expect(p.perKg).toBe(Math.round(1000 / p.weight));
   });
-  it('a side seal pouch has no bottom seal; a typed GSM overrides the structure total', () => {
+  it('a side seal pouch has no bottom seal; a GSM typed earlier only stands in when there is no total', () => {
     const p = pouchFigures({ seal_type: 'Side seal', seal_a: 5, seal_b: 5, bottom_seal: 8, pouch_height: 200, pouch_width: 150, gsm_override: 50 }, 100);
-    expect(p.height).toBe(200);
-    expect(p.gsm).toBe(50);
+    expect(p.height).toBe(400);
+    expect(p.gsm).toBe(100);
+    expect(pouchFigures({ pouch_height: 200, pouch_width: 150, gsm_override: 50 }, 0).gsm).toBe(50);
   });
   it('sleeve and label weights', () => {
     expect(sleeveFigures({ sleeve_height: 100, open_width: 200 }, 50).weight).toBeCloseTo(1.02, 4);

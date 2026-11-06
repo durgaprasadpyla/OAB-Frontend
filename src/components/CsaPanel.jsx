@@ -438,6 +438,7 @@ function CsaReportView({ report: r, sales, machines = [], onClose }) {
         ))}
       </div>
       <SpecSummary sales={sales} layers={csaLayers(r)} sheet={r.spec} dispatchForm={r.dispatch_type} machines={machines} />
+      {r.remarks && <div className="al al-b" style={{ marginTop: 12 }}>QC remarks: {r.remarks}</div>}
       {r.plant_comment_req && <div className="al al-y" style={{ marginTop: 12 }}>QC asked: {r.plant_comment_req}</div>}
       {r.plant_comments
         ? <div className="al al-b" style={{ marginTop: 8 }}>🏭 Plant: {r.plant_comments}</div>
@@ -611,6 +612,11 @@ function CsaForm({ draft, setDraft, sales, msg, busy, onCancel, onSubmit, custom
       <SpecSheet sales={sales} layers={csaLayers(f)} sheet={f.spec} onChange={(sheet) => set('spec', sheet)}
         dispatchForm={dispatchForm} machines={machines} idPrefix="csa"
         lockTracks={!!draft.editId && ((sales.qc_reports || []).find((x) => x.id === draft.editId) || {}).status === 'Quoted'} />
+
+      <div className="fg">
+        <label>QC remarks</label>
+        <textarea rows={2} value={f.remarks ?? ''} aria-label="QC remarks" onChange={(e) => set('remarks', e.target.value)} />
+      </div>
 
       <div className="fg">
         <label>Comment requested from the plant</label>
@@ -806,6 +812,7 @@ function PlantCsaRow({
       </tr>
       {open && (
         <tr><td colSpan={5} style={{ background: 'var(--bg)', padding: 14 }}>
+          {r.remarks && <div className="al al-b" style={{ marginTop: 0 }}>QC remarks: {r.remarks}</div>}
           {r.plant_comment_req && <div className="al al-y" style={{ marginTop: 0 }}>QC asked: {r.plant_comment_req}</div>}
           <div className="fg">
             <label>Plant comments *</label>

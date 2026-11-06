@@ -4,7 +4,7 @@ import { markPosPushed } from '../lib/repFlow.js';
 import { useData } from '../data.jsx';
 import { ordersApi, stockApi, masterApi } from '../api.js';
 import { today, fmtDate, dash, rupees } from '../lib/format.js';
-import { getPM, getUOM } from '../lib/pricing.js';
+import { getPM, getUOM, orderPrice, priceBandsText, priceDateOf, priceNudge } from '../lib/pricing.js';
 import { getCustLocations, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
 import { uniqueSpecs } from '../lib/specs.js';
 import { isStayFreshJobType } from '../lib/jssSpec.js';
@@ -35,6 +35,27 @@ function masterRowForRepPo(customers, repPo) {
 }
 
 /** New PO — 3-step SO creation wizard (native port of the PO ENTRY flow, legacy 1577+). */
+/** A customer's PO price below the rate for that quantity. */
+const poBelow = (poPrice, rate) => num(poPrice) > 0 && rate > 0 && num(poPrice) < rate - 1e-9;
+
+/**
+ * Issues 05.11: under the rate, in very small print — the slabs of that spec, what the
+ * quantity on the line should tell the user, and when the price was last entered ("some
+ * clients for whom the price revision has not happened for 2 years").
+ */
+function PriceNote({ spec, pm, rate, nudge, poBelow: low, prices, sales }) {
+  if (!(rate > 0)) return null;
+  const date = priceDateOf(spec, prices, sales);
+  const bands = priceBandsText(pm);
+  return (
+    <div style={{ fontSize: 9, fontWeight: 400, lineHeight: 1.25, color: 'var(--i3)' }} aria-label={`Price note for ${spec}`}>
+      {bands && <div>{bands}</div>}
+      {nudge && <div style={{ color: low ? 'var(--red)' : '#B7770D', fontWeight: 600 }}>{nudge}</div>}
+      <div>{date ? `Price entered ${fmtDate(date)}` : 'Price date not recorded'}</div>
+    </div>
+  );
+}
+
 export default function NewPO() {
   const { mods, reloadModule, save } = useData();
   const nav = useNavigate();
@@ -509,8 +530,8 @@ export default function NewPO() {
                   <th style={{ width: 72 }}>Spec</th><th style={{ minWidth: 180 }}>Job Name</th>
                   <th style={{ minWidth: 100 }}>Sub Brand</th><th style={{ width: 80 }}>Disp Form</th>
                   <th style={{ width: 42 }}>W</th><th style={{ width: 42 }}>H</th><th style={{ width: 38 }}>Mic</th>
-                  <th style={{ width: 70 }}>PO Qty*</th><th style={{ width: 50 }}>UOM</th><th style={{ width: 80 }}>Rate (₹)</th>
-                  {repPo && <th style={{ width: 90 }}>PO price (₹)</th>}
+                  <th style={{ width: 92 }}>PO Qty*</th><th style={{ width: 50 }}>UOM</th><th style={{ width: 130 }}>Rate (₹)</th>
+                  <th style={{ width: 90 }}>PO price (₹)</th>
                   {/* 30.09 PE3: "can select pending FG" — what is in stock, and how much of it to use */}
                   {repPo && <th style={{ width: 80, textAlign: 'right' }}>FG available</th>}
                   {repPo && <th style={{ width: 80 }}>Use FG</th>}
@@ -518,9 +539,11 @@ export default function NewPO() {
               </thead>
               <tbody>
                 {skus.length === 0 ? (
-                  <tr><td colSpan={repPo ? 14 : 11} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No active specs found for this customer</td></tr>
+                  <tr><td colSpan={repPo ? 14 : 12} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>No active specs found for this customer</td></tr>
                 ) : skus.map((s, i) => {
-                  const rate = getPM(s.spec, mods.prices).price;
+                  const rate = orderPrice(s.spec, s.qty, mods.prices);
+                  const pm = getPM(s.spec, mods.prices);
+                  const nudge = priceNudge(pm, s.qty, s.poPrice);
                   const avail = repPo ? fgAvail(mods.fgLedger, s.spec) : 0;
                   return (
                     <tr key={i} className={s.checked ? 'hi' : ''}>
@@ -531,12 +554,20 @@ export default function NewPO() {
                       <td style={{ fontSize: 11 }}>{s.dispatchForm || '-'}</td>
                       <td>{s.width || '-'}</td><td>{s.height || '-'}</td><td>{s.mic || '-'}</td>
                       <td><input type="number" min="1" placeholder="0" disabled={!s.checked} value={s.qty} aria-label={`PO qty for ${s.spec}`}
-                        style={{ width: 60, opacity: s.checked ? 1 : 0.4 }} onChange={(e) => setRow(i, { qty: e.target.value })} /></td>
+                        style={{ width: 82, opacity: s.checked ? 1 : 0.4 }} onChange={(e) => setRow(i, { qty: e.target.value })} /></td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(s.dispatchForm)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g)' }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
-                      {repPo && (
-                        <td style={{ textAlign: 'right', fontWeight: 600, color: s.poPrice != null && rate > 0 && num(s.poPrice) < rate ? 'var(--red)' : 'var(--blu)' }} aria-label={`PO price for ${s.spec}`}>
+                      <td style={{ textAlign: 'right', whiteSpace: 'normal' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--g)' }} aria-label={`Rate for ${s.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
+                        <PriceNote spec={s.spec} pm={pm} rate={rate} nudge={nudge} poBelow={poBelow(s.poPrice, rate)} prices={mods.prices} sales={mods.sales} />
+                      </td>
+                      {repPo ? (
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: poBelow(s.poPrice, rate) ? 'var(--red)' : 'var(--blu)' }} aria-label={`PO price for ${s.spec}`}>
                           {s.poPrice != null ? '₹' + num(s.poPrice).toFixed(2) : '-'}
+                        </td>
+                      ) : (
+                        <td>
+                          <input type="number" min="0" step="0.01" placeholder="₹" title="Optional: the price on the customer's PO" disabled={!s.checked} value={s.poPrice ?? ''} aria-label={`PO price for ${s.spec}`}
+                            style={{ width: 70, opacity: s.checked ? 1 : 0.4, color: poBelow(s.poPrice, rate) ? 'var(--red)' : undefined }} onChange={(e) => setRow(i, { poPrice: e.target.value })} />
                         </td>
                       )}
                       {repPo && (
@@ -561,7 +592,7 @@ export default function NewPO() {
               the GST on it and the gross, so both figures are on screen before Review. */}
           {(() => {
             const chosen = skus.filter((x) => x.checked && num(x.qty) > 0);
-            const base = chosen.reduce((t, x) => t + num(x.qty) * getPM(x.spec, mods.prices).price, 0);
+            const base = chosen.reduce((t, x) => t + num(x.qty) * orderPrice(x.spec, x.qty, mods.prices), 0);
             return (
               <div className="al al-y" style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center', marginTop: 10 }}>
                 <span><strong>{chosen.length}</strong> SKU{chosen.length === 1 ? '' : 's'} selected</span>
@@ -591,7 +622,7 @@ export default function NewPO() {
                 <th style={{ width: 50 }}>UOM</th>
                 <th style={{ textAlign: 'right' }}>Base Price (₹) <span style={{ fontWeight: 400 }}>per unit</span></th>
                 {/* 30.09 PE3: the customer's PO price beside the Price Master rate */}
-                {repPo && <th style={{ textAlign: 'right' }}>PO price (₹)</th>}
+                <th style={{ textAlign: 'right' }}>PO price (₹)</th>
                 {repPo && <th style={{ textAlign: 'right' }}>FG to use</th>}
                 <th style={{ textAlign: 'right' }}>Base Value (₹) <span style={{ fontWeight: 400 }}>without GST</span></th>
                 <th style={{ textAlign: 'right' }}>Total (₹) <span style={{ fontWeight: 400 }}>with {GST_PCT}% GST</span></th>
@@ -602,7 +633,8 @@ export default function NewPO() {
                     Issues 3.0 §5: the base (pre-GST) price and value are shown alongside
                     the GST-inclusive total, matching how the tax invoice states them. */}
                 {selPO.map((r) => {
-                  const rate = getPM(r.spec, mods.prices).price;
+                  const rate = orderPrice(r.spec, r.poQty, mods.prices);
+                  const pm = getPM(r.spec, mods.prices);
                   const base = num(r.poQty) * rate;
                   return (
                     <tr key={r.so}>
@@ -621,12 +653,13 @@ export default function NewPO() {
                       <td style={{ fontSize: 11 }}>{fmtDate(r.poDate)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</td>
-                      {repPo && (
-                        <td style={{ textAlign: 'right', fontWeight: 600, color: r.poPrice != null && rate > 0 && num(r.poPrice) < rate ? 'var(--red)' : 'var(--blu)' }} aria-label={`Confirm PO price for ${r.spec}`}>
-                          {r.poPrice != null ? '₹' + num(r.poPrice).toFixed(2) : '-'}
-                        </td>
-                      )}
+                      <td style={{ textAlign: 'right', whiteSpace: 'normal' }}>
+                        <div style={{ fontWeight: 600 }} aria-label={`Confirm rate for ${r.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
+                        <PriceNote spec={r.spec} pm={pm} rate={rate} nudge={priceNudge(pm, r.poQty, r.poPrice)} poBelow={poBelow(r.poPrice, rate)} prices={mods.prices} sales={mods.sales} />
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: 600, color: poBelow(r.poPrice, rate) ? 'var(--red)' : 'var(--blu)' }} aria-label={`Confirm PO price for ${r.spec}`}>
+                        {num(r.poPrice) > 0 ? '₹' + num(r.poPrice).toFixed(2) : '-'}
+                      </td>
                       {repPo && <td style={{ textAlign: 'right' }} aria-label={`Confirm FG for ${r.spec}`}>{num(r.fgQty) > 0 ? dash(r.fgQty) : '—'}</td>}
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{rate > 0 ? rupees(base) : '-'}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rate > 0 ? rupees(withGst(base)) : '-'}</td>
@@ -638,19 +671,19 @@ export default function NewPO() {
                   GST — with the tax between them, so both figures are read off directly. */}
               <tfoot>
                 {(() => {
-                  const base = selPO.reduce((t, r) => t + num(r.poQty) * getPM(r.spec, mods.prices).price, 0);
+                  const base = selPO.reduce((t, r) => t + num(r.poQty) * orderPrice(r.spec, r.poQty, mods.prices), 0);
                   return (
                     <>
                       <tr>
-                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (without GST)</td>
+                        <td colSpan={repPo ? 14 : 13} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (without GST)</td>
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>{rupees(base)}</td>
                       </tr>
                       <tr>
-                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>GST @ {GST_PCT}%</td>
+                        <td colSpan={repPo ? 14 : 13} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>GST @ {GST_PCT}%</td>
                         <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--i3)' }}>{rupees(withGst(base) - base)}</td>
                       </tr>
                       <tr>
-                        <td colSpan={repPo ? 14 : 12} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (with {GST_PCT}% GST)</td>
+                        <td colSpan={repPo ? 14 : 13} style={{ textAlign: 'right', fontWeight: 700 }}>Grand Total (with {GST_PCT}% GST)</td>
                         <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g)' }}>{rupees(withGst(base))}</td>
                       </tr>
                     </>
