@@ -7,6 +7,7 @@ import { orderPrice } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { getCustByLoc, getCustLocations } from '../lib/master.js';
+import { TRANSPORT_PARTIES, customerTransport, isBloomflex } from '../lib/transport.js';
 import { today, fmtDate, rupees, dash } from '../lib/format.js';
 import { nextInvNo } from '../lib/seq.js';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
@@ -21,7 +22,7 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 const emptyHeader = (lastInvNo) => ({
   ivNo: nextInvNo(lastInvNo).no, ivDt: today(), po: '', transporter: '', dcNo: '', vehicle: '', driver: '',
-  placeOfSupply: '', warehouseName: '', paymentTerms: '30 days', freight: '0', gstType: 'IGST',
+  placeOfSupply: '', warehouseName: '', paymentTerms: '30 days', freight: '0', freightBorneBy: 'Customer', gstType: 'IGST',
   customer: '', billingAddr: '', shippingAddr: '', billingGstin: '', shippingGstin: '', contactPerson: '', contactNo: '',
 });
 
@@ -61,11 +62,15 @@ export default function Invoice() {
   const set = (patch) => setH((x) => ({ ...x, ...patch }));
   const flash = (text, t = 'g') => { setMsg({ text, t }); setTimeout(() => setMsg(null), 6000); };
 
-  const pos = useMemo(() => [...new Set(['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || []).map((r) => r.poNum)).filter(Boolean))].sort(), [mods.oab]);
-  const poRows = useMemo(() => (h.po ? ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).filter((r) => r.poNum === h.po) : []), [mods.oab, h.po]);
+  // Transport 06.11: "the POs that are appearing in the dropdown should be only those
+  // which are already in active state" — the open rows of the two OABs. A PO with one
+  // SO closed and another open stays, with only the open one offered.
+  const activeRows = useMemo(() => ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).filter((r) => !r.closed), [mods.oab]);
+  const pos = useMemo(() => [...new Set(activeRows.map((r) => r.poNum).filter(Boolean))].sort(), [activeRows]);
+  const poRows = useMemo(() => (h.po ? activeRows.filter((r) => r.poNum === h.po) : []), [activeRows, h.po]);
 
   function onSelectPO(po) {
-    const rows = ['SF', 'OT'].flatMap((k) => (mods.oab?.OAB?.[k] || [])).filter((r) => r.poNum === po);
+    const rows = activeRows.filter((r) => r.poNum === po);
     const first = rows[0] || {};
     const cu = first.customer || '';
     const loc = first.dispLoc || '';
@@ -88,6 +93,8 @@ export default function Invoice() {
       billingGstin, shippingGstin: billingGstin,
       contactPerson: (cm && cm.contactPerson) || x.contactPerson,
       contactNo: (cm && cm.contactPhone) || x.contactNo,
+      // Transport 06.11: starts from the Customer Master; can be changed per invoice
+      freightBorneBy: customerTransport(mods.customers, cu) || 'Customer',
       // Intra-state (buyer GSTIN starts with seller state code 36) => CGST+SGST, else IGST.
       gstType: billingGstin ? (billingGstin.startsWith('36') ? 'CGST_SGST' : 'IGST') : x.gstType,
     }));
@@ -174,7 +181,7 @@ export default function Invoice() {
         billingAddr: h.billingAddr, shippingAddr: h.shippingAddr, billingGstin: h.billingGstin,
         shippingGstin: h.shippingGstin, contactPerson: h.contactPerson, contactNo: h.contactNo,
         transporter: h.transporter, dcNo: h.dcNo, vehicle: h.vehicle, driver: h.driver,
-        paymentTerms: h.paymentTerms, freight: num(h.freight), gstType: h.gstType,
+        paymentTerms: h.paymentTerms, freight: num(h.freight), freightBorneBy: h.freightBorneBy, gstType: h.gstType,
       };
       const lineItems = pendInv.map((p) => ({
         so: p.so, spec: p.spec, jobName: p.jobName, qty: p.qty, rate: p.rate,
@@ -311,7 +318,15 @@ export default function Invoice() {
               <div className="fg"><label>Payment Terms</label><input value={h.paymentTerms} onChange={(e) => set({ paymentTerms: e.target.value })} /></div>
             </div>
             <div className="g2">
-              <div className="fg"><label>Freight (₹)</label><input type="number" min="0" value={h.freight} onChange={(e) => set({ freight: e.target.value })} /></div>
+              <div className="fg"><label>Freight (₹)</label><input type="number" min="0" value={h.freight} aria-label="Freight" onChange={(e) => set({ freight: e.target.value })} /></div>
+              <div className="fg"><label>Transport borne by</label>
+                <select value={h.freightBorneBy || 'Customer'} aria-label="Transport borne by" onChange={(e) => set({ freightBorneBy: e.target.value })}>
+                  {TRANSPORT_PARTIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {isBloomflex(h.freightBorneBy) && num(h.freight) > 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>Not charged on this invoice; recorded as Bloomflex&rsquo;s cost.</div>
+                )}
+              </div>
               <div className="fg"><label>GST Type</label>
                 <select value={h.gstType} onChange={(e) => set({ gstType: e.target.value })}>
                   <option value="IGST">IGST 18%</option>

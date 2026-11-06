@@ -3,7 +3,7 @@
 // getUOM, fmtDate) so every number is identical to the PDF / on-screen invoice.
 // Powers the "Portal Entry" copy panel so the fields can be copied straight into
 // the portal instead of being re-typed from the PDF.
-import { gstBreakup } from './calc.js';
+import { billedFreight, gstBreakup } from './calc.js';
 import { getUOM } from './pricing.js';
 import { fmtDate } from './format.js';
 
@@ -32,7 +32,7 @@ export function invoicePortalFields(header, lines) {
   });
 
   const subTotal = rows.reduce((s, r) => s + r.amount, 0);
-  const freight = num(h.freight);
+  const freight = billedFreight(h);
   const gstType = h.gstType || 'IGST';
   const g = gstBreakup(subTotal, freight, 18, gstType);
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);

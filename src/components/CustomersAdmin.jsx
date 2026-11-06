@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { exportAOA } from '../lib/xlsx.js';
 import { custGroups, custsInGroup } from '../lib/master.js';
+import { TRANSPORT_PARTIES, customerTransport } from '../lib/transport.js';
 import { today } from '../lib/format.js';
 
 // Customers admin (superadmin) — Issues 2.0: works like the old version. A TOP
@@ -16,9 +17,10 @@ const COLS = [
   ['warehouseName', 'Warehouse', 120], ['billingAddr', 'Billing Address', 190], ['shippingAddr', 'Shipping Address', 190],
   ['gstin', 'GSTIN', 130], ['state', 'State', 100], ['contactPerson', 'Contact Person', 120],
   ['contactPhone', 'Contact Phone', 120], ['contactEmail', 'Contact Email', 150],
+  ['transportBorneBy', 'Transport Borne By', 130],
   ['remarks', 'Remarks', 170],
 ];
-const blankRow = () => ({ group: '', customer: '', dispatchLoc: '', warehouseName: '', billingAddr: '', shippingAddr: '', gstin: '', state: '', contactPerson: '', contactPhone: '', contactEmail: '', remarks: '' });
+const blankRow = () => ({ group: '', customer: '', dispatchLoc: '', warehouseName: '', billingAddr: '', shippingAddr: '', gstin: '', state: '', contactPerson: '', contactPhone: '', contactEmail: '', transportBorneBy: '', remarks: '' });
 const norm = (v) => String(v || '').trim();
 
 export default function CustomersAdmin() {
@@ -76,6 +78,11 @@ export default function CustomersAdmin() {
     if (form.customer === '__new__') row.customer = customerNew.trim();
     if (!norm(row.customer)) return flash('r', 'Customer name is required.');
     const next = clone(rows);
+    // Transport 06.11: transport is the client's, not one location's. A row left unset
+    // takes what the client's other rows say; a choice reaches all of them.
+    const same = (r) => norm(r.customer).toLowerCase() === norm(row.customer).toLowerCase();
+    if (!row.transportBorneBy) row.transportBorneBy = customerTransport(next, row.customer);
+    if (row.transportBorneBy) next.forEach((r) => { if (same(r)) r.transportBorneBy = row.transportBorneBy; });
     if (editIdx >= 0) next[editIdx] = row; else next.push(row);
     setBusy(true);
     try {
@@ -138,6 +145,11 @@ export default function CustomersAdmin() {
                       style={{ marginTop: 6 }} onChange={(e) => setCustomerNew(e.target.value)} />
                   )}
                 </>
+              ) : k === 'transportBorneBy' ? (
+                <select value={form.transportBorneBy ?? ''} aria-label="Customer form Transport Borne By" onChange={setField(k)}>
+                  <option value="">— not set —</option>
+                  {TRANSPORT_PARTIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
               ) : (
                 <input value={form[k] ?? ''}
                   aria-label={'Customer form ' + label.replace(' *', '')} onChange={setField(k)} />

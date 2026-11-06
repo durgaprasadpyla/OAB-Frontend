@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import { COMPANY, INVOICE_DOC } from '../lib/company.js';
 import { COMPANY_LOGO } from '../lib/companyLogo.js';
-import { gstBreakup } from '../lib/calc.js';
+import { billedFreight, gstBreakup } from '../lib/calc.js';
 import { getUOM } from '../lib/pricing.js';
 import { amountInWords, fmtDate } from '../lib/format.js';
 
@@ -26,7 +26,7 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
   const h = header || {};
   const rows = lines || [];
   const subTotal = rows.reduce((s, l) => s + (n(l.lineTotal) || n(l.qty) * n(l.rate)), 0);
-  const freight = n(h.freight);
+  const freight = billedFreight(h);
   const gstType = h.gstType || 'IGST';
   const g = gstBreakup(subTotal, freight, 18, gstType);
   const taxable = g.taxable;

@@ -24,6 +24,7 @@ import KamPanel from '../components/KamPanel.jsx';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 import FgValuePanel from '../components/FgValuePanel.jsx';
 import SalesHistoryPanel from '../components/SalesHistoryPanel.jsx';
+import TransportReport from '../components/TransportReport.jsx';
 import DropdownAdmin from '../components/DropdownAdmin.jsx';
 import GrnAdmin, { RmPriceAdmin } from '../components/GrnAdmin.jsx';
 import MasterData from './MasterData.jsx';
@@ -40,6 +41,8 @@ const TABS = [
   { k: 'trends', label: '📈 Trends & Forecast' },
   // Issues 6 §18: month-by-month sales, live from invoicing, with the Price Master margins.
   { k: 'saleshistory', label: '📜 Sales History' },
+  // Transport 06.11: the freight on each invoice, and who bore it.
+  { k: 'transport', label: '🚚 Transport Reports' },
   { k: 'price', label: '💰 Price Master' },
   { k: 'fgval', label: '💹 FG Value' },
   { k: 'jss', label: '📋 JSS Editor' },
@@ -106,6 +109,7 @@ export default function Dashboard() {
       {tab === 'delete' && <DeleteSOs />}
       {tab === 'trends' && <Trends />}
       {tab === 'saleshistory' && <SalesHistoryPanel />}
+      {tab === 'transport' && <TransportReport />}
       {tab === 'costing' && <SOCosting />}
       {tab === 'kam' && <KamPanel />}
       {tab === 'bom' && <BomPanel />}

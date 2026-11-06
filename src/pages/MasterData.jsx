@@ -63,7 +63,11 @@ function EntityForm({ fields, initial, onSubmit, onCancel, submitting }) {
     for (const f of fields) {
       let v = vals[f.key];
       if (f.type === 'checkbox') { body[f.key] = !!v; continue; }
-      if (v === '' || v == null) { if (f.required) { setErr(`${f.label} is required`); return; } continue; }
+      if (v === '' || v == null) {
+        if (f.required) { setErr(`${f.label} is required`); return; }
+        if (f.clearable) body[f.key] = '';   // an emptied field on an edit must reach the server
+        continue;
+      }
       if (f.type === 'number' || f.type === 'select') v = f.type === 'number' ? Number(v) : v;
       body[f.key] = v;
     }
@@ -412,8 +416,8 @@ export default function MasterData({ only, title, subtitle }) {
         )}
         {tab === 'machines' && (
           <Section title="Machines" canAdd={canConfig} onAdd={() => setModal({ type: 'machines', row: {} })}
-            cols={['Code', 'Name', 'Department', 'Type', 'Speed', 'Hrs/day', 'Active']} rows={d.machines}
-            render={(r) => [r.code, r.name, r.departmentName, r.machineType,
+            cols={['Code', 'Name', 'Department', 'Type', 'Make', 'Location', 'Speed', 'Hrs/day', 'Active']} rows={d.machines}
+            render={(r) => [r.code, r.name, r.departmentName, r.machineType, r.machineMake, r.location,
               r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null}
             // One toggle after Edit: shows Disable while the machine is enabled and
@@ -593,6 +597,10 @@ export default function MasterData({ only, title, subtitle }) {
             { key: 'name', label: 'Machine name', required: true },
             { key: 'departmentId', label: 'Department', type: 'select', options: d.departments },
             { key: 'machineType', label: 'Machine type' },
+            { key: 'machineMake', label: 'Machine make', clearable: true },
+            { key: 'location', label: 'Location', type: 'select', clearable: true,
+              // a location since taken off the list still shows on the machine that has it
+              options: [...new Set([...ddList(mods.sales || {}, 'machineLocations'), ...(modal?.row?.location ? [modal.row.location] : [])])].map((l) => ({ id: l, name: l })) },
             { key: 'defaultSpeed', label: 'Default speed (per min)', type: 'number' },
             { key: 'speedUom', label: 'Speed unit', type: 'select', options: SPEED_UOMS },
             { key: 'functionalHoursPerDay', label: 'Functional hrs/day', type: 'number' },

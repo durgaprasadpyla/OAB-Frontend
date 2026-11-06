@@ -59,6 +59,9 @@ export const DROPDOWN_DEFS = [
   // Sales Login §9: the cities a contact / lead sits in, from ONE list — "to avoid
   // duplicate entries for Bangalore, Bengaluru, Bangalor, etc."
   { key: 'locations', label: 'Locations (cities)', where: 'Sales Rep — Contacts · Leads', type: 'list' },
+  // Transport 06.11: "Location to be one dropdown based on the locations that I give
+  // from the Super Admin." The factory sites a machine stands at, not sales cities.
+  { key: 'machineLocations', label: 'Machine Locations', where: 'Machines tab', type: 'list' },
   { key: 'visit_types', label: 'Log Visit — Activity Types', where: 'Sales Rep — Log Visit', type: 'list' },
   { key: 'ping_types', label: 'Next Ping Types', where: 'Sales Rep — Log Visit', type: 'list' },
   { key: 'responsible', label: 'CSA Responsible Persons', where: 'QC — CSA report', type: 'list' },

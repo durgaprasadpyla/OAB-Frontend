@@ -55,7 +55,8 @@ describe('ddList — overrides vs defaults', () => {
   it('covers all nine lists with a default each', () => {
     // Master-backed categories (e.g. Departments) draw from a live master, not DD_DEFAULTS.
     // Issues 26.10: densities and machine tooling have their own panels and built-in rules
-    DROPDOWN_DEFS.filter((d) => !d.master && !d.panel).forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
+    // Transport 06.11: machine locations are the Super Admin's own sites — nothing to default to
+    DROPDOWN_DEFS.filter((d) => !d.master && !d.panel && d.key !== 'machineLocations').forEach((d) => expect((DD_DEFAULTS[d.key] || []).length).toBeGreaterThan(0));
   });
 });
 

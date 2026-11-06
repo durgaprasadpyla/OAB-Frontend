@@ -126,6 +126,12 @@ export function pouchWeightQC({ height, gusset, width, gsm }) {
 }
 
 /**
+ * Transport 06.11: the freight the buyer is charged. Freight Bloomflex bears is entered
+ * on the invoice for the transport report, but it is no part of the bill.
+ */
+export const billedFreight = (header) => (/^\s*bloomflex\s*$/i.test(String((header && header.freightBorneBy) || '')) ? 0 : num(header && header.freight));
+
+/**
  * Invoice tax breakup: 18% GST on (subtotal + freight), rounded, with round-off.
  * (renderInvoiceDoc, lines 2150–2180)
  */
