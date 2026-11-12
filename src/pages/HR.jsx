@@ -219,6 +219,7 @@ function Overview() {
   );
 }
 
+
 /* ─────────────────────────── Employee details ─────────────────────────── */
 /**
  * The status filter's first choice — the people who are with the company today.
