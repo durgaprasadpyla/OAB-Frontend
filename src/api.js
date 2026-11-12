@@ -106,6 +106,23 @@ export const purchaseApi = {
   syncStores: () => api('/api/purchase-orders/sync-stores', { method: 'POST' }),
 };
 
+// Issues 11.11 — purchase indents: the stores desk raises them, the purchase desk turns
+// them into POs (createPO with `indentIds`).
+export const indentApi = {
+  list: (status) => api('/api/purchase-indents' + (status ? '?status=' + encodeURIComponent(status) : '')),
+  departments: (itemId) => api('/api/purchase-indents/departments?itemId=' + encodeURIComponent(itemId)),
+  create: (body) => api('/api/purchase-indents', { method: 'POST', body }),
+  cancel: (id, reason) => api('/api/purchase-indents/' + encodeURIComponent(id) + '/cancel', { method: 'POST', body: { reason } }),
+};
+
+// Issues 11.11 — the artwork of a JSS, one image per spec.
+export const artworkApi = {
+  index: () => api('/api/jss-artwork'),
+  get: (spec) => api('/api/jss-artwork/' + encodeURIComponent(spec)),
+  images: (specs) => api('/api/jss-artwork/images?specs=' + encodeURIComponent(specs.join(','))),
+  put: (spec, body) => api('/api/jss-artwork/' + encodeURIComponent(spec), { method: 'PUT', body }),
+};
+
 // Raw-material ₹/kg rates (server-side; was per-device localStorage).
 export const rmRatesApi = {
   get: () => api('/api/rm-rates'),

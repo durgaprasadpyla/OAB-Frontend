@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../data.jsx';
-import { purchaseApi, storesApi } from '../api.js';
+import { indentApi, purchaseApi, storesApi } from '../api.js';
 import { parsePaymentDays, num } from '../lib/calc.js';
 import { today, fmtDate, rupees } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
@@ -12,6 +12,7 @@ import {
 import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 import PoLineFilters, { useItemMaster } from '../components/PoLineFilters.jsx';
 import SupplierFinder from '../components/SupplierFinder.jsx';
+import { IndentList } from '../components/IndentPanel.jsx';
 
 // ── Local helpers (kept in this file — shared libs are read-only for this port) ──
 
@@ -353,6 +354,17 @@ export default function Purchase() {
   const [notes, setNotes] = useState('');
   const [genMsg, setGenMsg] = useState(null); // { t:'g'|'r', m, poNum? }
   const [pendingDocNum, setPendingDocNum] = useState(null); // a just-created PO to open in the preview
+  // Issues 11.11: the stores desk's purchase indents, and the ones the PO being built is raised from
+  const [pis, setPis] = useState([]);
+  const [piPick, setPiPick] = useState(null);
+  const [piSupplier, setPiSupplier] = useState('');
+  const [fromIndents, setFromIndents] = useState([]);   // [{ id, piNo }]
+  const [piMsg, setPiMsg] = useState(null);
+  const loadPis = useCallback(async () => {
+    try { const l = await indentApi.list(); setPis(Array.isArray(l) ? l : []); }
+    catch (e) { setPiMsg({ t: 'r', m: 'Could not load the purchase indents: ' + (e.message || e) }); }
+  }, []);
+  useEffect(() => { loadPis(); }, [loadPis]);
 
   // GRN-link state
   const [grnFor, setGrnFor] = useState(null); // poNum whose GRN is being linked
@@ -547,6 +559,7 @@ export default function Purchase() {
     const r = await runPurchase(async () => {
       const resp = await purchaseApi.createPO({
         supplier, poDate: poDate || today(), expectedDelivery: expected || '', gstPercent: num(gst), notes: (notes || '').trim(),
+        indentIds: fromIndents.map((p) => p.id),
         items: valid.map((it) => ({
           itemCode: (it.itemCode || '').trim(), item: it.item.trim(),
           materialType: (it.materialType || '').trim(), subGroup: (it.subGroup || '').trim(),
@@ -556,6 +569,7 @@ export default function Purchase() {
         })),
       });
       made = resp && resp.poNum;
+      if (fromIndents.length) { setFromIndents([]); setPiPick(null); loadPis(); }
     });
 
     if (r === true) {
@@ -674,7 +688,52 @@ export default function Purchase() {
     });
   }, [pos, payStat, asl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const TABS = [['gen', '① Generate PO'], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments'], ['sup', '④ Suppliers by Item']];
+  const openPis = pis.filter((p) => p.status === 'OPEN');
+  const TABS = [['gen', '① Generate PO'], ['pis', `📝 PIs${openPis.length ? ` (${openPis.length})` : ''}`], ['track', '② PO Tracking & GRN'], ['pay', '③ Payments'], ['sup', '④ Suppliers by Item']];
+
+  // Issues 11.11: "Once they go and select a PI, they should be able to see the various
+  // suppliers that the item code is linked to … and then based on that selection the
+  // purchase order should be generated."
+  const pickedPi = pis.find((p) => p.id === piPick) || null;
+  const piSuppliers = useMemo(() => {
+    if (!pickedPi) return [];
+    const code = String(pickedPi.itemCode || '').trim().toUpperCase();
+    const seen = new Map();
+    asl.filter((r) => String(r.itemCode || '').trim().toUpperCase() === code && r.company).forEach((r) => {
+      if (!seen.has(r.company)) seen.set(r.company, r);
+    });
+    return [...seen.values()].sort((a, b) => String(a.company).localeCompare(String(b.company)));
+  }, [pickedPi, asl]);
+  function poFromPi() {
+    if (!pickedPi || !piSupplier) return;
+    const row = piSuppliers.find((r) => r.company === piSupplier) || {};
+    const m = masterByCode.get(String(pickedPi.itemCode || '').trim().toUpperCase()) || {};
+    setSupplier(piSupplier);
+    setItems([{
+      ...EMPTY_ROW,
+      itemCode: pickedPi.itemCode,
+      item: String(m.name || row.specificMaterial || pickedPi.itemName || '').trim(),
+      materialType: String(m.materialType || row.materialType || '').trim(),
+      subGroup: String(m.subGroup || row.subGroup || '').trim(),
+      specialty: String(m.specialtyName || row.specialty || row.speciality || '').trim(),
+      microns: String(m.microns || row.microns || '').trim(),
+      widthMm: m.widthMm != null && m.widthMm !== '' ? String(m.widthMm) : '',
+      unit: String(m.uom || row.uom || pickedPi.uom || '').trim(),
+      qty: String(num(pickedPi.qty)),
+      rate: row.basicPrice !== '' && row.basicPrice != null ? String(row.basicPrice) : '',
+    }]);
+    if (pickedPi.expectedDate) setExpected(pickedPi.expectedDate);
+    setNotes(`Against ${pickedPi.piNo}${pickedPi.departmentName ? ` (${pickedPi.departmentName})` : ''}${pickedPi.remarks ? ` — ${pickedPi.remarks}` : ''}`);
+    setFromIndents([{ id: pickedPi.id, piNo: pickedPi.piNo }]);
+    setGenMsg(null);
+    setTab('gen');
+  }
+  async function cancelPi(p) {
+    const reason = window.prompt(`Cancel ${p.piNo}? Say why (the stores desk sees it):`, '');
+    if (reason == null) return;
+    try { await indentApi.cancel(p.id, reason.trim()); setPiPick(null); await loadPis(); }
+    catch (e) { setPiMsg({ t: 'r', m: e.message || 'Could not cancel' }); }
+  }
   const TRACK_COLS = 11; // Issues 17.10 §7: radio + 10 (Actions gone, receipt + material merged)
   const CLOSED_COLS = 13;
 
@@ -721,10 +780,56 @@ export default function Purchase() {
         ))}
       </div>
 
+      {/* ── PIs from the stores desk ── */}
+      {tab === 'pis' && (
+        <div className="card">
+          <div className="fbar">
+            <div className="ctitle" style={{ margin: 0 }}>Purchase indents from the stores desk</div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-s" onClick={loadPis}>↻ Refresh</button>
+          </div>
+          <div className="pg-sub" style={{ marginTop: 0 }}>Pick an open PI with its radio button, choose the supplier, and the PO opens ready to check and save.</div>
+          {piMsg && <div className={'al ' + (piMsg.t === 'g' ? 'al-g' : 'al-r')}>{piMsg.m}</div>}
+          {pickedPi && (
+            <div className="card" style={{ background: 'var(--bg)' }} aria-label={`Suppliers for ${pickedPi.piNo}`}>
+              <div className="fbar">
+                <div className="ctitle" style={{ margin: 0 }}>{pickedPi.piNo} — <span style={{ fontFamily: 'monospace' }}>{pickedPi.itemCode}</span> {pickedPi.itemName} · {num(pickedPi.qty).toLocaleString('en-IN')} {pickedPi.uom || ''}</div>
+                <span style={{ flex: 1 }} />
+                <button className="btn btn-s" style={{ color: 'var(--red)' }} onClick={() => cancelPi(pickedPi)}>✕ Cancel PI</button>
+              </div>
+              {piSuppliers.length === 0 ? (
+                <div className="al al-y">No supplier in the Approved Supplier List carries {pickedPi.itemCode}. Add one under Suppliers by Item, or raise the PO by hand.</div>
+              ) : (
+                <div className="tw"><table>
+                  <thead><tr><th style={{ width: 34 }} /><th>Supplier</th><th style={{ textAlign: 'right' }}>Basic price</th><th>MOQ</th><th>Lead time</th><th>Payment terms</th><th>Transport</th></tr></thead>
+                  <tbody>{piSuppliers.map((r) => (
+                    <tr key={r.company} className={piSupplier === r.company ? 'hi' : ''}>
+                      <td style={{ textAlign: 'center' }}><input type="radio" name="pi-supplier" checked={piSupplier === r.company} aria-label={`Supplier ${r.company}`} onChange={() => setPiSupplier(r.company)} /></td>
+                      <td style={{ fontWeight: 600 }}>{r.company}</td>
+                      <td style={{ textAlign: 'right' }}>{r.basicPrice !== '' && r.basicPrice != null ? rupees(num(r.basicPrice)) : '—'}</td>
+                      <td style={{ fontSize: 11 }}>{r.moq || '—'}</td><td style={{ fontSize: 11 }}>{r.leadTime || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{r.paymentTerms || '—'}</td><td style={{ fontSize: 11 }}>{r.transportCharges || '—'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              )}
+              <div className="act"><button className="btn btn-g" disabled={!piSupplier} onClick={poFromPi}>→ Create PO from {pickedPi.piNo}</button></div>
+            </div>
+          )}
+          <IndentList indents={pis} picked={piPick} onPick={(id) => { setPiPick(id); setPiSupplier(''); }} empty="The stores desk has not raised any purchase indents yet." />
+        </div>
+      )}
+
       {/* ── 1) GENERATE PO ── */}
       {tab === 'gen' && (
         <div className="card">
           <div className="ctitle">Generate Purchase Order</div>
+          {fromIndents.length > 0 && (
+            <div className="al al-b" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span>Raising this PO against <strong>{fromIndents.map((p) => p.piNo).join(', ')}</strong> — saving it closes the PI.</span>
+              <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={() => setFromIndents([])}>Not from a PI</button>
+            </div>
+          )}
           {!suppliers.length && (
             <div className="al al-y">No suppliers in the Approved Supplier List yet — add suppliers before raising a PO.</div>
           )}

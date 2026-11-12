@@ -2,7 +2,11 @@ import { useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { fmtDate, rupees, today } from '../lib/format.js';
 import { exportAOA } from '../lib/xlsx.js';
-import { TRANSPORT_PARTIES, transportByCustomer, transportRows, transportTotals } from '../lib/transport.js';
+import { TRANSPORT_PARTIES, transportByCustomer, transportByMonth, transportRows, transportTotals } from '../lib/transport.js';
+import { custGroupOf } from '../lib/master.js';
+
+const MEASURES = [{ v: 'freight', l: 'All freight' }, { v: 'bloomflex', l: 'Borne by Bloomflex' }, { v: 'customer', l: 'Borne by the customer' }];
+const monthName = (ym) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }); };
 
 const rt = { textAlign: 'right' };
 
@@ -33,11 +37,22 @@ export default function TransportReport() {
   const [from, setFrom] = useState(() => yearStart(today()));
   const [to, setTo] = useState(() => today());
   const [customer, setCustomer] = useState('');
+  const [group, setGroup] = useState('');
   const [borne, setBorne] = useState('');
+  // Issues 11.11: the month-wise report — per customer or per buying group
+  const [monthBy, setMonthBy] = useState('customer');
+  const [measure, setMeasure] = useState('freight');
 
+  const groupOf = (name) => custGroupOf(name, mods.customers) || '';
   const inPeriod = useMemo(() => transportRows(mods.oab, { from, to }), [mods.oab, from, to]);
-  const customers = useMemo(() => [...new Set(inPeriod.map((r) => r.customer).filter(Boolean))].sort(), [inPeriod]);
-  const rows = useMemo(() => inPeriod.filter((r) => !customer || r.customer === customer), [inPeriod, customer]);
+  const groups = useMemo(() => [...new Set(inPeriod.map((r) => groupOf(r.customer)).filter(Boolean))].sort(), [inPeriod, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const customers = useMemo(() => [...new Set(inPeriod.filter((r) => !group || groupOf(r.customer) === group).map((r) => r.customer).filter(Boolean))].sort(),
+    [inPeriod, group, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => inPeriod.filter((r) => (!group || groupOf(r.customer) === group) && (!customer || r.customer === customer)),
+    [inPeriod, group, customer, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const monthly = useMemo(() => transportByMonth(rows, {
+    measure, keyOf: monthBy === 'group' ? (r) => groupOf(r.customer) || `${r.customer} (no group)` : (r) => r.customer || '—',
+  }), [rows, measure, monthBy, mods.customers]); // eslint-disable-line react-hooks/exhaustive-deps
   const totals = useMemo(() => transportTotals(rows), [rows]);
   const byCustomer = useMemo(() => transportByCustomer(rows), [rows]);
   const lines = useMemo(() => rows.filter((r) => r.freight > 0 && (!borne || r.borneBy === borne)), [rows, borne]);
@@ -55,6 +70,10 @@ export default function TransportReport() {
         <div className="ctitle" style={{ margin: 0 }}>🚚 Transport Reports</div>
         <label style={{ fontSize: 11 }}>From <input type="date" value={from} aria-label="Transport report from" onChange={(e) => setFrom(e.target.value)} /></label>
         <label style={{ fontSize: 11 }}>To <input type="date" value={to} aria-label="Transport report to" onChange={(e) => setTo(e.target.value)} /></label>
+        <select value={group} aria-label="Transport report group" onChange={(e) => { setGroup(e.target.value); setCustomer(''); }} style={{ maxWidth: 200 }}>
+          <option value="">All groups</option>
+          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
         <select value={customer} aria-label="Transport report customer" onChange={(e) => setCustomer(e.target.value)} style={{ maxWidth: 220 }}>
           <option value="">All customers</option>
           {customers.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -84,6 +103,40 @@ export default function TransportReport() {
               <td style={{ fontSize: 11 }}>{c.customer}</td><td style={rt}>{c.invoices}</td><td style={rt}>{rupees(c.invoiceValue)}</td>
               <td style={rt}>{rupees(c.bloomflex)}</td><td style={rt}>{rupees(c.borneByCustomer)}</td>
               <td style={{ ...rt, fontWeight: 700 }}>{rupees(c.freight)}</td><td style={rt}>{pct(c.freight, c.invoiceValue)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+
+      <div className="fbar" style={{ marginTop: 14, flexWrap: 'wrap' }}>
+        <div className="ctitle" style={{ margin: 0 }}>Month by month</div>
+        <select value={monthBy} aria-label="Month-wise by" onChange={(e) => setMonthBy(e.target.value)}>
+          <option value="customer">Per customer</option>
+          <option value="group">Per group</option>
+        </select>
+        <select value={measure} aria-label="Month-wise measure" onChange={(e) => setMeasure(e.target.value)}>
+          {MEASURES.map((m) => <option key={m.v} value={m.v}>{m.l}</option>)}
+        </select>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-s" disabled={!monthly.rows.length} onClick={() => exportAOA([
+          [monthBy === 'group' ? 'Group' : 'Customer', ...monthly.months.map(monthName), 'Total'],
+          ...monthly.rows.map((r) => [r.name, ...monthly.months.map((m) => Math.round(r.byMonth[m] || 0)), Math.round(r.total)]),
+        ], `Transport_by_month_${monthBy}_${measure}_${from}_to_${to}`, 'By month')}>⬇ Export month-wise</button>
+      </div>
+      <div className="tw"><table aria-label="Transport by month">
+        <thead><tr>
+          <th>{monthBy === 'group' ? 'Group' : 'Customer'}</th>
+          {monthly.months.map((m) => <th key={m} style={rt}>{monthName(m)}</th>)}
+          <th style={rt}>Total</th>
+        </tr></thead>
+        <tbody>
+          {monthly.rows.length === 0 ? (
+            <tr><td colSpan={monthly.months.length + 2} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No freight in this period</td></tr>
+          ) : monthly.rows.map((r) => (
+            <tr key={r.name}>
+              <td style={{ fontSize: 11 }}>{r.name}</td>
+              {monthly.months.map((m) => <td key={m} style={rt}>{r.byMonth[m] ? rupees(r.byMonth[m]) : '—'}</td>)}
+              <td style={{ ...rt, fontWeight: 700 }}>{rupees(r.total)}</td>
             </tr>
           ))}
         </tbody>

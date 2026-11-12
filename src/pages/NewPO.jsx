@@ -4,7 +4,7 @@ import { markPosPushed } from '../lib/repFlow.js';
 import { useData } from '../data.jsx';
 import { ordersApi, stockApi, masterApi } from '../api.js';
 import { today, fmtDate, dash, rupees } from '../lib/format.js';
-import { getPM, getUOM, orderPrice, priceBandsText, priceDateOf, priceNudge } from '../lib/pricing.js';
+import { belowMinimum, getPM, getUOM, orderPrice, priceBandsText, priceDateOf, priceNudge } from '../lib/pricing.js';
 import { getCustLocations, jssCustomers, custGroups, custsInGroup, specVisibleTo } from '../lib/master.js';
 import { uniqueSpecs } from '../lib/specs.js';
 import { isStayFreshJobType } from '../lib/jssSpec.js';
@@ -554,11 +554,12 @@ export default function NewPO() {
                       <td style={{ fontSize: 11 }}>{s.dispatchForm || '-'}</td>
                       <td>{s.width || '-'}</td><td>{s.height || '-'}</td><td>{s.mic || '-'}</td>
                       <td><input type="number" min="1" placeholder="0" disabled={!s.checked} value={s.qty} aria-label={`PO qty for ${s.spec}`}
-                        style={{ width: 82, opacity: s.checked ? 1 : 0.4 }} onChange={(e) => setRow(i, { qty: e.target.value })} /></td>
+                        title={belowMinimum(getPM(s.spec, mods.prices), s.qty) ? 'Below the smallest quantity priced in the Price Master' : undefined}
+                        style={{ width: 82, opacity: s.checked ? 1 : 0.4, ...(belowMinimum(getPM(s.spec, mods.prices), s.qty) ? { borderColor: 'var(--red)', color: 'var(--red)', background: '#FDECEA' } : {}) }} onChange={(e) => setRow(i, { qty: e.target.value })} /></td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(s.dispatchForm)}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'normal' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--g)' }} aria-label={`Rate for ${s.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
-                        <PriceNote spec={s.spec} pm={pm} rate={rate} nudge={nudge} poBelow={poBelow(s.poPrice, rate)} prices={mods.prices} sales={mods.sales} />
+                        <div style={{ fontWeight: 600, color: belowMinimum(pm, s.qty) ? 'var(--red)' : 'var(--g)' }} aria-label={`Rate for ${s.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
+                        <PriceNote spec={s.spec} pm={pm} rate={rate} nudge={nudge} poBelow={poBelow(s.poPrice, rate) || belowMinimum(pm, s.qty)} prices={mods.prices} sales={mods.sales} />
                       </td>
                       {repPo ? (
                         <td style={{ textAlign: 'right', fontWeight: 600, color: poBelow(s.poPrice, rate) ? 'var(--red)' : 'var(--blu)' }} aria-label={`PO price for ${s.spec}`}>
@@ -654,8 +655,8 @@ export default function NewPO() {
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{dash(r.poQty)}</td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: 'var(--g)', textAlign: 'center' }}>{getUOM(r.dispatchForm)}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'normal' }}>
-                        <div style={{ fontWeight: 600 }} aria-label={`Confirm rate for ${r.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
-                        <PriceNote spec={r.spec} pm={pm} rate={rate} nudge={priceNudge(pm, r.poQty, r.poPrice)} poBelow={poBelow(r.poPrice, rate)} prices={mods.prices} sales={mods.sales} />
+                        <div style={{ fontWeight: 600, color: belowMinimum(pm, r.poQty) ? 'var(--red)' : undefined }} aria-label={`Confirm rate for ${r.spec}`}>{rate > 0 ? '₹' + rate.toFixed(2) : '-'}</div>
+                        <PriceNote spec={r.spec} pm={pm} rate={rate} nudge={priceNudge(pm, r.poQty, r.poPrice)} poBelow={poBelow(r.poPrice, rate) || belowMinimum(pm, r.poQty)} prices={mods.prices} sales={mods.sales} />
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: 600, color: poBelow(r.poPrice, rate) ? 'var(--red)' : 'var(--blu)' }} aria-label={`Confirm PO price for ${r.spec}`}>
                         {num(r.poPrice) > 0 ? '₹' + num(r.poPrice).toFixed(2) : '-'}

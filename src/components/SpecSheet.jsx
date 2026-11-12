@@ -3,7 +3,7 @@ import { useApi } from '../lib/useApi.js';
 import {
   LAYER_NAMES, GUSSET_TYPES, SEAL_TYPES, gsmBreakdown, layerCount, printingMachines, laminationMachines,
   machineKey, machineLabel, toolingFor, printFigures, sleeveChoices, laminatedWidth, rollerChoices,
-  sheetKind, gussetSplit, gussetEach, gussetTotal, pouchFigures, sleeveFigures, labelFigures, sheetOf, sheetIsBlank, missingRollers,
+  sheetKind, gussetSplit, gussetEach, gussetTotal, pouchFigures, toolNote, toolShort, layerFilmWidths, PRINT_DIRECTIONS, sleeveFigures, labelFigures, sheetOf, sheetIsBlank, missingRollers,
 } from '../lib/specSheet.js';
 
 // Issues 26.10 — the SPECIFICATIONS sheet, one component on both the QC's CSA report
@@ -76,6 +76,7 @@ export default function SpecSheet({
   const sh = sheetOf(saved);
   const set = (patch) => onChange({ ...sh, ...patch });
   const gsm = gsmBreakdown(sales, layers, sh);
+  const layerWidths = layerFilmWidths(sales, sh);
   const nLayers = layerCount(layers);
   const kind = sheetKind(dispatchForm);
 
@@ -141,7 +142,8 @@ export default function SpecSheet({
                 </div>
                 {Object.entries(lam).map(([lKey, pick]) => {
                   const lm = machines.find((m) => machineKey(m) === lKey);
-                  const rc = rollerChoices(toolingFor(sales, lKey).rollers, f.printWidth, f.filmWidth);
+                  const lTool = toolingFor(sales, lKey);
+                  const rc = rollerChoices(lTool.rollers, f.printWidth, f.filmWidth);
                   const cur = String((pick && pick.roller) || '');
                   const lbl = `${pName(pKey)} · ${machineLabel(lm) || lKey}`;
                   return (
@@ -151,8 +153,16 @@ export default function SpecSheet({
                         <select value={cur} aria-label={`Lamination ${n} roller ${lbl}`} onChange={(e) => setLam(stage, pKey, lKey, { roller: e.target.value })}>
                           <option value="">{rc.options.length ? '— select —' : '— no roller fits —'}</option>
                           {cur && !rc.options.map(String).includes(cur) && <option value={cur}>{cur} (current)</option>}
-                          {rc.options.map((w) => <option key={w} value={String(w)}>{w}</option>)}
+                          {rc.options.map((w) => {
+                            const note = toolNote(lTool.rollerInfo[String(w)], 'rollers');
+                            return <option key={w} value={String(w)}>{w}{note ? ` — ${note}` : ''}</option>;
+                          })}
                         </select>
+                        {cur && toolNote(lTool.rollerInfo[cur], 'rollers') && (
+                          <div style={{ fontSize: 11, marginTop: 2, color: toolShort(lTool.rollerInfo[cur]) ? 'var(--red)' : 'var(--i2)' }} aria-label={`Lamination ${n} roller remarks ${lbl}`}>
+                            {cur} mm: {toolNote(lTool.rollerInfo[cur], 'rollers')}
+                          </div>
+                        )}
                         <div style={{ fontSize: 10, color: rc.fallback ? '#a07800' : 'var(--i3)', marginTop: 2 }} aria-label={`Lamination ${n} roller rule ${lbl}`}>
                           {f.printWidth > 0
                             ? (rc.fallback
@@ -193,7 +203,7 @@ export default function SpecSheet({
         {nLayers === 0 ? <div style={{ fontSize: 11, color: 'var(--i3)' }}>Pick the substrates above — their GSM is worked out here.</div>
           : (
             <table style={{ width: '100%' }}>
-              <thead><tr><th>Substrate</th><th style={{ textAlign: 'right' }}>Micron</th><th style={{ textAlign: 'right' }}>Density</th><th style={{ width: 120 }}>GSM</th><th style={{ width: 120 }}>Ink GSM</th><th style={{ width: 120 }}>Adhesive GSM</th></tr></thead>
+              <thead><tr><th>Substrate</th><th style={{ textAlign: 'right' }}>Micron</th><th style={{ textAlign: 'right' }}>Density</th><th style={{ width: 120 }}>GSM</th><th style={{ width: 120 }}>Ink GSM</th><th style={{ width: 120 }}>Adhesive GSM</th><th style={{ width: 120 }}>Film width (mm)</th></tr></thead>
               <tbody>
                 {gsm.rows.map((r, i) => (r.used ? (
                   <tr key={i}>
@@ -209,6 +219,11 @@ export default function SpecSheet({
                     </td>
                     <td>{i === 0 ? <input type="number" step="any" min="0" className="nospin" value={sh.ink_gsm ?? ''} aria-label="Ink GSM" onChange={(e) => set({ ink_gsm: e.target.value })} /> : null}</td>
                     <td>{i > 0 ? <input type="number" step="any" min="0" className="nospin" value={sh[`adhesive_gsm${i + 1}`] ?? ''} aria-label={`${LAYER_NAMES[i]} Adhesive GSM`} onChange={(e) => set({ [`adhesive_gsm${i + 1}`]: e.target.value })} /> : null}</td>
+                    <td>
+                      <input readOnly tabIndex={-1} value={layerWidths[i] > 0 ? layerWidths[i] : ''} placeholder="—" aria-label={`${LAYER_NAMES[i]} film width`}
+                        title={i === 0 ? 'The film width of the first printing machine below' : `Primary film width + ${10 * i} mm (lamination ${i})`}
+                        style={{ background: 'var(--bg)', fontWeight: 700 }} />
+                    </td>
                   </tr>
                 ) : null))}
               </tbody>
@@ -227,6 +242,12 @@ export default function SpecSheet({
         <div className="ctitle" style={{ fontSize: 12, margin: 0 }}>Printing</div>
         <div className="g4">
           <div className="fg"><label>Coating</label><input value={sh.coating ?? ''} aria-label="Coating" onChange={(e) => set({ coating: e.target.value })} /></div>
+          <div className="fg"><label>Printing direction for despatch</label>
+            <select value={sh.print_direction ?? ''} aria-label="Printing direction for despatch" onChange={(e) => set({ print_direction: e.target.value })}>
+              <option value="">— select —</option>
+              {PRINT_DIRECTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
           <Num label="Single print repeat" unit="mm" value={sh.single_repeat} onChange={(v) => set({ single_repeat: v })} />
           <Num label="Single print width" unit="mm" value={sh.single_width} onChange={(v) => set({ single_width: v })} />
         </div>
@@ -259,11 +280,19 @@ export default function SpecSheet({
                   <select value={String(run.sleeve || '')} aria-label={`${nm} sleeve`} onChange={(e) => setRun(key, { sleeve: e.target.value })}>
                     <option value="">{sc.options.length ? '— select —' : '— no sleeves for this machine —'}</option>
                     {run.sleeve && !sc.options.map(String).includes(String(run.sleeve)) && <option value={String(run.sleeve)}>{run.sleeve} (current)</option>}
-                    {sc.options.map((x) => <option key={x} value={String(x)}>{x}</option>)}
+                    {sc.options.map((x) => {
+                      const note = toolNote(tool.sleeveInfo[String(x)], 'sleeves');
+                      return <option key={x} value={String(x)}>{x}{note ? ` — ${note}` : ''}</option>;
+                    })}
                   </select>
                   <div style={{ fontSize: 10, color: sc.fallback ? '#a07800' : 'var(--i3)', marginTop: 2 }}>
                     {sc.fallback ? `No sleeve of ${f.repeat} mm or more — every sleeve of the machine shown.` : f.repeat > 0 ? `Sleeves of ${f.repeat} mm or more.` : 'From the Super Admin’s sleeve list for this machine.'}
                   </div>
+                  {run.sleeve && toolNote(tool.sleeveInfo[String(run.sleeve)], 'sleeves') && (
+                    <div style={{ fontSize: 11, marginTop: 2, color: toolShort(tool.sleeveInfo[String(run.sleeve)]) ? 'var(--red)' : 'var(--i2)' }} aria-label={`${nm} sleeve remarks`}>
+                      {run.sleeve} mm: {toolNote(tool.sleeveInfo[String(run.sleeve)], 'sleeves')}
+                    </div>
+                  )}
                 </div>
                 <div />
                 <Num label="Number of tracks" value={run.tracks} aria={`${nm} tracks`} disabled={lockTracks} onChange={(v) => setRun(key, { tracks: v })} />
@@ -404,7 +433,7 @@ export function SpecSummary({ sales, layers, sheet, dispatchForm = '', machines 
   const add = (k, v) => { if (v !== '' && v != null && v !== 0 && String(v) !== '0') rows.push([k, String(v)]); };
   gsm.rows.forEach((r, i) => { if (r.used) add(`${LAYER_NAMES[i]} GSM`, r.gsm); });
   add('Ink GSM', gsm.ink); add('Adhesive GSM', gsm.adhesive); add('Total GSM', gsm.total);
-  add('Coating', sh.coating); add('Single print repeat', sh.single_repeat ? sh.single_repeat + ' mm' : '');
+  add('Coating', sh.coating); add('Printing direction for despatch', sh.print_direction); add('Single print repeat', sh.single_repeat ? sh.single_repeat + ' mm' : '');
   add('Single print width', sh.single_width ? sh.single_width + ' mm' : '');
   Object.entries(sh.print).forEach(([key, run]) => {
     const f = printFigures(sh, run, toolingFor(sales, key));

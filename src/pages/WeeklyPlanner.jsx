@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { planningApi } from '../api.js';
 import { today } from '../lib/format.js';
-import PlanDownloads from '../components/PlanDownloads.jsx';
+import PlanDownloads from '../components/PlanDownloads.jsx';
+import { ArtworkButton } from '../components/Artwork.jsx';
 
 // Weekly planner (Stage 6): pick Ready-to-Plan SOs and assign quantities to eligible
 // machines on specific dates. The server checks eligibility, caps each department at
@@ -110,7 +111,7 @@ export default function WeeklyPlanner({ embedded = false }) {
                       {open.map((p) => (
                         <tr key={p.so} className={so === p.so ? 'hi' : undefined}>
                           <td><span className="so-pill">{p.so}</span></td>
-                          <td>{p.spec}</td><td>{p.jobName}</td><td>{p.routeName}</td>
+                          <td>{p.spec} <ArtworkButton spec={p.spec} compact /></td><td>{p.jobName}</td><td>{p.routeName}</td>
                           <td>{p.poQty}</td>
                           <td><span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span></td>
                           <td><b>{p.readyQty}</b></td>
@@ -134,6 +135,7 @@ export default function WeeklyPlanner({ embedded = false }) {
         <div className="card" style={{ marginTop: 12 }}>
           <div className="fbar" style={{ justifyContent: 'space-between' }}>
             <div className="ctitle" style={{ margin: 0 }}>Plan SO <span className="so-pill">{so}</span> · {soPlan.routeName || 'no route'}
+              {soPlan.spec && <span style={{ marginLeft: 8 }}><ArtworkButton spec={soPlan.spec} /></span>}
               {soPlan.readyQty != null && <span className={'tag ' + (soPlan.readyMode === 'PARTIAL' ? 'tb' : 'tg')} style={{ marginLeft: 8 }}>
                 {soPlan.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'} · {soPlan.readyQty} m ready</span>}
             </div>

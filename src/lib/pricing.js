@@ -38,9 +38,21 @@ const rs = (v) => '₹' + num(v).toFixed(2);
 /** The slabs as a sentence: "₹0.72 below 5,00,000 · ₹0.70 from 5,00,000". */
 export function priceBandsText(entry) {
   const slabs = priceSlabs(entry);
-  if (!slabs.length) return '';
-  return [`${rs(entry.price)} below ${lakh(slabs[0].qty)}`, ...slabs.map((t) => `${rs(t.price)} from ${lakh(t.qty)}`)].join(' · ');
+  const min = minQtyOf(entry);
+  if (!slabs.length && !min) return '';
+  const base = min ? `${rs(entry.price)} from ${lakh(min)}` : `${rs(entry.price)} below ${lakh(slabs[0].qty)}`;
+  return [base, ...slabs.map((t) => `${rs(t.price)} from ${lakh(t.qty)}`)].join(' · ');
 }
+
+/**
+ * Issues 11.11: the quantity the base price starts at. "50,000 – 1.12 … In the OAB if I
+ * enter 40,000, it should be highlighted in red, saying that you have given a price for
+ * 50,000." 0 when the base price holds for any quantity.
+ */
+export const minQtyOf = (entry) => num(entry && entry.minQty);
+
+/** An order quantity below the quantity any price was given for. */
+export const belowMinimum = (entry, qty) => minQtyOf(entry) > 0 && num(qty) > 0 && num(qty) < minQtyOf(entry);
 
 /**
  * What the sale-order line should tell the user. A customer's PO price below the rate
@@ -52,6 +64,7 @@ export function priceNudge(entry, qty, poPrice) {
   const po = num(poPrice);
   const rate = priceForQty(entry, q);
   const slabs = priceSlabs(entry);
+  if (belowMinimum(entry, q)) return `You have given a price for ${lakh(minQtyOf(entry))} and above — this order is ${lakh(q)}`;
   if (po > 0 && rate > 0 && po < rate - 1e-9) {
     const reachedAt = slabs.find((t) => t.qty > q && t.price <= po);
     return reachedAt
@@ -76,7 +89,8 @@ export function stampPriceDates(before, after, date) {
     const next = { ...e };
     const slabs = priceSlabs(e);
     if (slabs.length) next.tiers = slabs; else delete next.tiers;
-    const revised = num(e.price) !== num(was.price) || slabKey(e) !== slabKey(was);
+    if (minQtyOf(e) > 0) next.minQty = minQtyOf(e); else delete next.minQty;
+    const revised = num(e.price) !== num(was.price) || slabKey(e) !== slabKey(was) || minQtyOf(e) !== minQtyOf(was);
     if (revised && (num(e.price) > 0 || slabs.length)) next.priceDate = date;
     out[spec] = next;
   });

@@ -74,7 +74,7 @@ export default function PM() {
           substrate: j ? (j.material || '') : '', filmWidth: j ? (j.filmWidth || '') : '',
           thickness: j ? (j.mic || '') : '', gsm: j ? (j.gsm || '') : '',
           pouchW: j ? (j.width || '') : '', pouchH: j ? (j.height || '') : '',
-          printDate: pm.printDate || '', printedKg, printedMt, totalKg, totalMt, mtPerKg,
+          printDate: pm.printDate || '', printedKg, printedMt, totalKg, totalMt, mtPerKg, comment: pm.comment || '',
           // printing balance = total order − printed, for both Kg and metres
           balKg: Math.max(0, totalKg - printedKg), balMt: Math.max(0, totalMt - printedMt),
         });
@@ -123,9 +123,12 @@ export default function PM() {
       const e = edits[r.so];
       const printDate = e && ('printDate' in e) ? e.printDate : (r.printDate || '');
       const printedKg = e && ('printedKg' in e) ? e.printedKg : r.printedKg;
+      // Issues 11.11: the plant's comments on the order, carried to the OAB Excel
+      const comment = String(e && ('comment' in e) ? e.comment : (r.comment || '')).trim();
       // printedMt is derived from printedKg at render time — never stored.
       const entry = { printDate: printDate || '', printedKg: num(printedKg) };
-      if (entry.printDate || entry.printedKg) next[r.so] = entry;
+      if (comment) entry.comment = comment;
+      if (entry.printDate || entry.printedKg || entry.comment) next[r.so] = entry;
       else delete next[r.so];
     });
     setBusy(true);
@@ -141,11 +144,11 @@ export default function PM() {
     if (!out.length) { flash('Nothing to export — no rows match the filters.', 'y'); return; }
     const header = ['SO', 'Sheet', 'Spec', 'Customer', 'SKU', 'Disp Loc', 'PO Qty', 'Dispatched', 'Balance',
       'Prod Status', 'Stage', 'Substrate', 'Film Width', 'Thickness', 'GSM', 'Pouch Width', 'Pouch Height',
-      'Total Kg', 'Total Mt', 'Print Date', 'Printed Kg', 'Printed Mt', 'Bal Kg', 'Bal Mt'];
+      'Total Kg', 'Total Mt', 'Print Date', 'Printed Kg', 'Printed Mt', 'Bal Kg', 'Bal Mt', 'Plant Comments'];
     const body = out.map((r) => [r.so, r.sheet, r.spec, r.customer, r.sku, r.dispLoc, r.poQty, r.disp, r.bal,
       r.prodStatus, r.stage, r.substrate, r.filmWidth, r.thickness, r.gsm, r.pouchW, r.pouchH,
       Math.round(r.totalKg), Math.round(r.totalMt), r.printDate, r.printedKg, Math.round(r.printedMt),
-      Math.round(r.balKg), Math.round(r.balMt)]);
+      Math.round(r.balKg), Math.round(r.balMt), r.comment || '']);
     exportAOA([header, ...body], `Bloomflex_Printing_Progress_${today()}.xlsx`, 'Printing Progress');
     flash(`⬇ ${out.length} row(s) exported${filterOn ? ' — the filtered rows' : ''}.`);
   }
@@ -259,11 +262,12 @@ export default function PM() {
               <th style={rt}>Total Kg</th><th style={rt}>Total Mt</th>
               <th style={{ width: 130 }}>Print Date</th><th style={{ width: 84 }}>Printed Kg</th><th style={rt}>Printed Mt</th>
               <th style={rt}>Bal Kg</th><th style={rt}>Bal Mt</th>
+              <th style={{ minWidth: 200 }}>Plant comments</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={23} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No open SOs</td></tr>
+              <tr><td colSpan={24} style={{ textAlign: 'center', padding: 28, color: 'var(--i3)' }}>No open SOs</td></tr>
             ) : filtered.map((r) => {
               const e = edits[r.so] || {};
               // Not-Ready rows (any prod status other than "Ready") are flagged red.
@@ -306,6 +310,10 @@ export default function PM() {
                   <td style={{ ...rt, fontWeight: 600, color: 'var(--i2)' }} title="Auto = Printed Kg × (Total Mt ÷ Total Kg)">{dash(printedMt)}</td>
                   <td style={{ ...rt, fontWeight: 700, color: '#a3510a' }}>{dash(balKg)}</td>
                   <td style={{ ...rt, fontWeight: 700, color: '#a3510a' }}>{dash(balMt)}</td>
+                  <td>
+                    <input value={e.comment ?? r.comment} placeholder="for the OAB" aria-label={`Plant comments for ${r.so}`} style={{ width: '100%', minWidth: 180 }}
+                      onChange={(ev) => setEdit(r.so, { comment: ev.target.value })} />
+                  </td>
                 </tr>
               );
             })}

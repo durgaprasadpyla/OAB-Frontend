@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { num, today } from '../lib/format.js';
 import { pouchWeightQC } from '../lib/calc.js';
@@ -12,7 +12,7 @@ import {
 import { useApi } from '../lib/useApi.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
 import { exportAOA } from '../lib/xlsx.js';
-import { masterApi } from '../api.js';
+import { artworkApi, masterApi } from '../api.js';
 import JssPlanningPanel from '../components/JssPlanningPanel.jsx';
 import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import CapaPanel from '../components/CapaPanel.jsx';
@@ -20,6 +20,7 @@ import CertificatePanel from '../components/CertificatePanel.jsx';
 import CsaPanel from '../components/CsaPanel.jsx';
 import CsaToJssPanel, { jssFieldsFromCsa } from '../components/CsaToJssPanel.jsx';
 import SpecSheet from '../components/SpecSheet.jsx';
+import { ArtworkButton, ArtworkPicker } from '../components/Artwork.jsx';
 import { blankSheet, gsmBreakdown, jssWithSheet, sheetErrors } from '../lib/specSheet.js';
 import { csaPendingForQc, csaRequestsByRequester } from '../lib/csa.js';
 
@@ -125,6 +126,21 @@ export default function QC() {
   const [tab, setTab] = useState('spec');
   const [msg, setMsg] = useState(null); // { type: 'g' | 'r', text }
   const [busy, setBusy] = useState(false);
+  // Issues 11.11: the artwork — picked on the form (saved with the new spec), and the
+  // spec picked in the list whose artwork is being replaced
+  const [newArt, setNewArt] = useState(null);
+  const [artSel, setArtSel] = useState('');
+  const [artIndex, setArtIndex] = useState({});
+  const [artMsg, setArtMsg] = useState(null);
+  const loadArtIndex = useCallback(async () => {
+    try { const l = await artworkApi.index(); setArtIndex(Object.fromEntries((Array.isArray(l) ? l : []).map((a) => [a.spec, a]))); }
+    catch { /* the list still works without the marks */ }
+  }, []);
+  useEffect(() => { loadArtIndex(); }, [loadArtIndex]);
+  async function saveArtwork(spec, art) {
+    await artworkApi.put(spec, art);
+    await loadArtIndex();
+  }
   // Issues 2.0: All-Specs filters — group / customer / status / JSS number.
   const [fGroup, setFGroup] = useState('');
   const [fCust, setFCust] = useState('');
@@ -369,6 +385,10 @@ export default function QC() {
         const maxSno = list.reduce((m, j) => Math.max(m, num(j.sno)), 0);
         return [...JSON.parse(JSON.stringify(list)), { sno: maxSno + 1, spec, ...row }];
       }, { retry: true });
+      if (newArt) {
+        try { await saveArtwork(spec, newArt); setNewArt(null); }
+        catch (e) { setArtMsg({ t: 'r', text: `Spec ${spec} saved, but its artwork could not be: ${e.message || e} — add it from the list below.` }); }
+      }
       // §65: the JSS number goes back onto the SKU, so the rep's PO can carry it
       if (fromSku) {
         try {
@@ -519,6 +539,14 @@ export default function QC() {
           <div className="fg" />
         </div>
 
+        <div className="fbar" style={{ marginTop: 6 }} aria-label="Artwork for the new spec">
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Artwork</span>
+          <ArtworkPicker label={newArt ? '🖼 Change artwork…' : '🖼 Browse artwork…'} ariaLabel="Artwork for the new spec file" onPicked={setNewArt} />
+          {newArt && <><img src={newArt.data} alt="New spec artwork" style={{ height: 48, border: '1px solid var(--bd)' }} />
+            <span style={{ fontSize: 11, color: 'var(--i3)' }}>{newArt.fileName} — saved with the spec</span>
+            <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={() => setNewArt(null)}>✕</button></>}
+        </div>
+
         <div className="act">
           <button className="btn btn-g" onClick={addSpec} disabled={busy}>
             {busy ? 'Saving...' : 'Add Spec'}
@@ -528,6 +556,22 @@ export default function QC() {
 
       <div className="card">
         <div className="ctitle">All Specs ({filtered.length})</div>
+        {/* Issues 11.11: "by selecting the radio button against that JSS number, there
+            should be a browse button at the top where they should be able to update the
+            image that has already been added." */}
+        {artMsg && <div className={'al al-' + artMsg.t}>{artMsg.text}</div>}
+        {artSel && (
+          <div className="al al-b" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }} aria-label="Artwork of the selected spec">
+            <span>Artwork of <strong>{artSel}</strong>: {artIndex[artSel] ? (artIndex[artSel].fileName || 'added') : 'none yet'}</span>
+            {artIndex[artSel] && <ArtworkButton spec={artSel} />}
+            <ArtworkPicker label={artIndex[artSel] ? '🖼 Replace artwork…' : '🖼 Browse artwork…'} ariaLabel={`Artwork file for ${artSel}`}
+              onPicked={async (art) => {
+                try { await saveArtwork(artSel, art); setArtMsg({ t: 'g', text: `✅ Artwork of ${artSel} saved.` }); }
+                catch (e) { setArtMsg({ t: 'r', text: 'Could not save the artwork: ' + (e.message || e) }); }
+              }} />
+            <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={() => setArtSel('')}>Close</button>
+          </div>
+        )}
         <div className="fbar" style={{ flexWrap: 'wrap' }}>
           <input
             placeholder="Search spec / customer / job / material"
@@ -557,6 +601,7 @@ export default function QC() {
           <table>
             <thead>
               <tr>
+                <th style={{ width: 34 }} title="Pick a spec to add or replace its artwork">🖼</th>
                 <th>Spec</th>
                 <th>Group</th>
                 <th>Customer</th>
@@ -574,14 +619,18 @@ export default function QC() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={12} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
+                  <td colSpan={13} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
                     No specs found
                   </td>
                 </tr>
               ) : (
                 filtered.map((j, i) => (
                   <tr key={(j.spec || '') + '-' + (j.sno != null ? j.sno : i)}>
-                    <td style={{ fontWeight: 600, color: 'var(--g)' }}>{j.spec || '-'}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <input type="radio" name="jss-art-sel" checked={artSel === j.spec} aria-label={`Artwork of ${j.spec}`}
+                        onChange={() => { setArtSel(j.spec); setArtMsg(null); }} />
+                    </td>
+                    <td style={{ fontWeight: 600, color: 'var(--g)' }}>{j.spec || '-'}{artIndex[j.spec] ? <span title="Has artwork"> 🖼</span> : null}</td>
                     <td>{specGroup(j, customers) || '-'}</td>
                     <td>{j.customer || '-'}</td>
                     <td>{j.subBrand || '-'}</td>

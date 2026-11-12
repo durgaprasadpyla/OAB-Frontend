@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { planningApi, masterApi } from '../api.js';
 import { today } from '../lib/format.js';
-import Modal from '../components/Modal.jsx';
+import Modal from '../components/Modal.jsx';
+import { ArtworkButton } from '../components/Artwork.jsx';
 
 // Daily machine board (Stage 7 + Enhancements 2.0 §77-80): machines grouped by
 // department, each machine split into Shift A (day) and Shift B (night) drop zones.
@@ -261,6 +262,7 @@ export default function DailyBoard({ embedded = false }) {
                           style={{ border: '1px solid ' + (held ? 'var(--g)' : 'var(--bd)'), borderRadius: 8, padding: '8px 10px',
                             cursor: 'grab', background: 'var(--gl)', opacity: held ? 0.45 : 1 }}>
                           <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
+                          <ArtworkButton spec={p.spec} compact />{' '}
                           <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
                           <span className="tag ty">ready {p.readyQty}</span>
                           {/* Issues 2.5: an SO stays here until EVERY department on its route

@@ -174,7 +174,10 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
         </div>
         <div className="inv-tots">
           <div className="inv-tot-row"><span>Sub Total</span><span>{subTotal > 0 ? rs(subTotal) : '—'}</span></div>
-          <div className="inv-tot-row"><span>Freight</span><span>{freight ? rs(freight) : '-'}</span></div>
+          {/* Transport 06.11 / 11.11: freight Bloomflex bears is not the customer's to see */}
+          {!/^\s*bloomflex\s*$/i.test(String(h.freightBorneBy || '')) && (
+            <div className="inv-tot-row"><span>Freight</span><span>{freight ? rs(freight) : '-'}</span></div>
+          )}
           {gstType === 'IGST' ? (
             <>
               <div className="inv-tot-row"><span>CGST 0.0%</span><span>-</span></div>

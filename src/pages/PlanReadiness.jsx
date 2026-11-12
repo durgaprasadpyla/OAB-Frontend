@@ -7,7 +7,8 @@ import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
-import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
+import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
+import { ArtworkButton } from '../components/Artwork.jsx';
 
 // PLAN landing page — Enhancements 2.0 §46-56. Against each open sale order the
 // readiness gatekeeper picks: Ready to plan (entire / partial SO with metres), or
@@ -317,6 +318,7 @@ export default function PlanReadiness() {
                 <span style={{ fontSize: 12 }} aria-label="Selected sale order">
                   Selected: <span className="so-pill">{pickedRow.so}</span>
                   <span className="tag tb" style={{ marginLeft: 6, fontSize: 9 }}>{pickedRow.spec}</span>
+                  <span style={{ marginLeft: 6 }}><ArtworkButton spec={pickedRow.spec} compact /></span>
                   <span style={{ color: 'var(--i3)', marginLeft: 6 }}>{pickedRow.customer}</span>
                   <span style={{ marginLeft: 6 }}>{statusTag(pickedState)}</span>
                 </span>
@@ -406,7 +408,7 @@ export default function PlanReadiness() {
                         onChange={() => pick(r.so)} />
                     </td>
                     <td><span className="so-pill">{r.so}</span></td>
-                    <td><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span></td>
+                    <td style={{ whiteSpace: 'nowrap' }}><span className="tag tb" style={{ fontSize: 9 }}>{r.spec}</span> <ArtworkButton spec={r.spec} compact /></td>
                     <td style={{ fontSize: 11, whiteSpace: 'normal' }}>{r.sku || '—'}</td>
                     <td style={{ fontSize: 11 }}>{r.customer}</td>
                     <td style={{ fontSize: 11 }}>{r.dispLoc || '—'}</td>

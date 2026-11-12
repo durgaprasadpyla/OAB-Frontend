@@ -556,7 +556,8 @@ function PriceMaster() {
       {picked && (
         <PriceSlabs spec={picked} jss={(mods.jss || []).find((j) => String(j.spec || '').trim() === picked)}
           entry={edits[picked] || {}} date={priceDateOf(picked, edits, mods.sales)}
-          onPrice={(v) => setCell(picked, 'price', v)} onSlabs={(t) => setSlabs(picked, t)}
+          onPrice={(v) => setCell(picked, 'price', v)} onMinQty={(v) => setEdits((e) => ({ ...e, [picked]: { price: 0, costPrice: 0, transport: 'At Actuals', ...e[picked], minQty: v } }))}
+          onSlabs={(t) => setSlabs(picked, t)}
           onClose={() => setPicked('')} onSave={saveAll} busy={busy} />
       )}
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 300px)' }}>
@@ -612,7 +613,7 @@ function PriceMaster() {
  * Issues 05.11: the spec picked with the radio — its base price and quantity slabs. The
  * base price runs up to the first slab; each slab is the price from that quantity upward.
  */
-function PriceSlabs({ spec, jss, entry, date, onPrice, onSlabs, onClose, onSave, busy }) {
+function PriceSlabs({ spec, jss, entry, date, onPrice, onMinQty, onSlabs, onClose, onSave, busy }) {
   const slabs = entry.tiers || [];
   const change = (i, k, v) => onSlabs(slabs.map((t, j) => (j === i ? { ...t, [k]: v } : t)));
   const bands = priceBandsText(entry);
@@ -628,9 +629,17 @@ function PriceSlabs({ spec, jss, entry, date, onPrice, onSlabs, onClose, onSave,
       </div>
       <div className="g4" style={{ alignItems: 'end' }}>
         <div className="fg">
-          <label>Sale price (₹) — up to the first quantity</label>
+          <label>From quantity (the smallest order priced)</label>
+          <input type="number" min="0" value={entry.minQty ?? ''} aria-label="Base price from quantity" placeholder="any quantity" onChange={(e) => onMinQty(e.target.value)} />
+        </div>
+        <div className="fg">
+          <label>Sale price (₹) — up to the next quantity</label>
           <input type="number" step="0.01" min="0" value={entry.price ?? ''} aria-label="Base sale price" onChange={(e) => onPrice(e.target.value)} />
         </div>
+      </div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        An order below the first quantity is shown in red on the sale order. Each slab below is the price from that quantity upward —
+        50,000 → ₹1.12, 1,00,000 → ₹1.05, 2,00,000 → ₹1.00 prices 99,999 at ₹1.12 and 1,99,999 at ₹1.05.
       </div>
       <div className="tw" style={{ maxWidth: 460 }}><table>
         <thead><tr><th style={{ textAlign: 'right' }}>From quantity (this much or more)</th><th style={{ textAlign: 'right' }}>Sale price (₹)</th><th style={{ width: 40 }} /></tr></thead>

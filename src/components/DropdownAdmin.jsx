@@ -230,7 +230,7 @@ export default function DropdownAdmin() {
       ) : def.panel === 'tooling' ? (
         <ToolingPanel sales={sales} save={save} machines={machines} error={machErr} />
       ) : def.master === 'machine' ? (
-        <MachinesPanel machines={machines} departments={depts} reload={loadMachines} error={machErr} />
+        <MachinesPanel machines={machines} departments={depts} reload={loadMachines} error={machErr} locations={ddList(sales, 'machineLocations')} />
       ) : def.master === 'storeloc' ? (
         <StoreLocationsPanel locations={locs} reload={loadLocs} error={locErr} />
       ) : def.master === 'uom' ? (
@@ -405,6 +405,34 @@ function ToolingPanel({ sales, save, machines, error }) {
     return Array.isArray(v) ? v.join(', ') : (v ?? '');
   };
   const put = (key, field, v) => setWork({ ...cur, [key]: { ...(cur[key] || {}), [field]: v } });
+  const putDetail = (key, field, size, part, v) => {
+    const t = cur[key] || {};
+    const d = { ...(t[field] || {}) };
+    d[size] = { ...(d[size] || {}), [part]: v };
+    setWork({ ...cur, [key]: { ...t, [field]: d } });
+  };
+  /** One machine's sizes, each with how many, how many OK, and remarks (Issues 11.11). */
+  const SizeDetails = ({ k, listField, detailField, noun, name }) => {
+    const sizes = parseWidths((cur[k] || {})[listField]);
+    if (!sizes.length) return null;
+    const d = (cur[k] || {})[detailField] || {};
+    return (
+      <table style={{ marginTop: 4 }} aria-label={`${noun} of ${name}`}>
+        <thead><tr><th style={{ width: 80 }}>Size (mm)</th><th style={{ width: 110 }}>No. of {noun}</th><th style={{ width: 110 }}>No. OK</th><th>Remarks (QC sees these)</th></tr></thead>
+        <tbody>{sizes.map((w) => {
+          const x = d[String(w)] || {};
+          return (
+            <tr key={w}>
+              <td style={{ fontWeight: 700 }}>{w}</td>
+              <td><input type="number" min="0" className="nospin" value={x.count ?? ''} aria-label={`${name} ${w} number of ${noun}`} onChange={(e) => putDetail(k, detailField, String(w), 'count', e.target.value)} /></td>
+              <td><input type="number" min="0" className="nospin" value={x.ok ?? ''} aria-label={`${name} ${w} number OK`} onChange={(e) => putDetail(k, detailField, String(w), 'ok', e.target.value)} /></td>
+              <td><input value={x.remarks ?? ''} aria-label={`${name} ${w} remarks`} placeholder="e.g. one roller damaged" onChange={(e) => putDetail(k, detailField, String(w), 'remarks', e.target.value)} /></td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+    );
+  };
   async function persist() {
     const clean = {};
     Object.entries(cur).forEach(([k, t]) => {
@@ -412,6 +440,21 @@ function ToolingPanel({ sales, save, machines, error }) {
       if (Number(t.max_width) > 0) row.max_width = Number(t.max_width);
       const sleeves = parseWidths(t.sleeves); if (sleeves.length) row.sleeves = sleeves;
       const rollers = parseWidths(t.rollers); if (rollers.length) row.rollers = rollers;
+      // Issues 11.11: per size — how many there are, how many work, and remarks
+      const details = (sizes, d) => {
+        const out = {};
+        sizes.forEach((w) => {
+          const x = (d || {})[String(w)] || {};
+          const e = {};
+          if (String(x.count ?? '').trim() !== '') e.count = Number(x.count) || 0;
+          if (String(x.ok ?? '').trim() !== '') e.ok = Number(x.ok) || 0;
+          if (String(x.remarks ?? '').trim()) e.remarks = String(x.remarks).trim();
+          if (Object.keys(e).length) out[String(w)] = e;
+        });
+        return out;
+      };
+      const sd = details(sleeves, t.sleeve_details); if (Object.keys(sd).length) row.sleeve_details = sd;
+      const rd = details(rollers, t.roller_details); if (Object.keys(rd).length) row.roller_details = rd;
       if (Object.keys(row).length) clean[k] = row;
     });
     setBusy(true);
@@ -447,7 +490,10 @@ function ToolingPanel({ sales, save, machines, error }) {
                   <tr key={k}>
                     <td style={{ fontWeight: 600 }}>{machineLabel(m)}</td>
                     <td><input type="number" min="0" step="any" value={get(k, 'max_width')} aria-label={`Max film width of ${machineLabel(m)}`} onChange={(e) => put(k, 'max_width', e.target.value)} /></td>
-                    <td><input value={get(k, 'sleeves')} aria-label={`Sleeves of ${machineLabel(m)}`} placeholder="e.g. 400, 420, 450, 500" onChange={(e) => put(k, 'sleeves', e.target.value)} /></td>
+                    <td>
+                      <input value={get(k, 'sleeves')} aria-label={`Sleeves of ${machineLabel(m)}`} placeholder="e.g. 400, 420, 450, 500" onChange={(e) => put(k, 'sleeves', e.target.value)} />
+                      {SizeDetails({ k, listField: 'sleeves', detailField: 'sleeve_details', noun: 'sleeves', name: machineLabel(m) })}
+                    </td>
                   </tr>
                 );
               })}
@@ -465,7 +511,10 @@ function ToolingPanel({ sales, save, machines, error }) {
                 return (
                   <tr key={k}>
                     <td style={{ fontWeight: 600 }}>{machineLabel(m)}</td>
-                    <td><input value={get(k, 'rollers')} aria-label={`Rollers of ${machineLabel(m)}`} placeholder="e.g. 610, 650, 910" onChange={(e) => put(k, 'rollers', e.target.value)} /></td>
+                    <td>
+                      <input value={get(k, 'rollers')} aria-label={`Rollers of ${machineLabel(m)}`} placeholder="e.g. 610, 650, 910" onChange={(e) => put(k, 'rollers', e.target.value)} />
+                      {SizeDetails({ k, listField: 'rollers', detailField: 'roller_details', noun: 'rollers', name: machineLabel(m) })}
+                    </td>
                   </tr>
                 );
               })}
@@ -1008,7 +1057,7 @@ function DepartmentsPanel({ depts, reload, error, loaded }) {
  * list; the speed unit defaults by department (pouching / sleeving / die punching /
  * packing → pcs/min, everything else → m/min).
  */
-function MachinesPanel({ machines, departments, reload, error }) {
+function MachinesPanel({ machines, departments, reload, error, locations = [] }) {
   const deptUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || '')) ? 'pcs/min' : 'm/min');
   // Issues 7: a machine belongs to a PRODUCTION department — HR-only ones are not offered.
   const activeDepts = (departments || []).filter((d) => d.active !== false && !d.hrOnly);
@@ -1047,6 +1096,13 @@ function MachinesPanel({ machines, departments, reload, error }) {
     try { await masterApi.updateMachine(m.id, { departmentId: id ? Number(id) : null }); await reload(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
   }
+  // Transport 06.11: the make and the location, editable here as on the Machines tab
+  async function setField(m, field, v) {
+    const next = String(v || '').trim();
+    if (next === String(m[field] || '').trim()) return;
+    try { await masterApi.updateMachine(m.id, { [field]: next }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
   async function toggle(m) {
     try { await masterApi.updateMachine(m.id, { active: m.active === false }); await reload(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
@@ -1080,10 +1136,10 @@ function MachinesPanel({ machines, departments, reload, error }) {
       </div>
       <div className="tw sy" style={{ maxHeight: 360 }}>
         <table>
-          <thead><tr><th style={{ width: 80 }}>Code</th><th>Machine</th><th style={{ width: 150 }}>Department</th><th style={{ width: 120 }}>Ideal speed</th><th style={{ width: 96 }}>Status</th></tr></thead>
+          <thead><tr><th style={{ width: 80 }}>Code</th><th>Machine</th><th style={{ width: 150 }}>Department</th><th style={{ width: 140 }}>Make</th><th style={{ width: 140 }}>Location</th><th style={{ width: 120 }}>Ideal speed</th><th style={{ width: 96 }}>Status</th></tr></thead>
           <tbody>
             {list.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
                 {error ? 'Machines unavailable — see the message above.' : 'No machines yet — add one above.'}
               </td></tr>
             ) : list.map((m) => (
@@ -1094,6 +1150,13 @@ function MachinesPanel({ machines, departments, reload, error }) {
                   <select value={m.departmentId ?? ''} aria-label={`Department for ${m.name}`} onChange={(e) => setDept(m, e.target.value)}>
                     <option value="">—</option>
                     {activeDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </td>
+                <td><input defaultValue={m.machineMake || ''} placeholder="make" aria-label={`Make of ${m.name}`} onBlur={(e) => setField(m, 'machineMake', e.target.value)} /></td>
+                <td>
+                  <select value={m.location || ''} aria-label={`Location of ${m.name}`} onChange={(e) => setField(m, 'location', e.target.value)}>
+                    <option value="">{locations.length ? '—' : '— add locations first —'}</option>
+                    {[...new Set([...locations, ...(m.location ? [m.location] : [])])].map((l) => <option key={l} value={l}>{l}</option>)}
                   </select>
                 </td>
                 <td style={{ fontSize: 12 }}>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>

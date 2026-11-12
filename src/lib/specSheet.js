@@ -130,8 +130,30 @@ export function parseWidths(v) {
  */
 export function toolingFor(sales, key) {
   const t = ((sales && sales.machine_tooling) || {})[String(key)] || {};
-  return { maxWidth: n(t.max_width), sleeves: parseWidths(t.sleeves), rollers: parseWidths(t.rollers) };
+  return {
+    maxWidth: n(t.max_width), sleeves: parseWidths(t.sleeves), rollers: parseWidths(t.rollers),
+    sleeveInfo: t.sleeve_details || {}, rollerInfo: t.roller_details || {},
+  };
 }
+
+/**
+ * Issues 11.11: "against each sleeve that I enter, there should be the number of
+ * sleeves, number of OK rollers and remarks. These remarks should also be visible in the
+ * QC login when they are trying to select a particular roller or a sleeve" — a 450 mm
+ * sleeve with 8 made and 7 working says so beside it. `info` is the size's
+ * { count, ok, remarks }; '' when the Super Admin has said nothing about it.
+ */
+export function toolNote(info, noun = 'sleeves') {
+  const i = info || {};
+  const parts = [];
+  if (n(i.count) > 0) parts.push(`${n(i.count)} ${noun}`);
+  if (s(i.ok) !== '') parts.push(`${n(i.ok)} OK`);
+  if (s(i.remarks)) parts.push(s(i.remarks));
+  return parts.join(' · ');
+}
+
+/** A size whose working count is below its count — QC should look twice. */
+export const toolShort = (info) => !!info && s(info.ok) !== '' && n(info.count) > 0 && n(info.ok) < n(info.count);
 
 /* ── printing ─────────────────────────────────────────────────────────── */
 
@@ -291,7 +313,24 @@ export const blankSheet = () => ({
   sleeve_height: '', sleeve_width: '', overlap: '', open_width: '', reverse_glue: 'No',
   label_height: '', label_width: '', bleed_h: '', bleed_w: '',
   core_in: '', per_reel_kg: '', packing: '',
+  // Issues 11.11: "printing direction for despatch - with drop-down selection: readable or unreadable"
+  print_direction: '',
 });
+
+export const PRINT_DIRECTIONS = ['Readable', 'Unreadable'];
+
+/**
+ * Issues 11.11: "We are automatically calculating the film width for secondary
+ * substrate and third substrate. It should be displayed in the field in that particular
+ * cell in that particular table." The film width each substrate runs at: the first
+ * printing machine's film width, + 10 mm for each lamination after it.
+ */
+export function layerFilmWidths(sales, sheet) {
+  const sh = sheetOf(sheet);
+  const runs = Object.entries(sh.print || {});
+  const fw = runs.length ? printFigures(sh, runs[0][1], toolingFor(sales, runs[0][0])).filmWidth : 0;
+  return [0, 1, 2].map((i) => (fw > 0 ? (i === 0 ? fw : laminatedWidth(fw, i)) : 0));
+}
 
 /** A saved sheet with every key present, whatever version wrote it. */
 export function sheetOf(saved) {

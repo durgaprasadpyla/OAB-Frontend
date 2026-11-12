@@ -6,7 +6,8 @@ import { dash, today } from '../lib/format.js';
 import { STAGES, PROD_STATUSES } from '../lib/constants.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
-import PlanDownloads from '../components/PlanDownloads.jsx';
+import PlanDownloads from '../components/PlanDownloads.jsx';
+import { ArtworkButton } from '../components/Artwork.jsx';
 
 /**
  * Production Floor — native port of the legacy plant view (showPlantView /
@@ -210,7 +211,7 @@ export default function Plant() {
                       {r.so}
                     </span>
                   </td>
-                  <td style={{ fontSize: 11, color: 'var(--i3)' }}>{r.spec || '-'}</td>
+                  <td style={{ fontSize: 11, color: 'var(--i3)', whiteSpace: 'nowrap' }}>{r.spec || '-'} {r.spec && <ArtworkButton spec={r.spec} compact />}</td>
                   <td style={{ fontSize: 11, fontWeight: 600 }}>{r.customer || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.jobName || '-'}</td>
                   <td style={{ fontSize: 11 }}>{r.dispLoc || '-'}</td>

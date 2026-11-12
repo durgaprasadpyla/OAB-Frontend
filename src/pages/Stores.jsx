@@ -5,6 +5,7 @@ import { GrnEditor } from '../components/GrnAdmin.jsx';
 import { PurchaseOrders } from '../components/PurchaseOrdersTab.jsx';
 import { isOpenPo, poStatus } from '../lib/poLines.js';
 import FgEntryPanel from '../components/FgEntryPanel.jsx';
+import { StoresIndents } from '../components/IndentPanel.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 import { exportSheets } from '../lib/xlsx.js';
@@ -33,6 +34,8 @@ const TABS = [
   { k: 'pos', label: '📄 Purchase Orders' },
   { k: 'grn', label: '📥 GRN' },
   { k: 'issues', label: '🔄 Issues & Returns' },
+  // Issues 11.11: "a provision to make a PI from the stores login"
+  { k: 'pi', label: '📝 Purchase Indents' },
 ];
 
 // The five dispositions the business named. RETURNED is what a split roll comes
@@ -90,6 +93,7 @@ export default function Stores() {
       {tab === 'pos' && <PurchaseOrders flash={flash} />}
       {tab === 'grn' && <Grn flash={flash} />}
       {tab === 'issues' && <IssuesReturns flash={flash} />}
+      {tab === 'pi' && <StoresIndents />}
     </div>
   );
 }

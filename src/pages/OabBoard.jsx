@@ -10,6 +10,7 @@ import { downloadOabPdf } from '../lib/oabPdf.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import { getCustByLoc, custGroupOf } from '../lib/master.js';
 import { specIndex } from '../lib/specs.js';
+import { plantComments, pouchOpenWidth, substratesForBalance } from '../lib/oabExport.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
@@ -172,13 +173,18 @@ export default function OabBoard() {
 
   function exportExcel() {
     const header = ['SO', 'Spec', 'Dispatch', 'Customer', 'Job', 'Sub Brand', 'Disp Loc', 'Loc Code', 'PO#', 'PO Date',
-      'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Metres+5%', 'Kgs', 'Prod Status', 'Stage'];
+      'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Metres+5%', 'Kgs', 'Prod Status', 'Stage',
+      // Issues 11.11
+      'Primary Substrate (balance)', 'Second Substrate (balance)', 'Third Substrate (balance)', 'Plant Comments', 'Pouch Open Width (mm)'];
     const body = filtered.map((r) => {
       const b = balance(r);
       const m = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
       const k = b > 0 ? kgFromMetres(r, m, jssBySpec[r.spec], b) : null;
+      const j = jssBySpec[r.spec];
+      const subs = b > 0 ? substratesForBalance(j, mods.sales, m) : substratesForBalance(j, mods.sales, 0);
       return [r.so, r.spec, dispForm(r), r.customer, r.jobName, r.subBrand, r.dispLoc, locCode(r), r.poNum, fmtDate(r.poDate),
-        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, k ? Math.round(k.kg) : '', prodStatus(r.so), r.stage || ''];
+        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, k ? Math.round(k.kg) : '', prodStatus(r.so), r.stage || '',
+        subs[0], subs[1], subs[2], plantComments(r.so, r.spec, mods.pmData, mods.sales), pouchOpenWidth(j, mods.sales)];
     });
     exportAOA([header, ...body], `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.xlsx`, sheet);
   }

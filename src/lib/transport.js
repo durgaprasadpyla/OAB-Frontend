@@ -54,6 +54,30 @@ export function transportTotals(rows) {
   }), { invoices: 0, invoiceValue: 0, freight: 0, bloomflex: 0, customer: 0 });
 }
 
+/**
+ * Issues 11.11: "for Amazon we spent so much over the months and for VSA the customer has
+ * spent so much over the months." Freight month by month for each customer — or each
+ * buying group, with `keyOf` — as `{ months: ['2026-10', …], rows: [{ name, byMonth,
+ * total }] }`. `measure` is 'freight' (all of it), 'bloomflex' or 'customer'.
+ */
+export function transportByMonth(rows, { keyOf = (r) => r.customer || '—', measure = 'freight' } = {}) {
+  const months = [...new Set((rows || []).map((r) => String(r.date || '').slice(0, 7)).filter(Boolean))].sort();
+  const pick = (r) => (measure === 'bloomflex' ? (r.borneBy === 'Bloomflex' ? r.freight : 0)
+    : measure === 'customer' ? (r.borneBy === 'Customer' ? r.freight : 0) : r.freight);
+  const by = new Map();
+  (rows || []).forEach((r) => {
+    const v = pick(r);
+    if (!(v > 0)) return;
+    const name = keyOf(r) || '—';
+    if (!by.has(name)) by.set(name, { name, byMonth: {}, total: 0 });
+    const e = by.get(name);
+    const m = String(r.date || '').slice(0, 7);
+    e.byMonth[m] = (e.byMonth[m] || 0) + v;
+    e.total += v;
+  });
+  return { months, rows: [...by.values()].sort((a, b) => b.total - a.total) };
+}
+
 /** One line per customer, largest freight first; customers with no freight are left out. */
 export function transportByCustomer(rows) {
   const groups = new Map();

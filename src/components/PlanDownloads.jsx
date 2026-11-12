@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { planningApi } from '../api.js';
+import { artworkApi, planningApi } from '../api.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { elementToPDF } from '../lib/pdf.js';
 import { today } from '../lib/format.js';
@@ -94,6 +94,54 @@ export default function PlanDownloads({ compact = false }) {
     } catch (e) { setErr(e.message || 'Download failed'); }
   }
 
+  /**
+   * Issues 11.11: "the image should be a part of the planning sheet, based on these
+   * orders that are planned for that particular day … Our team has printed incorrect
+   * SKUs so in order to avoid that we are using this as a quick check." The day's plan
+   * as a PDF: the jobs, then the artwork of every spec on it.
+   */
+  async function downloadWithArtwork() {
+    setErr('');
+    try {
+      const w = await planningApi.week(dailyDate, dailyDate);
+      const jobs = (w && w.jobs) || [];
+      if (jobs.length === 0) { flash('No planned jobs on that day to download.'); return; }
+      const specs = [...new Set(jobs.map((j) => String(j.specCode || '').trim()).filter(Boolean))];
+      let arts = [];
+      try { arts = await artworkApi.images(specs); } catch { arts = []; }
+      const artBySpec = new Map((Array.isArray(arts) ? arts : []).map((a) => [a.spec, a]));
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const groups = byDepartment(jobs);
+      const table = groups.map((g) => '<div style="margin-bottom:12px;page-break-inside:avoid">'
+        + `<div style="font-size:12px;font-weight:700;color:#0e6fb8;margin-bottom:4px">${esc(g.department)}</div>`
+        + '<table style="width:100%;border-collapse:collapse;font-size:10.5px"><thead><tr style="background:#0e6fb8;color:#fff">'
+        + DEPT_COLS.map((h) => `<th style="padding:5px 6px;text-align:left">${esc(h)}</th>`).join('')
+        + '</tr></thead><tbody>'
+        + g.jobs.map((j) => '<tr style="border-bottom:1px solid #eee">' + deptRow(j).map((c) => `<td style="padding:4px 6px">${esc(c)}</td>`).join('') + '</tr>').join('')
+        + '</tbody></table></div>').join('');
+      const nameOf = (spec) => { const j = jobs.find((x) => String(x.specCode).trim() === spec); return (j && (j.jobName || j.skuName)) || ''; };
+      const artBlocks = specs.map((spec) => {
+        const a = artBySpec.get(spec);
+        return '<div style="page-break-inside:avoid;margin:10px 0;border:1px solid #ccc;padding:8px">'
+          + `<div style="font-size:12px;font-weight:700;margin-bottom:6px">Spec ${esc(spec)}${nameOf(spec) ? ' — ' + esc(nameOf(spec)) : ''} · SO ${esc([...new Set(jobs.filter((j) => String(j.specCode).trim() === spec).map((j) => j.so))].join(', '))}</div>`
+          + (a && a.data
+            ? `<img src="${a.data}" style="max-width:100%;max-height:520px;display:block;margin:0 auto" />`
+            : '<div style="color:#b00;font-size:11px">No artwork has been added for this spec — check the print against the approved sample.</div>')
+          + '</div>';
+      }).join('');
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;padding:16px;font-family:Arial,sans-serif;width:900px;color:#111';
+      wrap.innerHTML = '<div style="font-size:16px;font-weight:800;color:#0e6fb8;margin-bottom:6px">Production plan with artwork</div>'
+        + `<div style="font-size:11px;color:#444;margin-bottom:10px">${esc(dailyDate)} · printed ${esc(today())}</div>${table}`
+        + `<div style="font-size:14px;font-weight:800;color:#0e6fb8;margin:14px 0 4px">Artwork — check before printing</div>${artBlocks}`;
+      document.body.appendChild(wrap);
+      try { await elementToPDF(wrap, `Plan_with_Artwork_${dailyDate}`, { orientation: 'portrait' }); }
+      finally { document.body.removeChild(wrap); }
+      const missing = specs.filter((s) => !artBySpec.has(s)).length;
+      flash(`Downloaded ${jobs.length} job(s) with ${specs.length - missing} artwork(s)` + (missing ? ` — ${missing} spec(s) have none yet.` : '.'));
+    } catch (e) { setErr(e.message || 'Download failed'); }
+  }
+
   async function download(kind) {
     setErr('');
     const from = kind === 'daily' ? dailyDate : weekFrom;
@@ -119,6 +167,7 @@ export default function PlanDownloads({ compact = false }) {
       <div className="fbar">
         <div className="fg" style={{ margin: 0 }}><label>Daily plan — date</label><input type="date" value={dailyDate} onChange={(e) => setDailyDate(e.target.value)} /></div>
         <button className="btn btn-s" onClick={() => download('daily')}>⬇ Daily Plan (xlsx)</button>
+        <button className="btn btn-s" onClick={downloadWithArtwork} title="The day's plan and the artwork of every spec on it">⬇ Daily Plan with Artwork (PDF)</button>
         <div className="fg" style={{ margin: 0, marginLeft: 16 }}><label>Weekly plan — week from</label><input type="date" value={weekFrom} onChange={(e) => setWeekFrom(e.target.value)} /></div>
         <button className="btn btn-s" onClick={() => download('weekly')}>⬇ Weekly Plan (xlsx)</button>
       </div>
