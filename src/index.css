@@ -596,3 +596,23 @@ td select { min-width: max-content; }
 td.rowsel { text-align: center; vertical-align: middle; width: 34px; }
 td.rowsel > input[type=radio], tbody td > input[type=radio]:only-child { margin: 0; vertical-align: middle; }
 .lc-kind { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; }
+
+/* Super Admin "view as role" switcher — the header badge doubles as the trigger. */
+.role-sw-btn{border-style:solid;line-height:1.4}
+.role-sw-btn:hover{filter:brightness(.97)}
+.role-sw-btn:focus-visible{outline:2px solid var(--gm);outline-offset:2px}
+.role-sw-arrow{display:inline-block;font-size:10px;transition:transform .15s ease}
+.role-sw-arrow.up{transform:rotate(180deg)}
+.role-sw-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:1000;min-width:230px;max-width:calc(100vw - 32px);max-height:min(70vh,460px);overflow-y:auto;background:var(--wh);border:1px solid var(--bd);border-radius:10px;box-shadow:0 10px 28px rgba(16,35,63,.16);padding:6px;color:var(--ink);text-align:left}
+.role-sw-head{font-size:10px;font-weight:700;color:var(--i3);text-transform:uppercase;letter-spacing:.07em;padding:6px 10px 4px}
+.role-sw-msg{font-size:12px;color:var(--i2);padding:8px 10px}
+.role-sw-opt{display:flex;align-items:center;gap:8px;width:100%;border:none;background:transparent;padding:7px 10px;border-radius:7px;font-size:12px;color:var(--ink);cursor:pointer;text-align:left}
+.role-sw-opt:hover,.role-sw-opt:focus-visible{background:var(--bg);outline:none}
+.role-sw-opt.on{background:var(--gl);color:var(--g);font-weight:700}
+.role-sw-check{width:12px;flex:none;color:var(--g)}
+.role-sw-name{flex:1}
+.role-sw-code{font-size:10px;color:var(--i3);font-family:ui-monospace,monospace}
+.role-sw-tag{font-size:10px;color:var(--g);background:var(--gl);border-radius:10px;padding:1px 7px;font-weight:600}
+.role-sw-opt.on .role-sw-tag{background:var(--wh)}
+.role-sw-back{display:block;width:100%;margin-top:4px;border:none;border-top:1px solid var(--bd);background:transparent;padding:9px 10px 5px;font-size:12px;font-weight:600;color:var(--g);cursor:pointer;text-align:left}
+.role-sw-back:hover{text-decoration:underline}

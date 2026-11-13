@@ -6,6 +6,18 @@ import { API_BASE } from './config.js';
 // screens and the embedded legacy screens.
 const AuthContext = createContext(null);
 
+// Super Admin "view as role". A UI preference ONLY: the token, blm_user and blm_role
+// are never touched, so every request still carries the Super Admin's own JWT and the
+// backend authorises it exactly as before. Kept per browser tab (sessionStorage) and
+// honoured only while the server-confirmed role is superadmin.
+const VIEW_AS_KEY = 'blm_view_as';
+function readViewAs() {
+  try { return sessionStorage.getItem(VIEW_AS_KEY) || ''; } catch { return ''; }
+}
+function writeViewAs(r) {
+  try { if (r) sessionStorage.setItem(VIEW_AS_KEY, r); else sessionStorage.removeItem(VIEW_AS_KEY); } catch { /* storage blocked */ }
+}
+
 function read() {
   return {
     token: localStorage.getItem('blm_token') || '',
@@ -16,6 +28,7 @@ function read() {
     mustChangePassword: false,
     repId: localStorage.getItem('blm_rep_id') || '',
     repName: localStorage.getItem('blm_rep_name') || '',
+    viewAs: readViewAs(),
   };
 }
 
@@ -33,7 +46,8 @@ export function AuthProvider({ children }) {
     localStorage.setItem('blm_token', d.token);
     localStorage.setItem('blm_user', d.username);
     localStorage.setItem('blm_role', d.role);
-    setAuth({ token: d.token, user: d.username, role: d.role, mustChangePassword: !!d.mustChangePassword });
+    writeViewAs('');
+    setAuth({ token: d.token, user: d.username, role: d.role, mustChangePassword: !!d.mustChangePassword, viewAs: '' });
     return d;
   }, []);
 
@@ -56,13 +70,15 @@ export function AuthProvider({ children }) {
     localStorage.setItem('blm_role', 'sales');
     localStorage.setItem('blm_rep_id', d.repId || '');
     localStorage.setItem('blm_rep_name', d.display_name || d.username);
-    setAuth({ token: d.token, user: d.username, role: 'sales', repId: d.repId || '', repName: d.display_name || d.username, mustChangePassword: false });
+    writeViewAs('');
+    setAuth({ token: d.token, user: d.username, role: 'sales', repId: d.repId || '', repName: d.display_name || d.username, mustChangePassword: false, viewAs: '' });
     return d;
   }, []);
 
   const logout = useCallback(() => {
     ['blm_token', 'blm_user', 'blm_role', 'blm_rep_id', 'blm_rep_name'].forEach(k => localStorage.removeItem(k));
-    setAuth({ token: '', user: '', role: '', repId: '', repName: '', mustChangePassword: false });
+    writeViewAs('');
+    setAuth({ token: '', user: '', role: '', repId: '', repName: '', mustChangePassword: false, viewAs: '' });
   }, []);
 
   useEffect(() => {
@@ -92,7 +108,10 @@ export function AuthProvider({ children }) {
         if (d && (d.role || d.username)) {
           localStorage.setItem('blm_user', d.username);
           localStorage.setItem('blm_role', d.role);
-          setAuth((a) => ({ ...a, user: d.username, role: d.role, mustChangePassword: !!d.mustChangePassword }));
+          // A view-as choice survives only while the server still says superadmin.
+          if (d.role !== 'superadmin') writeViewAs('');
+          setAuth((a) => ({ ...a, user: d.username, role: d.role, mustChangePassword: !!d.mustChangePassword,
+            viewAs: d.role === 'superadmin' ? a.viewAs : '' }));
         }
       } else if (res.status === 401 || res.status === 403) {
         logout();
@@ -104,8 +123,27 @@ export function AuthProvider({ children }) {
   /** Cleared once the user completes a forced change, without another round trip. */
   const passwordChanged = useCallback(() => setAuth((a) => ({ ...a, mustChangePassword: false })), []);
 
+  /**
+   * Super Admin only: render the app as another role ('' or 'superadmin' = back to
+   * their own view). Ignored for every other role. Does not re-authenticate.
+   */
+  const setViewAs = useCallback((r) => {
+    setAuth((a) => {
+      if (a.role !== 'superadmin') return a;
+      const next = r && r !== 'superadmin' ? String(r) : '';
+      writeViewAs(next);
+      return { ...a, viewAs: next };
+    });
+  }, []);
+
+  // `role` is the EFFECTIVE role every screen gates on (the viewed role while a Super
+  // Admin is viewing as one); `realRole` is always the signed-in identity's role.
+  const realRole = auth.role;
+  const viewAs = realRole === 'superadmin' ? auth.viewAs || '' : '';
+  const role = viewAs || realRole;
+
   return (
-    <AuthContext.Provider value={{ ...auth, isAuthed: !!auth.token, login, repLogin, logout, passwordChanged }}>
+    <AuthContext.Provider value={{ ...auth, role, realRole, viewAs, setViewAs, isAuthed: !!auth.token, login, repLogin, logout, passwordChanged }}>
       {children}
     </AuthContext.Provider>
   );

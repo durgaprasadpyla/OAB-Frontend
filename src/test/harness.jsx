@@ -61,6 +61,13 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, { username: user, role: meRole || role, mustChangePassword }); // server-authoritative role + forced-change flag
     }
 
+    // The server's role list (UserAdminController.ROLE_ORDER) — superadmin-only there too.
+    if (u.includes('/api/admin/users/roles')) {
+      if (role !== 'superadmin') return res(403, { error: 'Forbidden' });
+      return res(200, ['superadmin', 'user', 'padmin', 'plant', 'qc', 'pm', 'scrap', 'purchase', 'sadmin', 'quote',
+        'sales', 'hr', 'planner', 'stores', 'ppc', 'mis', 'plan', 'jss'].map((r) => ({ role: r })));
+    }
+
     if (u.includes('/api/seq/')) {
       const type = u.split('/api/seq/')[1].split(/[?#]/)[0].toUpperCase();
       const sample = { SO: '26/401', INV: 'BL/26-27/223', PO: 'BLM/PUR/2026-2027/1' };

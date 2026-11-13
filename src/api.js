@@ -139,6 +139,9 @@ export const usersApi = {
   revealPassword: (id) => api('/api/admin/users/' + encodeURIComponent(id) + '/password'),
   // Issues 3.0 §1 — permanently remove an account (superadmin only, audited).
   remove: (id) => api('/api/admin/users/' + encodeURIComponent(id), { method: 'DELETE' }),
+  // The roles the application supports, in display order — [{ role }]. Read by the
+  // Super Admin's "view as role" switcher in the header.
+  roles: () => api('/api/admin/users/roles'),
 };
 
 // Superadmin observability & maintenance: server-computed rollups (/api/summary),

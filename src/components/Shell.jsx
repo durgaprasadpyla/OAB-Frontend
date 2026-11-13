@@ -2,7 +2,8 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
 import { specIndex } from '../lib/specs.js';
-import { navTabs, ROLE_LABEL, OPS_ROLES } from '../lib/roles.js';
+import { navTabs, OPS_ROLES } from '../lib/roles.js';
+import RoleSwitcher from './RoleSwitcher.jsx';
 import { exportAOA } from '../lib/xlsx.js';
 import { today } from '../lib/format.js';
 
@@ -42,7 +43,7 @@ const ROLE_BAR = {
 };
 
 /** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */
-function RoleBar({ cfg, who, onSignOut, onNav, activePath }) {
+function RoleBar({ cfg, who, switcher, onSignOut, onNav, activePath }) {
   const dark = cfg.fg !== '#123a6b';
   return (
     <div
@@ -70,7 +71,9 @@ function RoleBar({ cfg, who, onSignOut, onNav, activePath }) {
             }}
           >{l.label}</button>
         ))}
-        {who ? <span style={{ fontSize: 12, opacity: 0.9 }}>{who}</span> : null}
+        {/* A Super Admin viewing as this role keeps their badge here, so switching
+            back is one click away; every real login of this role sees no change. */}
+        {switcher ? <RoleSwitcher variant="bar" dark={dark} /> : who ? <span style={{ fontSize: 12, opacity: 0.9 }}>{who}</span> : null}
         <button
           onClick={onSignOut}
           style={{
@@ -92,7 +95,7 @@ function RoleBar({ cfg, who, onSignOut, onNav, activePath }) {
  * screen fills the body.
  */
 export default function Shell() {
-  const { user, role, logout } = useAuth();
+  const { user, role, realRole, logout } = useAuth();
   const { mods, loading, error, saving, conflict, clearConflict } = useData();
   const nav = useNavigate();
   const loc = useLocation();
@@ -150,6 +153,7 @@ export default function Shell() {
         <RoleBar
           cfg={roleBar}
           who={role === 'sales' ? user : ''}
+          switcher={realRole === 'superadmin'}
           onSignOut={signOut}
           onNav={(to) => nav(to)}
           activePath={loc.pathname}
@@ -180,7 +184,7 @@ export default function Shell() {
           <span className={'hbadge' + (error ? ' err' : saving ? '' : ' ok')}>
             {error ? '⚠ Sync error' : saving ? '⏳ Syncing…' : '☁ Synced'}
           </span>
-          <span className="hbadge ok">👤 {user}{ROLE_LABEL[role] ? ' (' + ROLE_LABEL[role] + ')' : ''}</span>
+          <RoleSwitcher variant="hdr" />
           {!isPanelRole && (
             <button className="btn btn-s" style={{ height: 26, fontSize: 11 }} onClick={backup}>⬇ Backup</button>
           )}
