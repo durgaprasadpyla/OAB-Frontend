@@ -21,6 +21,8 @@ import CsaPanel from '../components/CsaPanel.jsx';
 import CsaToJssPanel, { jssFieldsFromCsa } from '../components/CsaToJssPanel.jsx';
 import SpecSheet from '../components/SpecSheet.jsx';
 import { ArtworkButton, ArtworkPicker } from '../components/Artwork.jsx';
+import JssReport from '../components/JssReport.jsx';
+import { jssReport, jssSpecText } from '../lib/jssReport.js';
 import { blankSheet, gsmBreakdown, jssWithSheet, sheetErrors } from '../lib/specSheet.js';
 import { csaPendingForQc, csaRequestsByRequester } from '../lib/csa.js';
 
@@ -42,6 +44,8 @@ const BLANK = {
   gusset: '', pouchWeight: '', qtyPerBag: '', dispatchForm: '', status: 'Active',
   // Issues 26.10: the same Specifications sheet as the CSA report
   specSheet: blankSheet(),
+  // 17.11: and the CSA report's QC remarks
+  qcRemarks: '',
 };
 
 // Status -> legacy .tag colour class.
@@ -130,6 +134,9 @@ export default function QC() {
   // spec picked in the list whose artwork is being replaced
   const [newArt, setNewArt] = useState(null);
   const [artSel, setArtSel] = useState('');
+  // 17.11: the JSS report open from the list (spec code), and the CSA a new spec is made from
+  const [viewing, setViewing] = useState('');
+  const [fromCsa, setFromCsa] = useState(null);   // { id, plantComments }
   const [artIndex, setArtIndex] = useState({});
   const [artMsg, setArtMsg] = useState(null);
   const loadArtIndex = useCallback(async () => {
@@ -155,6 +162,7 @@ export default function QC() {
   // 30.09: the CSA the rep accepted in another login is listed on opening this page
   useFreshModule('sales', tab);
   function pickCsa(skuId, fields) {
+    setFromCsa(null);
     setFromSku(skuId);
     const { material, layers: csaLayers, ...rest } = fields || {};
     const mapped = csaLayersForJss(csaLayers, items);
@@ -199,7 +207,8 @@ export default function QC() {
       fields.jobName = String(r.product_desc || '').trim();
     }
     setTab('spec');
-    pickCsa(r.source === 'direct' ? '' : (r.sku_id || ''), fields);
+    pickCsa(r.source === 'direct' ? '' : (r.sku_id || ''), { ...fields, qcRemarks: String(r.remarks || '') });
+    setFromCsa({ id: r.id, plantComments: String(r.plant_comments || '') });
     if (r.source === 'direct' && r.party_kind === 'lead') {
       setMsg({ type: 'y', text: `Filled from the CSA for the lead ${r.company_name} — a JSS needs a customer, so pick it once the lead is converted.` });
     }
@@ -354,6 +363,7 @@ export default function QC() {
       width: parseFloat(form.width) || '',
       height: parseFloat(form.height) || '',
       gusset: String(form.gusset).trim(),
+      ...(String(form.qcRemarks || '').trim() ? { qcRemarks: String(form.qcRemarks).trim() } : {}),
       dispatchForm,
       status: form.status,
       // material / mic / structure and the per-layer fields, from the layers above
@@ -373,6 +383,11 @@ export default function QC() {
     // 30.09 QT6: which accepted CSA this spec was made from — what lets a re-pick
     // link it instead of numbering a duplicate when the SKU link did not save
     if (fromSku) row.fromSku = fromSku;
+    // 17.11: and the CSA report itself, so the JSS report can show its plant comments
+    if (fromCsa && fromCsa.id != null) {
+      row.fromCsa = fromCsa.id;
+      if (fromCsa.plantComments) row.plantComments = fromCsa.plantComments;
+    }
 
     setBusy(true);
     let spec = nextSpec;
@@ -405,6 +420,7 @@ export default function QC() {
       setMsg({ type: 'g', text: 'Spec ' + spec + ' saved successfully.' + (fromSku ? ' The JSS number is on the sales SKU now.' : ' Next spec ready.') });
       // Reset entry fields but keep the group + customer for fast repeat entry.
       setForm((f) => ({ ...BLANK, layers: [blankLayer(), blankLayer(), blankLayer()], specSheet: blankSheet(), group: f.group, customer: f.customer }));
+      setFromCsa(null);
     } catch (e) {
       setMsg({ type: 'r', text: 'Save failed: ' + (e && e.message ? e.message : String(e)) });
     } finally {
@@ -416,12 +432,15 @@ export default function QC() {
     if (!jss.length) { setMsg({ type: 'r', text: 'No JSS data to export.' }); return; }
     // Issues 2.0: Machine Run On + Print Loc deleted from the JSS completely.
     const header = ['Spec', 'Job Type', 'Group', 'Customer', 'Sub Brand', 'Job Name', 'MIC', 'GSM',
-      'Material', 'Film Width', 'Ups', 'Width', 'Height', 'Gusset', 'Dispatch Form', 'Status'];
+      'Material', 'Film Width', 'Ups', 'Width', 'Height', 'Gusset', 'Dispatch Form', 'Status',
+      // 17.11: the CSA report's details, in the JSS report too
+      'Specifications', 'QC Remarks', 'Plant Comments'];
     const rows = jss.map((j) => {
       // Group: the spec's stored group if set, else derived from the customer list.
       const grp = specGroup(j, customers) || j.group || '';
       return [j.spec, j.jobType, grp, j.customer, j.subBrand, j.jobName, j.mic,
-        j.gsm, j.material, j.filmWidth, j.ups, j.width, j.height, j.gusset, j.dispatchForm, j.status]
+        j.gsm, j.material, j.filmWidth, j.ups, j.width, j.height, j.gusset, j.dispatchForm, j.status,
+        ...(() => { const r = jssReport({ sales, spec: j, machines }); return [jssSpecText(r), r.qcRemarks, r.plantComments]; })()]
         .map((v) => (v == null ? '' : v));
     });
     exportAOA([header, ...rows], 'Bloomflex_JSS_Master_' + today().replace(/-/g, '_'), 'JSS Master');
@@ -514,6 +533,14 @@ export default function QC() {
         <SpecSheet sales={sales} layers={(form.layers || []).slice(0, layerCountFor(form.jobType))} sheet={form.specSheet}
           onChange={(sheet) => setForm((f) => ({ ...f, specSheet: sheet }))}
           dispatchForm={form.dispatchForm} machines={machines} idPrefix="jss" />
+        <div className="fg" style={{ marginTop: 8 }}>
+          <label>QC remarks</label>
+          <textarea rows={2} value={form.qcRemarks ?? ''} aria-label="JSS QC remarks"
+            onChange={(e) => setForm((f) => ({ ...f, qcRemarks: e.target.value }))} />
+        </div>
+        {fromCsa && fromCsa.plantComments && (
+          <div className="al al-b" style={{ marginTop: 6 }}>🏭 Plant (from the CSA): {fromCsa.plantComments} — saved with this spec.</div>
+        )}
 
         <div className="g4">
           <div className="fg">
@@ -572,6 +599,10 @@ export default function QC() {
             <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} onClick={() => setArtSel('')}>Close</button>
           </div>
         )}
+        {viewing && jss.find((x) => x.spec === viewing) && (
+          <JssReport spec={jss.find((x) => x.spec === viewing)} sales={sales} machines={machines}
+            group={specGroup(jss.find((x) => x.spec === viewing), customers) || ''} onClose={() => setViewing('')} />
+        )}
         <div className="fbar" style={{ flexWrap: 'wrap' }}>
           <input
             placeholder="Search spec / customer / job / material"
@@ -614,12 +645,13 @@ export default function QC() {
                 <th style={{ textAlign: 'right' }}>Weight (g)</th>
                 <th>Form</th>
                 <th>Status</th>
+                <th>Report</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={13} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
+                  <td colSpan={14} style={{ textAlign: 'center', padding: 24, color: 'var(--i3)' }}>
                     No specs found
                   </td>
                 </tr>
@@ -649,6 +681,12 @@ export default function QC() {
                         style={{ border: '1px solid var(--bd)', borderRadius: 6, fontSize: 11, padding: '2px 4px' }}>
                         {STATUSES.map((o) => <option key={o} value={o}>{o}</option>)}
                       </select>
+                    </td>
+                    <td>
+                      <button className="btn btn-s" style={{ height: 22, fontSize: 10, padding: '0 6px' }} aria-label={`View JSS report ${j.spec}`}
+                        onClick={() => { setViewing(viewing === j.spec ? '' : j.spec); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ } }}>
+                        {viewing === j.spec ? 'Hide' : 'View'}
+                      </button>
                     </td>
                   </tr>
                 ))

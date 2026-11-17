@@ -423,8 +423,12 @@ export default function SpecSheet({
  * The sheet read-only — the CSA report view and anywhere a saved sheet is shown.
  * Only what was entered is listed.
  */
-export function SpecSummary({ sales, layers, sheet, dispatchForm = '', machines = [] }) {
-  if (sheetIsBlank(sheet)) return null;
+/**
+ * The Specifications sheet as [label, value] rows — what the CSA report shows, and
+ * (17.11) the JSS report and the JSS Excel too, so the two read the same.
+ */
+export function specSummaryRows({ sales, layers, sheet, dispatchForm = '', machines = [] }) {
+  if (sheetIsBlank(sheet)) return [];
   const sh = sheetOf(sheet);
   const gsm = gsmBreakdown(sales, layers, sh);
   const kind = sheetKind(dispatchForm);
@@ -465,6 +469,11 @@ export function SpecSummary({ sales, layers, sheet, dispatchForm = '', machines 
     add('Core', sh.core_in ? sh.core_in + ' in' : ''); add('Per reel', sh.per_reel_kg ? sh.per_reel_kg + ' kg' : '');
   }
   add('Packing', sh.packing);
+  return rows;
+}
+
+export function SpecSummary({ sales, layers, sheet, dispatchForm = '', machines = [] }) {
+  const rows = specSummaryRows({ sales, layers, sheet, dispatchForm, machines });
   if (!rows.length) return null;
   return (
     <div style={{ marginTop: 8 }} aria-label="Specifications summary">
