@@ -1,13 +1,21 @@
 import { useMemo, useState, useRef } from 'react';
 import { useData } from '../data.jsx';
-import { ordersApi } from '../api.js';
+import { jssApi, ordersApi } from '../api.js';
 import { balance } from '../lib/calc.js';
+import { specIndex } from '../lib/specs.js';
+import { SO_EXPORT_COLUMNS, routeIndex, soExportCells } from '../lib/oabExport.js';
 import { dash, today } from '../lib/format.js';
 import { STAGES, PROD_STATUSES } from '../lib/constants.js';
 import { exportAOA } from '../lib/xlsx.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import { ArtworkButton } from '../components/Artwork.jsx';
+
+/** 19.11: every JSS's route for the download — an unreachable list leaves the column blank, never the file. */
+async function loadRoutes() {
+  try { return routeIndex(await jssApi.routes()); } catch { return {}; }
+}
+
 
 /**
  * Production Floor — native port of the legacy plant view (showPlantView /
@@ -119,12 +127,16 @@ export default function Plant() {
     }
   }
 
-  function onExcel() {
-    const header = ['SO#', 'Sheet', 'Spec', 'Customer', 'Job', 'Disp Loc', 'PO Qty', 'Balance', 'Prod Status', 'Stage'];
+  async function onExcel() {
+    // 19.11: the same sale-order columns as the OAB download
+    const routes = await loadRoutes();
+    const bySpec = specIndex(mods.jss);
+    const header = ['SO#', 'Sheet', 'Spec', 'Customer', 'Job', 'Disp Loc', 'PO Qty', ...SO_EXPORT_COLUMNS, 'Prod Status', 'Stage'];
     const body = visible.map(({ r, sheet: sh }) => {
       const { ps, st } = eff(sh, r);
+      const j = bySpec[r.spec];
       return [r.so, sh, r.spec || '', r.customer || '', r.jobName || '', r.dispLoc || '',
-        Number(r.poQty) || 0, balance(r), ps, st];
+        Number(r.poQty) || 0, ...soExportCells(r, j, { routes }), ps, st];
     });
     exportAOA([header, ...body], `Plant_${today()}.xlsx`, 'Production Floor');
   }

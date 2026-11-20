@@ -5,7 +5,6 @@ import { dash, today } from '../lib/format.js';
 import { balance, calcMetres, calcKg } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
-import SoBomDownloads from '../components/SoBomDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
 import { ArtworkButton } from '../components/Artwork.jsx';
@@ -238,30 +237,6 @@ export default function PlanReadiness() {
         <div className="stat"><div className="sl">Unmarked</div><div className="sv">{openRows.length - readyCount - notReadyCount}</div></div>
       </div>
 
-      {/* Plan downloads (§55) — shared with the planner and the Plant login (§63) */}
-      <PlanDownloads compact />
-      <SoBomDownloads compact />
-
-      {/* P6: department-wise wastage against each sale order, on the PLAN dashboard too */}
-      <SoWastagePanel from={addDays(today(), -6)} to={today()} />
-
-      {/* §56: changes to an already-saved plan, clearly visible */}
-      {changes.length > 0 && (
-        <div className="card" style={{ marginTop: 12, borderLeft: '4px solid #c9a100' }}>
-          <div className="ctitle">⚠ Plan changes this week <span className="tag ty">{changes.length}</span></div>
-          <div className="tw sy" style={{ maxHeight: 220 }}><table>
-            <thead><tr><th>Date</th><th>Shift</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Qty</th><th>Start–End</th></tr></thead>
-            <tbody>{changes.map((j) => (
-              <tr key={j.id} className="hi">
-                <td>{j.planDate}</td><td>{j.shift || 'A'}</td>
-                <td><span className="so-pill">{j.so}</span></td>
-                <td>{j.departmentName}</td><td>{j.machineName}</td>
-                <td>{j.plannedQty}</td><td>{j.startTime || '—'}–{j.endTime || '—'}</td>
-              </tr>))}</tbody>
-          </table></div>
-        </div>
-      )}
-
       {/* The picked order's material — above the board, per §5. */}
       {pickedRow && (
         <div className="card" id="plan-material-panel" style={{ marginTop: 12 }} aria-label="Material for the picked sale order">
@@ -433,6 +408,31 @@ export default function PlanReadiness() {
           </table></div>
         )}
       </div>
+
+      {/* 19.11: "remove the department-wise BOM … just show the list of sale orders directly" —
+          the sale orders come first; the plan downloads, wastage and plan changes follow them. */}
+      {/* Plan downloads (§55) — shared with the planner and the Plant login (§63) */}
+      <PlanDownloads compact />
+
+      {/* P6: department-wise wastage against each sale order, on the PLAN dashboard too */}
+      <SoWastagePanel from={addDays(today(), -6)} to={today()} />
+
+      {/* §56: changes to an already-saved plan, clearly visible */}
+      {changes.length > 0 && (
+        <div className="card" style={{ marginTop: 12, borderLeft: '4px solid #c9a100' }}>
+          <div className="ctitle">⚠ Plan changes this week <span className="tag ty">{changes.length}</span></div>
+          <div className="tw sy" style={{ maxHeight: 220 }}><table>
+            <thead><tr><th>Date</th><th>Shift</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Qty</th><th>Start–End</th></tr></thead>
+            <tbody>{changes.map((j) => (
+              <tr key={j.id} className="hi">
+                <td>{j.planDate}</td><td>{j.shift || 'A'}</td>
+                <td><span className="so-pill">{j.so}</span></td>
+                <td>{j.departmentName}</td><td>{j.machineName}</td>
+                <td>{j.plannedQty}</td><td>{j.startTime || '—'}–{j.endTime || '—'}</td>
+              </tr>))}</tbody>
+          </table></div>
+        </div>
+      )}
     </div>
   );
 }

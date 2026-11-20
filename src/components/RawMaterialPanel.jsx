@@ -23,7 +23,12 @@ const FILTER_KINDS = [
   { k: 'spec', label: 'Spec' },
 ];
 
-export default function RawMaterialPanel() {
+/**
+ * @param noDeptBom 19.11 — the PM login: "remove the department-wise BOMs … not essential
+ *                  and not needed here". Hides each order's department-wise BOM view and
+ *                  its XLS / PDF downloads; the material totals stay.
+ */
+export default function RawMaterialPanel({ noDeptBom = false } = {}) {
   const { mods } = useData();
   const customers = mods.customers || [];
 
@@ -177,6 +182,7 @@ export default function RawMaterialPanel() {
                     key={key} row={r} rowKey={key} bom={bom}
                     picked={picked.has(key)} onPick={() => togglePick(key)}
                     open={openRow === key} onToggle={() => setOpenRow((v) => (v === key ? null : key))}
+                    noDeptBom={noDeptBom}
                   />
                 );
               })}
@@ -209,7 +215,7 @@ export default function RawMaterialPanel() {
 
 const BTN = { height: 22, fontSize: 10, padding: '0 6px' };
 
-function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
+function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle, noDeptBom = false }) {
   const groups = open ? bomMaterialForSOByDept(bom, row.spec, row.bal) : [];
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -238,7 +244,7 @@ function RawMaterialRow({ row, rowKey, bom, picked, onPick, open, onToggle }) {
         <td style={{ textAlign: 'right', fontWeight: 600 }}>{inr(row.bal)}</td>
         <td style={{ textAlign: 'right' }}>{row.mtrs ? inr(row.mtrs) + ' m' : '-'}</td>
         <td style={{ textAlign: 'center' }}>
-          {row.hasBOM ? (
+          {row.hasBOM && noDeptBom ? <span style={{ fontSize: 10, color: 'var(--i3)' }}>BOM ✓</span> : row.hasBOM ? (
             <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
               <button className="btn btn-s" style={BTN} onClick={onToggle} aria-label={`${open ? 'Hide' : 'View'} material for ${row.so}`}>{open ? 'Hide' : 'View'}</button>
               <button className="btn btn-s" style={BTN} disabled={!!busy} onClick={() => download('xls')}

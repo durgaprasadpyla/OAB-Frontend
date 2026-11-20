@@ -36,7 +36,7 @@ import SoBomDownloads from '../components/SoBomDownloads.jsx';
  *                  this same dashboard — BOM calculations 24.09 §10), so it drops
  *                  its own page frame and heading.
  */
-export default function PpcDashboard({ embedded = false }) {
+export default function PpcDashboard({ embedded = false, noDeptBom = false }) {
   const nav = useNavigate();
   const [tab, setTab] = useState('dash');
   const [from, setFrom] = useState(addDays(today(), -6));
@@ -90,7 +90,8 @@ export default function PpcDashboard({ embedded = false }) {
       {tab === 'machinewise' && <MachineWisePanel />}
 
       {tab === 'dash' && (<>
-      <SoBomDownloads compact />
+      {/* 19.11: not in the PM login — "not essential and not needed here" */}
+      {!noDeptBom && <SoBomDownloads compact />}
       <div className="card">
         <div className="fbar">
           <div className="fg"><label>From</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>

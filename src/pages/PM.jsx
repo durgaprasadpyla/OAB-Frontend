@@ -11,6 +11,14 @@ import { custGroupOf } from '../lib/master.js';
 import RawMaterialPanel from '../components/RawMaterialPanel.jsx';
 import { PurchaseOrders } from './Stores.jsx';
 import { OnHand } from './Stores.jsx';
+import { jssApi } from '../api.js';
+import { SO_EXPORT_COLUMNS, routeIndex, soExportCells } from '../lib/oabExport.js';
+
+/** 19.11: every JSS's route for the download — an unreachable list leaves the column blank, never the file. */
+async function loadRoutes() {
+  try { return routeIndex(await jssApi.routes()); } catch { return {}; }
+}
+
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -77,6 +85,7 @@ export default function PM() {
           printDate: pm.printDate || '', printedKg, printedMt, totalKg, totalMt, mtPerKg, comment: pm.comment || '',
           // printing balance = total order − printed, for both Kg and metres
           balKg: Math.max(0, totalKg - printedKg), balMt: Math.max(0, totalMt - printedMt),
+          src: r, jss: j,   // 19.11: for the sale-order export columns
         });
       });
     });
@@ -139,16 +148,19 @@ export default function PM() {
 
   // §17: "once I select a particular spec number here and export it to Excel, it
   // should actually export the filtered data whereas now it is exporting everything."
-  function exportExcel() {
+  async function exportExcel() {
     const out = filtered;
+    const routes = out.length ? await loadRoutes() : {};
     if (!out.length) { flash('Nothing to export — no rows match the filters.', 'y'); return; }
     const header = ['SO', 'Sheet', 'Spec', 'Customer', 'SKU', 'Disp Loc', 'PO Qty', 'Dispatched', 'Balance',
       'Prod Status', 'Stage', 'Substrate', 'Film Width', 'Thickness', 'GSM', 'Pouch Width', 'Pouch Height',
-      'Total Kg', 'Total Mt', 'Print Date', 'Printed Kg', 'Printed Mt', 'Bal Kg', 'Bal Mt', 'Plant Comments'];
+      'Total Kg', 'Total Mt', 'Print Date', 'Printed Kg', 'Printed Mt', 'Print Bal Kg', 'Print Bal Mt', 'Plant Comments',
+      // 19.11: the same sale-order columns as the OAB download
+      ...SO_EXPORT_COLUMNS];
     const body = out.map((r) => [r.so, r.sheet, r.spec, r.customer, r.sku, r.dispLoc, r.poQty, r.disp, r.bal,
       r.prodStatus, r.stage, r.substrate, r.filmWidth, r.thickness, r.gsm, r.pouchW, r.pouchH,
       Math.round(r.totalKg), Math.round(r.totalMt), r.printDate, r.printedKg, Math.round(r.printedMt),
-      Math.round(r.balKg), Math.round(r.balMt), r.comment || '']);
+      Math.round(r.balKg), Math.round(r.balMt), r.comment || '', ...soExportCells(r.src, r.jss, { routes })]);
     exportAOA([header, ...body], `Bloomflex_Printing_Progress_${today()}.xlsx`, 'Printing Progress');
     flash(`⬇ ${out.length} row(s) exported${filterOn ? ' — the filtered rows' : ''}.`);
   }
@@ -159,7 +171,7 @@ export default function PM() {
       <div id="app">
         <div className="pg-ttl">Production</div>
         <PmTabs tab={tab} setTab={setTab} />
-        <PpcDashboard embedded />
+        <PpcDashboard embedded noDeptBom />
       </div>
     );
   }
@@ -213,7 +225,7 @@ export default function PM() {
       <div id="app">
         <div className="pg-ttl">Production</div>
         <PmTabs tab={tab} setTab={setTab} />
-        <RawMaterialPanel />
+        <RawMaterialPanel noDeptBom />
       </div>
     );
   }

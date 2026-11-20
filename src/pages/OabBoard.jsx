@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
-import { ordersApi } from '../api.js';
+import { jssApi, ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { balance, calcMetres, kgFromMetres, num } from '../lib/calc.js';
 import { dash, fmtDate, inr } from '../lib/format.js';
@@ -10,10 +10,15 @@ import { downloadOabPdf } from '../lib/oabPdf.js';
 import { useSoOrder, soOrder } from '../lib/soOrder.js';
 import { getCustByLoc, custGroupOf } from '../lib/master.js';
 import { specIndex } from '../lib/specs.js';
-import { plantComments, pouchOpenWidth, substratesForBalance } from '../lib/oabExport.js';
+import { SO_EXPORT_COLUMNS, plantComments, pouchOpenWidth, routeIndex, soExportCells, substratesForBalance } from '../lib/oabExport.js';
 import { DispFormBadge, ProdBadge, BalanceBadge } from '../components/badges.jsx';
 import InvoiceDoc from '../components/InvoiceDoc.jsx';
 import { saveInvoicePdf } from '../lib/invoicePdf.js';
+
+/** 19.11: every JSS's route for the download — an unreachable list leaves the column blank, never the file. */
+async function loadRoutes() {
+  try { return routeIndex(await jssApi.routes()); } catch { return {}; }
+}
 
 /**
  * What each stat card counts, shown behind its ⓘ. Every one of these is a figure
@@ -171,19 +176,21 @@ export default function OabBoard() {
     catch (e) { alert('Reopen failed: ' + (e.message || e)); }
   }
 
-  function exportExcel() {
+  async function exportExcel() {
+    // 19.11: UOM, unit weight, FG allocated, total + balance metres and kgs, route
+    const routes = await loadRoutes();
     const header = ['SO', 'Spec', 'Dispatch', 'Customer', 'Job', 'Sub Brand', 'Disp Loc', 'Loc Code', 'PO#', 'PO Date',
-      'PO Qty', 'Inv', 'Man', 'FG', 'Balance', 'Metres+5%', 'Kgs', 'Prod Status', 'Stage',
+      'PO Qty', 'Inv', 'Man', ...SO_EXPORT_COLUMNS, 'Prod Status', 'Stage',
       // Issues 11.11
       'Primary Substrate (balance)', 'Second Substrate (balance)', 'Third Substrate (balance)', 'Plant Comments', 'Pouch Open Width (mm)'];
     const body = filtered.map((r) => {
       const b = balance(r);
       const m = calcMetres(r, b, jssBySpec[r.spec]).withWastage;
-      const k = b > 0 ? kgFromMetres(r, m, jssBySpec[r.spec], b) : null;
       const j = jssBySpec[r.spec];
       const subs = b > 0 ? substratesForBalance(j, mods.sales, m) : substratesForBalance(j, mods.sales, 0);
       return [r.so, r.spec, dispForm(r), r.customer, r.jobName, r.subBrand, r.dispLoc, locCode(r), r.poNum, fmtDate(r.poDate),
-        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0, Number(r.fg) || 0, b, m, k ? Math.round(k.kg) : '', prodStatus(r.so), r.stage || '',
+        Number(r.poQty) || 0, Number(r.invDisp) || 0, Number(r.manDisp) || 0,
+        ...soExportCells(r, j, { dispatchForm: dispForm(r), routes }), prodStatus(r.so), r.stage || '',
         subs[0], subs[1], subs[2], plantComments(r.so, r.spec, mods.pmData, mods.sales), pouchOpenWidth(j, mods.sales)];
     });
     exportAOA([header, ...body], `OAB_${sheet}_${new Date().toISOString().slice(0, 10)}.xlsx`, sheet);

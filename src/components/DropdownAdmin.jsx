@@ -1061,7 +1061,7 @@ function MachinesPanel({ machines, departments, reload, error, locations = [] })
   const deptUnit = (name) => (/pouch|sleeve|punch|pack/i.test(String(name || '')) ? 'pcs/min' : 'm/min');
   // Issues 7: a machine belongs to a PRODUCTION department — HR-only ones are not offered.
   const activeDepts = (departments || []).filter((d) => d.active !== false && !d.hrOnly);
-  const [form, setForm] = useState({ code: '', name: '', departmentId: '', defaultSpeed: '', speedUom: '', functionalHoursPerDay: '' });
+  const [form, setForm] = useState({ code: '', name: '', departmentId: '', defaultSpeed: '', actualSpeed: '', speedUom: '', functionalHoursPerDay: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const flash = (t, text) => { setMsg({ t, text }); setTimeout(() => setMsg(null), 3500); };
@@ -1078,10 +1078,12 @@ function MachinesPanel({ machines, departments, reload, error, locations = [] })
         code: form.code.trim(), name: form.name.trim(),
         departmentId: form.departmentId ? Number(form.departmentId) : undefined,
         defaultSpeed: form.defaultSpeed === '' ? undefined : Number(form.defaultSpeed),
+        // 18.11: what the machine really runs at, beside the ideal
+        actualSpeed: form.actualSpeed === '' ? undefined : Number(form.actualSpeed),
         speedUom: formUnit,
         functionalHoursPerDay: form.functionalHoursPerDay === '' ? undefined : Number(form.functionalHoursPerDay),
       });
-      setForm({ code: '', name: '', departmentId: '', defaultSpeed: '', speedUom: '', functionalHoursPerDay: '' });
+      setForm({ code: '', name: '', departmentId: '', defaultSpeed: '', actualSpeed: '', speedUom: '', functionalHoursPerDay: '' });
       flash('g', `Added “${form.name.trim()}”.`);
       await reload();
     } catch (e) { flash('r', e.message || 'Add failed'); } finally { setBusy(false); }
@@ -1100,6 +1102,15 @@ function MachinesPanel({ machines, departments, reload, error, locations = [] })
   async function setField(m, field, v) {
     const next = String(v || '').trim();
     if (next === String(m[field] || '').trim()) return;
+    try { await masterApi.updateMachine(m.id, { [field]: next }); await reload(); }
+    catch (e) { flash('r', e.message || 'Update failed'); }
+  }
+  // 18.11: both speeds are entered here — the ideal (planning runs on it) and the actual
+  async function setSpeed(m, field, v) {
+    const t = String(v ?? '').trim();
+    const next = t === '' ? null : Number(t);
+    if (next !== null && !(next >= 0)) { flash('r', 'Speed must be a number.'); return; }
+    if ((m[field] == null ? null : Number(m[field])) === next) return;
     try { await masterApi.updateMachine(m.id, { [field]: next }); await reload(); }
     catch (e) { flash('r', e.message || 'Update failed'); }
   }
@@ -1131,15 +1142,16 @@ function MachinesPanel({ machines, departments, reload, error, locations = [] })
           <option value="pcs/min">pcs/min</option>
         </select>
         <input type="number" min="0" step="any" placeholder="Ideal speed" value={form.defaultSpeed} aria-label="New machine ideal speed" onChange={(e) => setForm((f) => ({ ...f, defaultSpeed: e.target.value }))} />
+        <input type="number" min="0" step="any" placeholder="Actual speed" value={form.actualSpeed} aria-label="New machine actual speed" onChange={(e) => setForm((f) => ({ ...f, actualSpeed: e.target.value }))} />
         <input type="number" min="0" step="any" placeholder="Hrs/day" value={form.functionalHoursPerDay} aria-label="New machine hours per day" onChange={(e) => setForm((f) => ({ ...f, functionalHoursPerDay: e.target.value }))} />
         <button className="btn btn-g" onClick={add} disabled={busy}>＋ Add</button>
       </div>
       <div className="tw sy" style={{ maxHeight: 360 }}>
         <table>
-          <thead><tr><th style={{ width: 80 }}>Code</th><th>Machine</th><th style={{ width: 150 }}>Department</th><th style={{ width: 140 }}>Make</th><th style={{ width: 140 }}>Location</th><th style={{ width: 120 }}>Ideal speed</th><th style={{ width: 96 }}>Status</th></tr></thead>
+          <thead><tr><th style={{ width: 80 }}>Code</th><th>Machine</th><th style={{ width: 150 }}>Department</th><th style={{ width: 140 }}>Make</th><th style={{ width: 140 }}>Location</th><th style={{ width: 110 }}>Ideal speed</th><th style={{ width: 110 }}>Actual speed</th><th style={{ width: 96 }}>Status</th></tr></thead>
           <tbody>
             {list.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>
                 {error ? 'Machines unavailable — see the message above.' : 'No machines yet — add one above.'}
               </td></tr>
             ) : list.map((m) => (
@@ -1159,7 +1171,16 @@ function MachinesPanel({ machines, departments, reload, error, locations = [] })
                     {[...new Set([...locations, ...(m.location ? [m.location] : [])])].map((l) => <option key={l} value={l}>{l}</option>)}
                   </select>
                 </td>
-                <td style={{ fontSize: 12 }}>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>
+                {['defaultSpeed', 'actualSpeed'].map((field) => (
+                  <td key={field} style={{ fontSize: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input type="number" min="0" step="any" className="nospin" style={{ width: 70 }} defaultValue={m[field] ?? ''}
+                        key={`${m.id}-${field}-${m[field] ?? ''}`}
+                        aria-label={`${field === 'defaultSpeed' ? 'Ideal' : 'Actual'} speed of ${m.name}`} onBlur={(e) => setSpeed(m, field, e.target.value)} />
+                      <span style={{ color: 'var(--i3)' }}>{m.speedUom || ''}</span>
+                    </div>
+                  </td>
+                ))}
                 <td><button className="btn btn-s" onClick={() => toggle(m)}>{m.active === false ? 'Enable' : 'Disable'}</button></td>
               </tr>
             ))}

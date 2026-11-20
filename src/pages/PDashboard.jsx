@@ -14,6 +14,7 @@ import PurchaseOrderModal from '../components/PurchaseOrderDoc.jsx';
 import PoLineFilters, { useItemMaster } from '../components/PoLineFilters.jsx';
 import { EMPTY_PO_FILTERS, filterPoLines, flattenPoLines, groupByPo, isOpenPo, poLineContext, poLineOptions, poStatus } from '../lib/poLines.js';
 import { OnHand } from './Stores.jsx';
+import { linkedByHand, setLink, specialtiesFor, usedUnder } from '../lib/specialtyLinks.js';
 
 // Native port of the legacy Purchase Admin ("P Dashboard") — a tabbed admin page
 // over module 6 (purchase) and module 8 (scrap). Ported from index.html:
@@ -854,6 +855,66 @@ function pickCol(o, names) {
 // Excel import through lib/itemIdentity.js so all three agree on what "the item" is.
 const IM_IDENT = ITEM_IDENTITY;
 
+/**
+ * 18.11 — "Give me a place where I'll be able to link the existing ones." Pick a
+ * Material Type and Sub Group, tick the specialities that belong to it. A speciality
+ * an item already carries under the pair is linked by that item (shown ticked and
+ * locked — change the item to move it); new items link theirs automatically.
+ */
+function SpecialtyLinks({ rows, matTypes, subGroupsByMat, specialties, links, onSave }) {
+  const [mt, setMt] = useState('');
+  const [sg, setSg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const sgs = mt ? [...(subGroupsByMat.get(mt) || [])].sort((a, b) => a.localeCompare(b)) : [];
+  const used = mt && sg ? usedUnder(rows, mt, sg) : {};
+  const byHand = mt && sg ? linkedByHand(links, mt, sg).map((v) => v.toLowerCase()) : [];
+  async function toggle(sp, on) {
+    setBusy(true); setNote(null);
+    try { await onSave(setLink(links, mt, sg, sp, on)); setNote({ t: 'g', text: (on ? '✓ Linked ' : '✓ Unlinked ') + sp + ' — ' + mt + ' / ' + sg }); }
+    catch (e) { setNote({ t: 'r', text: 'Could not save the link: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="card" aria-label="Link specialities">
+      <div className="ctitle">🔗 Link specialities to a material type and sub group</div>
+      <div style={{ fontSize: 11, color: 'var(--i3)', marginBottom: 8 }}>
+        The Speciality dropdown above shows only the specialities linked to the chosen Material Type and Sub Group.
+        Saving an item links its speciality automatically; tick any other existing one here.
+      </div>
+      {note && <div className={'al al-' + note.t}>{note.text}</div>}
+      <div className="fbar" style={{ flexWrap: 'wrap' }}>
+        <select value={mt} aria-label="Link material type" onChange={(e) => { setMt(e.target.value); setSg(''); setNote(null); }}>
+          <option value="">— material type —</option>
+          {matTypes.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select value={sg} aria-label="Link sub group" disabled={!mt} onChange={(e) => { setSg(e.target.value); setNote(null); }}>
+          <option value="">— sub group —</option>
+          {sgs.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+      {mt && sg ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 8 }}>
+          {specialties.length === 0 && <span style={{ fontSize: 12, color: 'var(--i3)' }}>No specialities in the catalogue yet.</span>}
+          {specialties.map((sp) => {
+            const n = used[sp] || 0;
+            const on = n > 0 || byHand.includes(sp.toLowerCase());
+            return (
+              <label key={sp} className="cb" style={{ fontSize: 12 }} title={n ? `Carried by ${n} item(s) under ${sg}` : undefined}>
+                <input type="checkbox" checked={on} disabled={busy || n > 0} aria-label={`Link ${sp}`}
+                  onChange={(e) => toggle(sp, e.target.checked)} />
+                {' '}{sp}{n ? <span style={{ color: 'var(--i3)' }}> · {n} item{n === 1 ? '' : 's'}</span> : null}
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--i3)', marginTop: 6 }}>Pick a material type and a sub group to see its specialities.</div>
+      )}
+    </div>
+  );
+}
+
 function ItemMaster() {
   const { mods, save } = useData();
   const purchase = mods.purchase || {};
@@ -1036,7 +1097,15 @@ function ItemMaster() {
     if (!mt || mt === NEW) return subGroups;
     return [...(subGroupsByMat.get(mt) || [])].sort((a, b) => a.localeCompare(b));
   }, [imForm.materialType, subGroups, subGroupsByMat]);
-  const pickOptions = (k) => (k === 'materialType' ? matTypes : k === 'subGroup' ? formSubGroups : k === 'specialty' ? specialties : uoms);
+  // 18.11: the Speciality picker offers only what is linked to the chosen Material
+  // Type + Sub Group — by an item already carrying it, or ticked below by hand.
+  const specLinks = purchase.specialtyLinks || {};
+  const formSpecialties = useMemo(() => specialtiesFor({
+    rows: allRows, links: specLinks, all: specialties,
+    materialType: imForm.materialType === NEW ? '' : imForm.materialType,
+    subGroup: imForm.subGroup === NEW ? '' : imForm.subGroup,
+  }), [allRows, specLinks, specialties, imForm.materialType, imForm.subGroup]);
+  const pickOptions = (k) => (k === 'materialType' ? matTypes : k === 'subGroup' ? formSubGroups : k === 'specialty' ? formSpecialties.options : uoms);
 
   // Changing the Material Type drops a Sub Group that does not belong under the new
   // one — otherwise the row silently saves an impossible pair (FILM / Adhesives).
@@ -1234,6 +1303,13 @@ function ItemMaster() {
                     <input placeholder={'New ' + f.label.toLowerCase()} value={imNew[f.k]} aria-label={'New ' + f.label}
                       style={{ marginTop: 6 }} onChange={(e) => setImNew((n) => ({ ...n, [f.k]: e.target.value }))} />
                   )}
+                  {f.k === 'specialty' && imForm.materialType && imForm.subGroup && imForm.subGroup !== NEW && (
+                    <div style={{ fontSize: 11, color: 'var(--i3)', marginTop: 3 }} aria-label="Speciality picker note">
+                      {formSpecialties.narrowed
+                        ? 'Specialities linked to ' + imForm.materialType + ' / ' + imForm.subGroup
+                        : 'Nothing linked to ' + imForm.subGroup + ' yet — every speciality is shown. Link them below.'}
+                    </div>
+                  )}
                   {f.k === 'subGroup' && imForm.materialType && imForm.materialType !== NEW && (
                     <div style={{ fontSize: 11, color: 'var(--i3)', marginTop: 3 }}>
                       {formSubGroups.length ? 'Sub groups under ' + imForm.materialType : 'No sub group under ' + imForm.materialType + ' yet — add one'}
@@ -1271,6 +1347,9 @@ function ItemMaster() {
           {imEditIdx >= 0 && <button className="btn btn-s" onClick={cancelEditItem} disabled={busy}>Cancel</button>}
         </div>
       </div>
+
+      <SpecialtyLinks rows={allRows} matTypes={matTypes} subGroupsByMat={subGroupsByMat} specialties={specialties}
+        links={specLinks} onSave={async (links) => { await save('purchase', (prev) => ({ ...(prev || {}), specialtyLinks: links })); }} />
 
       <div className="card">
         <div className="fbar">

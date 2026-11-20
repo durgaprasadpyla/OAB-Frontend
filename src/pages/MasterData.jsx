@@ -416,9 +416,10 @@ export default function MasterData({ only, title, subtitle }) {
         )}
         {tab === 'machines' && (
           <Section title="Machines" canAdd={canConfig} onAdd={() => setModal({ type: 'machines', row: {} })}
-            cols={['Code', 'Name', 'Department', 'Type', 'Make', 'Location', 'Speed', 'Hrs/day', 'Active']} rows={d.machines}
+            cols={['Code', 'Name', 'Department', 'Type', 'Make', 'Location', 'Ideal speed', 'Actual speed', 'Hrs/day', 'Active']} rows={d.machines}
             render={(r) => [r.code, r.name, r.departmentName, r.machineType, r.machineMake, r.location,
-              r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
+              r.defaultSpeed != null ? `${r.defaultSpeed} ${r.speedUom || ''}` : '',
+              r.actualSpeed != null ? `${r.actualSpeed} ${r.speedUom || ''}` : '', r.functionalHoursPerDay, r.active ? 'Yes' : 'No']}
             onEdit={canConfig ? (r) => setModal({ type: 'machines', row: r }) : null}
             // One toggle after Edit: shows Disable while the machine is enabled and
             // Enable while disabled. A disabled machine drops out of the PPC board
@@ -455,13 +456,14 @@ export default function MasterData({ only, title, subtitle }) {
               ) : (
                 <div className="tw sy" style={{ marginTop: 10 }}>
                   <table>
-                    <thead><tr><th>Code</th><th>Machine</th><th>Ideal speed</th><th>Hrs/day</th><th>Status</th>{canConfig && <th style={{ width: 200 }}>Actions</th>}</tr></thead>
+                    <thead><tr><th>Code</th><th>Machine</th><th>Ideal speed</th><th>Actual speed</th><th>Hrs/day</th><th>Status</th>{canConfig && <th style={{ width: 200 }}>Actions</th>}</tr></thead>
                     <tbody>
                       {list.map((m) => (
                         <tr key={m.id} className={m.active === false ? 'nr' : undefined}>
                           <td>{m.code}</td>
                           <td>{m.name}</td>
                           <td>{m.defaultSpeed != null ? `${m.defaultSpeed} ${m.speedUom || ''}` : '—'}</td>
+                          <td>{m.actualSpeed != null ? `${m.actualSpeed} ${m.speedUom || ''}` : '—'}</td>
                           <td>{m.functionalHoursPerDay ?? '—'}</td>
                           <td><span className={'tag ' + (m.active === false ? 'tr' : 'tg')}>{m.active === false ? 'Disabled' : 'Enabled'}</span></td>
                           {canConfig && (
@@ -601,7 +603,8 @@ export default function MasterData({ only, title, subtitle }) {
             { key: 'location', label: 'Location', type: 'select', clearable: true,
               // a location since taken off the list still shows on the machine that has it
               options: [...new Set([...ddList(mods.sales || {}, 'machineLocations'), ...(modal?.row?.location ? [modal.row.location] : [])])].map((l) => ({ id: l, name: l })) },
-            { key: 'defaultSpeed', label: 'Default speed (per min)', type: 'number' },
+            { key: 'defaultSpeed', label: 'Ideal speed (per min)', type: 'number' },
+            { key: 'actualSpeed', label: 'Actual speed (per min)', type: 'number', clearable: true },
             { key: 'speedUom', label: 'Speed unit', type: 'select', options: SPEED_UOMS },
             { key: 'functionalHoursPerDay', label: 'Functional hrs/day', type: 'number' },
             { key: 'active', label: 'Active', type: 'checkbox' },

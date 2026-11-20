@@ -283,6 +283,8 @@ export const masterApi = {
 // departments, and eligible machines per department (multi, with speed + changeover).
 // Reads need any token; writes are QC / superadmin (403 -> err.code='forbidden').
 export const jssApi = {
+  // 19.11: every JSS's route at once, for the OAB Excel
+  routes: () => api('/api/jss/routes'),
   get: (spec) => api('/api/jss/' + encodeURIComponent(spec)),
   routeDepartments: (spec) => api('/api/jss/' + encodeURIComponent(spec) + '/route-departments'),
   setConfig: (spec, body) => api('/api/jss/' + encodeURIComponent(spec) + '/config', { method: 'PUT', body }),

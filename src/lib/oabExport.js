@@ -9,7 +9,8 @@
 
 import { gsmBreakdown, layerFilmWidths, pouchFigures, sheetKind, sheetOf } from './specSheet.js';
 import { layersOfSpec } from './jssSpec.js';
-import { num } from './calc.js';
+import { balance, calcMetres, kgFromMetres, num } from './calc.js';
+import { getUOM } from './pricing.js';
 
 const s = (v) => String(v == null ? '' : v).trim();
 const kgText = (v) => Math.round(v).toLocaleString('en-IN');
@@ -60,4 +61,55 @@ export function plantComments(so, spec, pmData, sales) {
   const reports = ((sales && sales.qc_reports) || []).filter((r) => skuIds.has(r.sku_id) && s(r.plant_comments));
   const last = reports.sort((a, b) => s(b.plant_answered_at || b.created_at).localeCompare(s(a.plant_answered_at || a.created_at)))[0];
   return last ? `CSA: ${s(last.plant_comments)}` : '';
+}
+
+// ── 19.11: the sale-order columns every OAB download carries ─────────────────
+//
+// "Unit of measurement should be a mandatory field in the downloaded Excel … we would
+//  need the individual item weight … include balance metres and balance kilograms …
+//  there is no FG allocated in the list … also include the route for that particular
+//  JSS." One builder, so the OAB board, Plant and PM downloads say the same thing.
+
+/** The columns, in order. */
+export const SO_EXPORT_COLUMNS = ['UOM', 'Unit Weight (g)', 'FG Allocated', 'Balance Qty',
+  'Total Metres (+5%)', 'Total Kgs', 'Balance Metres (+5%)', 'Balance Kgs', 'Route'];
+
+const isRoll = (df) => /^rolls?$/i.test(s(df));
+
+/** `{spec: "Printing → Lamination → Pouching"}` off GET /api/jss/routes. */
+export function routeIndex(list) {
+  const out = {};
+  (Array.isArray(list) ? list : []).forEach((r) => {
+    if (!r || !s(r.spec)) return;
+    const stages = Array.isArray(r.stages) ? r.stages.map(s).filter(Boolean) : [];
+    out[s(r.spec)] = stages.length ? stages.join(' → ') : s(r.routeName);
+  });
+  return out;
+}
+
+/**
+ * The cells for one sale order, matching SO_EXPORT_COLUMNS. `dispatchForm` is the
+ * row's effective form (the JSS's first); `routes` from routeIndex. The FG allocated
+ * to the SO is already off its balance (balance = PO − invoiced − manual − FG).
+ */
+export function soExportCells(r, j, { dispatchForm = '', routes = {} } = {}) {
+  const df = s(dispatchForm || (j && j.dispatchForm) || r.dispatchForm);
+  const po = num(r.poQty);
+  const bal = balance(r);
+  const totalM = calcMetres(r, po, j).withWastage;
+  const totalK = po > 0 ? kgFromMetres(r, totalM, j, po) : null;
+  const balM = calcMetres(r, bal, j).withWastage;
+  const balK = bal > 0 ? kgFromMetres(r, balM, j, bal) : null;
+  const pw = j ? num(j.pouchWeight) : 0;
+  return [
+    getUOM(df),
+    isRoll(df) ? '' : (pw > 0 ? Math.round(pw * 100) / 100 : ''),
+    num(r.fg),
+    bal,
+    Math.round(totalM),
+    totalK ? Math.round(totalK.kg) : '',
+    Math.round(balM),
+    balK ? Math.round(balK.kg) : (bal > 0 ? '' : 0),
+    routes[s(r.spec)] || '',
+  ];
 }
