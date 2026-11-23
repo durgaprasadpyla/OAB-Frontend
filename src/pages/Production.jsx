@@ -3,6 +3,7 @@ import { productionApi, masterApi, planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
 import { useAuth } from '../auth.jsx';
+import { readyRefusal } from '../lib/bomApprovalApi.js';
 
 // Production execution (Stage 5): Plant / Plant Manager record actual production +
 // wastage against an SO's route stages. Good output automatically becomes available
@@ -134,7 +135,7 @@ export default function Production() {
       if (mode === 'PARTIAL' && sp.readyQty != null) setReadyMeters(String(sp.readyQty));
       flash(mode === 'PARTIAL' ? `Ready to Plan — Partial (${sp.readyQty} m ready)` : 'Ready to Plan — Complete');
       await loadPending();
-    } catch (e) { setErr(e.message || 'Could not update Ready to Plan'); }
+    } catch (e) { setErr(readyRefusal(e)); }   // e.g. "BOM not approved for SO …" (BloomFlex V2)
     finally { setSavingReady(false); }
   }
 

@@ -1,0 +1,19 @@
+/* BloomFlex V2 look for the OAB board (/oab).
+   Scoped under .v2 like the design kit; only the OAB board imports it. */
+
+/* the balance statistics (the OAB .stats cards) drawn as V2 metric tiles */
+.v2.v2-orders .stats{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px;margin-bottom:17px}
+.v2.v2-orders .stat{border:1px solid var(--v2-line);background:#fff;border-radius:12px;padding:12px 14px;box-shadow:var(--v2-shadow);min-width:0}
+.v2.v2-orders .stat .sl{font-size:11px;color:#5e7088;font-weight:700;text-transform:none;letter-spacing:0;margin-bottom:5px}
+.v2.v2-orders .stat .sv{font-size:21px;line-height:1.15;letter-spacing:-.3px;color:var(--v2-dark);overflow-wrap:anywhere}
+.v2.v2-orders .stat .sv.red{color:var(--v2-red)}
+.v2.v2-orders .stat .sv.grn{color:var(--v2-green)}
+
+/* filter bar + the full OAB sheet in a V2 panel */
+.v2.v2-orders .v2o-tools{flex-wrap:wrap}
+.v2.v2-orders .v2o-tools select{max-width:170px}
+.v2.v2-orders .v2o-wastage{margin:0 0 8px;padding:6px 13px;font-size:11px}
+.v2.v2-orders .v2o-reg .tw{border:0;box-shadow:none;border-radius:0;margin:0}
+
+@media (max-width:1250px){.v2.v2-orders .stats{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:740px){.v2.v2-orders .stats{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -1,0 +1,16 @@
+/* BloomFlex V2 look for PLAN "Planning — Ready to Plan" (PlanReadiness + its
+   material panel). Scoped under .v2 like the kit in v2.css. */
+.v2 .v2-metrics.v2-m4{grid-template-columns:repeat(4,minmax(0,1fr))}
+
+/* the Ready to Plan action bar, sitting on top of the board's scroll box */
+.v2 .v2-ready-bar{background:#f7faff;border:1px solid var(--v2-line);border-bottom:0;border-radius:10px 10px 0 0;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.v2 .v2-ready-bar.picked{background:#fffaf0;border-color:#f2dfaf}
+.v2 .v2-ready-bar input,.v2 .v2-ready-bar select{border:1px solid #d8e2ee;border-radius:7px;background:#fff}
+
+/* the picked order's stage-wise material table */
+.v2 .v2-mat{padding:12px 14px}
+.v2 .v2-mat .tw{border:0;border-radius:0;margin:0 -14px;border-top:1px solid var(--v2-line);border-bottom:1px solid var(--v2-line)}
+.v2 .v2-mat tr.v2-stage-head td{background:#eff5fd;font-weight:800;font-size:11px;color:#40546d;text-transform:uppercase;letter-spacing:.05em;padding:9px 12px;border-top:1px solid var(--v2-line)}
+.v2 .v2-mat tr.v2-stage-head .tag{text-transform:none}
+
+@media (max-width:1250px){.v2 .v2-metrics.v2-m4{grid-template-columns:repeat(2,minmax(0,1fr))}}

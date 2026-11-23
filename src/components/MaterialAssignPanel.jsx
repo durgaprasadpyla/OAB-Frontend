@@ -4,6 +4,8 @@ import { useApi } from '../lib/useApi.js';
 import { bomMaterialForSOByDept, hasBOM, plannedBomMap, NO_DEPARTMENT } from '../lib/bom.js';
 import { asSoMaterial, codeKey, isComplete, isInk, netOut, sourceLabel } from '../lib/soMaterial.js';
 import { useData } from '../data.jsx';
+import { BomApprovalHeader } from './BomApproval.jsx';
+import { coverFromLines } from '../lib/bomApprovalApi.js';
 
 // Assigning material to a sale order, from the PLAN login.
 //
@@ -175,7 +177,7 @@ function Line({ it, so, needs, held, issued, rolls, pick, setPickFor, busy, cove
  * measured against has to be one too — and the stores desk and the server cap
  * reckon on the same number.
  */
-export default function MaterialAssignPanel({ so, spec, material, soQty, onChange }) {
+export default function MaterialAssignPanel({ so, spec, material, soQty, onChange, approval, canApprove, onApprove }) {
   const { mods } = useData();
   const planned = useApi('/api/bom');
   const bom = useMemo(
@@ -290,8 +292,14 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
   }
 
   return (
-    <div style={{ background: 'var(--bg)', border: '1px solid var(--bd)', borderRadius: 8, padding: '10px 12px' }}>
+    <div className="v2-mat">
       {err && <div className="al al-r" style={{ margin: '4px 0' }}>{err}</div>}
+
+      {/* BloomFlex V2: the BOM's approval + how much of it the order's material covers */}
+      {approval !== undefined && (
+        <BomApprovalHeader so={so} state={approval} cover={coverFromLines(mat && mat.lines)}
+          canApprove={!!canApprove} onApprove={onApprove || (async () => {})} />
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <span style={{ fontSize: 11, color: 'var(--i3)', flex: 1 }}>
@@ -326,8 +334,8 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
             </tr></thead>
             {departments.map((d) => (
               <tbody key={d.department} aria-label={`Material for ${so} — ${d.department}`}>
-                <tr>
-                  <td colSpan={NCOLS} style={{ background: 'var(--bg)', fontSize: 11, fontWeight: 700, color: 'var(--i2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                <tr className="v2-stage-head">
+                  <td colSpan={NCOLS}>
                     {d.department}
                     <span className="tag tb" style={{ marginLeft: 8, fontSize: 9, textTransform: 'none' }}>
                       {Object.entries(d.totals).map(([u, v]) => `${qty(v)} ${u}`).join(' · ')}
