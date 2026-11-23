@@ -6,6 +6,8 @@ import { navTabs, OPS_ROLES } from '../lib/roles.js';
 import RoleSwitcher from './RoleSwitcher.jsx';
 import { exportAOA } from '../lib/xlsx.js';
 import { today } from '../lib/format.js';
+import '../v2.css';
+import '../v2-app.css';
 
 /**
  * Every single-screen role gets its own coloured brand bar in production, not the
@@ -42,49 +44,34 @@ const ROLE_BAR = {
   jss: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'JSS Editor', signOut: 'Sign Out' },
 };
 
-/** The coloured single-screen role bar. (#plant-panel / #qc-panel / … headers) */
+
+/**
+ * BloomFlex V2 frame for a single-screen role: the prototype's orange top bar (brand,
+ * the role's workspace name, view-as / user, Sign Out) and, when the role has more
+ * than one screen, a white tab bar with its links. Same links, same actions as the
+ * old coloured bar (`cfg.bg` is no longer drawn — every login shares the V2 frame).
+ */
 function RoleBar({ cfg, who, switcher, onSignOut, onNav, activePath }) {
-  const dark = cfg.fg !== '#123a6b';
+  const links = cfg.links || [];
   return (
-    <div
-      style={{
-        background: cfg.bg, color: cfg.fg || '#fff', padding: '12px 20px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        position: 'sticky', top: 0, zIndex: 200, flexWrap: 'wrap', gap: 8,
-        borderBottom: cfg.border || 'none',
-      }}
-    >
-      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1 }}>
-        {cfg.brand}
-        {cfg.sub ? <>&nbsp;<span style={{ fontWeight: 400, fontSize: 12, opacity: dark ? 0.8 : 1, color: cfg.fg ? '#8a93a3' : undefined }}>{cfg.sub}</span></> : null}
-      </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        {(cfg.links || []).map((l) => (
-          <button
-            key={l.to}
-            onClick={() => onNav(l.to)}
-            style={{
-              height: 28, padding: '0 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600,
-              background: activePath === l.to ? (dark ? 'rgba(255,255,255,.28)' : '#dbe7fb') : (dark ? 'rgba(255,255,255,.12)' : '#eef3fb'),
-              color: cfg.fg || '#fff',
-              border: '1px solid ' + (dark ? 'rgba(255,255,255,.4)' : '#cfd8e3'),
-            }}
-          >{l.label}</button>
-        ))}
-        {/* A Super Admin viewing as this role keeps their badge here, so switching
-            back is one click away; every real login of this role sees no change. */}
-        {switcher ? <RoleSwitcher variant="bar" dark={dark} /> : who ? <span style={{ fontSize: 12, opacity: 0.9 }}>{who}</span> : null}
-        <button
-          onClick={onSignOut}
-          style={{
-            height: 30, padding: '0 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-            background: dark ? 'rgba(255,255,255,.15)' : '#eef3fb',
-            color: cfg.fg || '#fff',
-            border: '1px solid ' + (dark ? 'rgba(255,255,255,.4)' : '#cfd8e3'),
-          }}
-        >{cfg.signOut}</button>
-      </div>
-    </div>
+    <>
+      <header className="v2-top">
+        <div className="v2-brand"><b>{cfg.brand}</b>{cfg.sub ? <span className="sub">{cfg.sub}</span> : null}</div>
+        <div className="v2-top-right">
+          {/* A Super Admin viewing as this role keeps their badge here, so switching
+              back is one click away; every real login of this role sees no change. */}
+          {switcher ? <RoleSwitcher variant="bar" dark /> : who ? <span className="v2-who">{who}</span> : null}
+          <button className="v2-tbtn" onClick={onSignOut}>{cfg.signOut}</button>
+        </div>
+      </header>
+      {links.length > 0 && (
+        <nav className="v2-tabbar">
+          {links.map((l) => (
+            <button key={l.to} className={'v2-nav' + (activePath === l.to ? ' on' : '')} onClick={() => onNav(l.to)}>{l.label}</button>
+          ))}
+        </nav>
+      )}
+    </>
   );
 }
 
@@ -132,7 +119,7 @@ export default function Shell() {
   }
 
   const body = (
-    <div className="oab-main">
+    <div className="oab-main v2 v2-app">
       {conflict && (
         <div className="al al-y" style={{ margin: '12px 16px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
           <span>⚠️ This data was changed elsewhere and has been reloaded. Review the latest values and save your change again.</span>
@@ -165,32 +152,32 @@ export default function Shell() {
 
   return (
     <div className="oab-shell">
-      <div id="hdr">
-        <div className="logo">🌿 Bloomflex <span>Order &amp; Production Management</span></div>
-        {!isPanelRole && (
-          <div id="nav">
-            {tabs.map((t) => (
-              <button key={t.label} className={'ntab' + (tabActive(t) ? ' on' : '')} onClick={() => nav(t.to)}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <header className="v2-top">
+        <div className="v2-brand"><b>🌿 Bloomflex</b><span className="sub">Order &amp; Production Management</span></div>
+        <div className="v2-top-right">
           {/* Sync state, matching the monolith's updateSyncBadge. There is no
               "Save OAB" button here on purpose: the monolith needs one because it
               holds the whole blob dirty in memory, whereas every action in this
               app persists on its own (or via a screen's own Save button). */}
-          <span className={'hbadge' + (error ? ' err' : saving ? '' : ' ok')}>
+          <span className={'v2-pill' + (error ? ' err' : '')}>
             {error ? '⚠ Sync error' : saving ? '⏳ Syncing…' : '☁ Synced'}
           </span>
           <RoleSwitcher variant="hdr" />
           {!isPanelRole && (
-            <button className="btn btn-s" style={{ height: 26, fontSize: 11 }} onClick={backup}>⬇ Backup</button>
+            <button className="v2-tbtn" onClick={backup}>⬇ Backup</button>
           )}
-          <button className="btn btn-s" style={{ height: 26, fontSize: 11 }} onClick={signOut}>Sign Out</button>
+          <button className="v2-tbtn" onClick={signOut}>Sign Out</button>
         </div>
-      </div>
+      </header>
+      {!isPanelRole && (
+        <nav className="v2-tabbar">
+          {tabs.map((t) => (
+            <button key={t.label} className={'v2-nav' + (tabActive(t) ? ' on' : '')} onClick={() => nav(t.to)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      )}
       {body}
     </div>
   );
