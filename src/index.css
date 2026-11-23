@@ -616,3 +616,11 @@ td.rowsel > input[type=radio], tbody td > input[type=radio]:only-child { margin:
 .role-sw-opt.on .role-sw-tag{background:var(--wh)}
 .role-sw-back{display:block;width:100%;margin-top:4px;border:none;border-top:1px solid var(--bd);background:transparent;padding:9px 10px 5px;font-size:12px;font-weight:600;color:var(--g);cursor:pointer;text-align:left}
 .role-sw-back:hover{text-decoration:underline}
+
+/* BloomFlex V2: Daily board - Ready-to-plan queue in a sticky left column */
+.board-shell{display:grid;grid-template-columns:290px minmax(0,1fr);gap:12px;align-items:start;margin-top:12px}
+.board-queue{position:sticky;top:12px;max-height:calc(100vh - 160px);overflow:auto;margin:0;z-index:5}
+.queue-card{background:#f9fbff;border-radius:10px;padding:10px 11px;cursor:grab;display:flex;flex-direction:column;gap:5px}
+.queue-card:active{cursor:grabbing}
+.queue-desc{font-size:12px;color:#576b83;line-height:1.35}
+@media (max-width:1000px){.board-shell{display:flex;flex-direction:column}.board-queue{position:static;max-height:45vh}}

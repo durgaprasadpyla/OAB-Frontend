@@ -3,6 +3,9 @@ import { planningApi, masterApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
 import { ArtworkButton } from '../components/Artwork.jsx';
+import { machineCalendarApi } from '../lib/machineCalendarApi.js';
+import { V2Page } from '../components/V2Ui.jsx';
+import '../v2-planner.css';
 
 // Daily machine board (Stage 7 + Enhancements 2.0 §77-80): machines grouped by
 // department, each machine split into Shift A (day) and Shift B (night) drop zones.
@@ -13,6 +16,8 @@ import { ArtworkButton } from '../components/Artwork.jsx';
 
 const mins = (v) => (v == null ? 0 : Math.round(Number(v)));
 const SHIFTS = [{ k: 'A', label: 'Shift A · day' }, { k: 'B', label: 'Shift B · night' }];
+// BloomFlex V2: a machine whose calendar has a Shift C window that day gets a C zone.
+const SHIFT_C = { k: 'C', label: 'Shift C · overnight' };
 
 export default function DailyBoard({ embedded = false }) {
   const [date, setDate] = useState(today());
@@ -43,6 +48,30 @@ export default function DailyBoard({ embedded = false }) {
     } catch (e) { setErr(e.message || 'Failed to load board'); }
   }, [date]);
   useEffect(() => { load(); }, [load]);
+
+  // BloomFlex V2 — the machines' real windows for this date (Machine Calendar). Kept
+  // apart from load() so a calendar hiccup never blanks the board.
+  const [cal, setCal] = useState({});
+  useEffect(() => {
+    let live = true;
+    machineCalendarApi.get(date, 1)
+      .then((r) => { if (!live) return; const m = {}; ((r && r.machines) || []).forEach((mc) => { m[String(mc.id)] = (mc.days || [])[0]; }); setCal(m); })
+      .catch(() => { if (live) setCal({}); });
+    return () => { live = false; };
+  }, [date, board]);
+  const calDay = (machineId) => cal[String(machineId)];
+  const shiftsFor = (machineId) => {
+    const d = calDay(machineId);
+    return d && (d.windows || []).some((w) => w.shift === 'C') ? [...SHIFTS, SHIFT_C] : SHIFTS;
+  };
+  // The window text for a shift, or null when a configured machine has none that day.
+  const shiftWindows = (machineId, shift) => {
+    const d = calDay(machineId);
+    if (!d) return '';
+    const ws = (d.windows || []).filter((w) => w.shift === shift);
+    if (ws.length) return ws.map((w) => `${w.from}–${w.to}`).join(', ');
+    return d.source === 'LEGACY' ? '' : null;
+  };
 
   const machinesByDept = useMemo(() => {
     const g = {};
@@ -211,7 +240,9 @@ export default function DailyBoard({ embedded = false }) {
   });
 
   return (
-    <div id={embedded ? undefined : 'app'}>
+    // BloomFlex V2 look: controls panel → sticky queue on the left + machine cards
+    // with one shift row (drop zone) each, as in the V2 planner.
+    <V2Page id={embedded ? undefined : 'app'}>
       {!embedded && <div className="pg-ttl">📋 Daily Machine Board</div>}
       <div className="pg-sub">Drag a Ready-to-Plan SO onto a machine to plan it; drag a job card to another machine to move it. Capacity = quantity ÷ speed + changeover.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
@@ -223,28 +254,29 @@ export default function DailyBoard({ embedded = false }) {
         </div>
       )}
 
-      <div className="card">
-        <div className="fbar">
+      <section className="v2-panel">
+        <div className="pl-controls">
           <div className="fg"><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
           <button className="btn btn-s" onClick={load}>↻ Refresh</button>
         </div>
-      </div>
+      </section>
 
       {/* Issues 2.4 §6: machines FIRST, the pool underneath. Side by side, the
           pouching machines sat below the fold of their own scroller, so dragging an
           order onto one meant scrolling the right-hand column while holding the
           card. Stacked, the drop targets are all on one page and the drag is short. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+      {/* BloomFlex V2: the Ready-to-Plan queue is a LEFT column, as in the V2 design.
+          It is sticky (stays on screen while the machines scroll past), so the card
+          being dragged and the shift it goes onto are visible together — the reason
+          Issues 3.0 made it a sticky footer still holds. Stacks on narrow screens. */}
+      <div className="board-shell">
         {/* Issues 3.0: "once I select a sale order from the bottom and I scroll up in
             the middle, the selection is going away." A drag ends the moment the pointer
             leaves the card, so a pool that scrolls off the page cannot reach a machine
             further up. The pool is a STICKY footer now: it stays on screen while the
             machines scroll past it, so the card being dragged and the shift it is going
             onto are visible at the same time and the drag is short. */}
-        <div className="card" style={{
-          order: 2, position: 'sticky', bottom: 0, zIndex: 5,
-          boxShadow: '0 -6px 16px rgba(15,23,42,.10)', maxHeight: '38vh', overflow: 'auto',
-        }}>
+        <aside className="card board-queue" aria-label="Ready to Plan">
           {(() => {
             const open = pool.filter((p) => !p.fullyPlanned);
             const done = pool.length - open.length;
@@ -252,19 +284,21 @@ export default function DailyBoard({ embedded = false }) {
               <>
                 <div className="ctitle">Ready to Plan <span className="tag ty">{open.length}</span></div>
                 {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned.</div> : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {open.map((p) => {
                       const stages = p.routeProgress || [];
                       const doneN = stages.filter((st) => st.planned).length;
                       const held = dragging && dragging.kind === 'so' && dragging.so === p.so;
                       return (
                         <div key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)} onDragEnd={endDrag}
-                          style={{ border: '1px solid ' + (held ? 'var(--g)' : 'var(--bd)'), borderRadius: 8, padding: '8px 10px',
-                            cursor: 'grab', background: 'var(--gl)', opacity: held ? 0.45 : 1 }}>
-                          <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
-                          <ArtworkButton spec={p.spec} compact />{' '}
-                          <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
-                          <span className="tag ty">ready {p.readyQty}</span>
+                          className="queue-card"
+                          style={{ border: '1px solid ' + (held ? 'var(--g)' : '#e2eaf5'), opacity: held ? 0.45 : 1 }}>
+                          <div className="queue-desc">
+                            <span className="so-pill">{p.so}</span> <b>{p.spec}</b> · {p.jobName || ''} · qty {p.poQty}{' '}
+                            <ArtworkButton spec={p.spec} compact />{' '}
+                            <span className={'tag ' + (p.readyMode === 'PARTIAL' ? 'tb' : 'tg')}>{p.readyMode === 'PARTIAL' ? 'Partial' : 'Complete'}</span>{' '}
+                            <span className="tag ty">ready {p.readyQty}</span>
+                          </div>
                           {/* Issues 2.5: an SO stays here until EVERY department on its route
                               is planned. The old card showed only a "balance" (ready x stages
                               minus planned) — a number matching no physical quantity — so after
@@ -295,14 +329,16 @@ export default function DailyBoard({ embedded = false }) {
           <div className="pg-sub" style={{ marginTop: 8 }}>
             Tip: this strip stays put while you scroll — drag a card straight up onto a machine&rsquo;s shift ↑
           </div>
-        </div>
+        </aside>
 
         {/* Machine columns by department */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, order: 1 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
           {Object.entries(machinesByDept).map(([deptId, list]) => (
-            <div className="card" key={deptId}>
-              <div className="ctitle">{deptName(deptId)}</div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <section className="v2-panel" key={deptId} style={{ marginBottom: 0 }}>
+              <div className="v2-panel-title">
+                <h2>{deptName(deptId)}</h2>
+              </div>
+              <div className="v2-pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: 10 }}>
                 {list.map((mc) => {
                   const cap = capFor(mc.id);
                   const used = mins(cap?.usedMinutes), capM = mins(cap?.capMinutes) || mins((mc.functionalHoursPerDay || 12) * 60);
@@ -323,26 +359,26 @@ export default function DailyBoard({ embedded = false }) {
                       onDragLeave={() => leaveZone(mc, 'A')}
                       onDrop={(e) => onDropMachine(e, mc, 'A')}
                       aria-label={`Machine ${mc.code}`}
-                      style={{ flex: '1 1 240px', minWidth: 220, borderRadius: 10, padding: 8,
-                        border: '1px solid ' + (cardHot ? 'var(--g)' : over ? 'var(--red)' : 'var(--bd)'),
+                      className="board-mach"
+                      style={{
+                        border: '1px solid ' + (cardHot ? 'var(--g)' : over ? 'var(--red)' : '#dce5f0'),
                         outline: cardHot ? '2px solid var(--g)' : 'none',
-                        background: cardHot ? 'var(--gl)' : 'var(--wh)',
+                        background: cardHot ? 'var(--gl)' : '#fff',
                         opacity: armed && !ok ? 0.42 : 1,
                         transition: 'opacity .12s, background .12s' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <b>{mc.code}</b><span className="pg-sub">{mc.name}</span>
+                      {/* V2 machine header: code + name, a small load bar, used / capacity */}
+                      <div className="pl-mach-top">
+                        <b>{mc.code}</b><span className="pg-sub" style={{ margin: 0 }}>{mc.name}</span>
                       </div>
-                      {armed && !ok && <div className="pg-sub" style={{ margin: '2px 0 0', fontStyle: 'italic' }}>{whyNot(mc)}</div>}
-                      <div style={{ height: 8, borderRadius: 4, background: '#eef1f6', margin: '6px 0', overflow: 'hidden' }}>
-                        <div style={{ width: pct + '%', height: '100%', background: over ? 'var(--red)' : 'var(--g)' }} />
-                      </div>
-                      <div className="pg-sub" style={{ marginBottom: 6 }}>{used}/{capM} min{over ? ' · OVER-BOOKED' : ''}</div>
+                      {armed && !ok && <div className="pl-why">{whyNot(mc)}</div>}
+                      <div className={'pl-bar' + (over ? ' over' : '')} style={{ margin: '6px 10px', width: 'auto' }}><span style={{ width: pct + '%' }} /></div>
+                      <div className="pg-sub" style={{ margin: '0 10px 6px' }}>{used}/{capM} min{over ? ' · OVER-BOOKED' : ''}</div>
                       {/* C4: SOs whose material is waiting at this machine's department and
                           may run on THIS machine — gone from siblings once dropped on one. */}
                       {(() => {
                         const w = waitingFor(mc);
                         return w.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
+                          <div className="board-wait">
                             <div className="pg-sub" style={{ margin: '0 0 3px', fontWeight: 600 }}>⏳ Waiting here</div>
                             {w.map((p) => (
                               <span key={p.so} draggable onDragStart={(e) => startDragSo(e, p.so)} onDragEnd={endDrag}
@@ -355,9 +391,10 @@ export default function DailyBoard({ embedded = false }) {
                         );
                       })()}
                       {/* §77-78: one drop zone per shift; drag between them to re-shift a job. */}
-                      {SHIFTS.map((sh) => {
+                      {shiftsFor(mc.id).map((sh) => {
                         const jobs = jobsFor(mc.id, sh.k);
                         const hot = hover === mc.id + '|' + sh.k && ok;
+                        const winText = shiftWindows(mc.id, sh.k);   // null = Unavailable (BloomFlex V2)
                         return (
                           <div key={sh.k}
                             onDragOver={(e) => allowOn(e, mc, sh.k)}
@@ -365,24 +402,31 @@ export default function DailyBoard({ embedded = false }) {
                             onDragLeave={() => leaveZone(mc, sh.k)}
                             onDrop={(e) => onDropMachine(e, mc, sh.k)}
                             aria-label={`${mc.code} Shift ${sh.k}`}
-                            style={{ borderRadius: 8, padding: 6, marginBottom: 6, minHeight: 54,
+                            className={'board-zone' + (winText === null ? ' pl-off' : '')}
+                            style={{
                               // Issues 2.5: the zone under the pointer is unmistakable — a solid
                               // green frame on a tinted ground, instead of the dashed grey it
-                              // wore whether or not the drop would land.
-                              border: hot ? '2px solid var(--g)' : '1px dashed var(--bd)',
-                              background: hot ? 'var(--gl)' : sh.k === 'B' ? '#f4f4fb' : 'transparent',
+                              // wore whether or not the drop would land. A shift with no window
+                              // is hatched (V2 "not available"); the rest are dashed drop lanes.
+                              border: hot ? '2px solid var(--g)' : winText === null ? undefined : '1px dashed #d6e0ed',
+                              background: hot ? 'var(--gl)' : winText === null ? undefined : sh.k === 'A' ? '#fff' : '#fafbff',
                               transition: 'background .12s, border-color .12s' }}>
-                            <div className="pg-sub" style={{ marginBottom: 4, fontWeight: 600 }}>{sh.k === 'A' ? '🌞' : '🌙'} {sh.label}</div>
+                            <div className="pl-shift-head">
+                              <span>{sh.k === 'A' ? '🌞' : '🌙'} {sh.label}
+                                {winText === null ? <span className="tag tr" style={{ marginLeft: 4 }}>Unavailable</span>
+                                  : winText ? <span style={{ fontWeight: 400 }}> · {winText}</span> : null}</span>
+                            </div>
                             {jobs.length === 0 ? (
-                              <div className="pg-sub" style={{ margin: 0, fontStyle: 'italic', color: hot ? 'var(--g)' : undefined, fontWeight: hot ? 700 : undefined }}>
+                              <div className="pl-empty" style={{ fontStyle: 'italic', color: hot ? 'var(--g)' : undefined, fontWeight: hot ? 700 : undefined }}>
                                 {hot ? '⤵ Release to plan here' : 'Drop an SO here'}
                               </div>
                             ) : jobs.map((j) => (
                               <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)} onDragEnd={endDrag}
                                 title={j.changed ? 'Changed after the plan was saved' : undefined}
-                                style={{ border: j.changed ? '2px solid #c9a100' : '1px solid var(--bd)', borderRadius: 8, padding: '6px 8px', marginBottom: 6, cursor: 'grab', background: j.changed ? '#fff8e1' : 'var(--gl)' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-                                  <span><span className="so-pill">{j.so}</span> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}</span>
+                                className={'board-job' + (j.changed ? ' chg' : '')}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
+                                  <span><b className="pl-so">{j.so}</b> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}
+                                    {j.planStatus === 'DRAFT' && <span className="tag ty" style={{ marginLeft: 4, fontSize: 9 }} title="Auto-planner draft — publish it from the 3-Day Planner tab">Draft</span>}</span>
                                   <span style={{ whiteSpace: 'nowrap' }}>
                                     <button className="btn btn-s" title="up" onClick={() => bump(mc.id, j.id, -1)}>↑</button>
                                     <button className="btn btn-s" title="down" onClick={() => bump(mc.id, j.id, 1)}>↓</button>
@@ -415,7 +459,7 @@ export default function DailyBoard({ embedded = false }) {
                 })}
                 {list.length === 0 && <div className="al al-b">No machines.</div>}
               </div>
-            </div>
+            </section>
           ))}
           {machines.length === 0 && <div className="card"><div className="al al-b">No machines configured. Add them in Master Data.</div></div>}
         </div>
@@ -428,7 +472,7 @@ export default function DailyBoard({ embedded = false }) {
       <Modal open={!!drop} title={drop ? `Plan ${drop.so} — ${drop.machine.code}, Shift ${drop.shift || 'A'} (${drop.shift === 'B' ? 'night' : 'day'})` : 'Plan quantity'} onClose={() => setDrop(null)}>
         {drop && <DropForm drop={drop} onCancel={() => setDrop(null)} onSubmit={doAssign} />}
       </Modal>
-    </div>
+    </V2Page>
   );
 }
 
