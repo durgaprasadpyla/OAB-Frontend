@@ -425,7 +425,8 @@ export default function DailyBoard({ embedded = false }) {
                                 title={j.changed ? 'Changed after the plan was saved' : undefined}
                                 className={'board-job' + (j.changed ? ' chg' : '')}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
-                                  <span><b className="pl-so">{j.so}</b> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}</span>
+                                  <span><b className="pl-so">{j.so}</b> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}
+                                    {j.planStatus === 'DRAFT' && <span className="tag ty" style={{ marginLeft: 4, fontSize: 9 }} title="Auto-planner draft — publish it from the 3-Day Planner tab">Draft</span>}</span>
                                   <span style={{ whiteSpace: 'nowrap' }}>
                                     <button className="btn btn-s" title="up" onClick={() => bump(mc.id, j.id, -1)}>↑</button>
                                     <button className="btn btn-s" title="down" onClick={() => bump(mc.id, j.id, 1)}>↓</button>

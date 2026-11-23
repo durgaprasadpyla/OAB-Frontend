@@ -5,6 +5,7 @@ import { today } from '../lib/format.js';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 import MachineHoursPanel from '../components/MachineHoursPanel.jsx';
 import MachineCalendar from '../components/MachineCalendar.jsx';
+import ThreeDayPlanner from '../components/ThreeDayPlanner.jsx';
 import WeeklyPlanner from './WeeklyPlanner.jsx';
 import DailyBoard from './DailyBoard.jsx';
 import { V2Page } from '../components/V2Ui.jsx';
@@ -28,6 +29,7 @@ const PPC_TABS = [
   { k: 'dash', label: '📊 Dashboard' },
   { k: 'avail', label: '🕐 Machine Availability' },
   { k: 'calendar', label: '📅 Machine Calendar' },   // BloomFlex V2: shift windows
+  { k: 'auto3', label: '⚙ 3-Day Planner' },          // BloomFlex V2: auto draft → publish
   { k: 'weekly', label: '🗓 Weekly Plan' },
   { k: 'daily', label: '📋 Daily Planning' },
   { k: 'machinewise', label: '🏭 Machine-wise Planning' },
@@ -90,6 +92,7 @@ export default function PpcDashboard({ embedded = false }) {
 
       {tab === 'avail' && <MachineHoursPanel withWeekPicker />}
       {tab === 'calendar' && <MachineCalendar />}
+      {tab === 'auto3' && <ThreeDayPlanner />}
       {tab === 'weekly' && <WeeklyPlanner embedded />}
       {tab === 'daily' && <DailyBoard embedded />}
       {tab === 'machinewise' && <MachineWisePanel />}
