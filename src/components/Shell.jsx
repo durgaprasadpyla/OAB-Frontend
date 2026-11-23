@@ -46,7 +46,7 @@ const ROLE_BAR = {
 
 
 /**
- * BloomFlex V2 frame for a single-screen role: the prototype's orange top bar (brand,
+ * BloomFlex V2 frame for a single-screen role: the brand-blue top bar (brand,
  * the role's workspace name, view-as / user, Sign Out) and, when the role has more
  * than one screen, a white tab bar with its links. Same links, same actions as the
  * old coloured bar (`cfg.bg` is no longer drawn — every login shares the V2 frame).

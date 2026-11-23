@@ -1,19 +1,19 @@
-/* BloomFlex V2 look everywhere (feat/v2-look): the prototype's app frame — orange
+/* BloomFlex V2 look everywhere (feat/v2-look): the prototype's app frame — brand-blue
    top bar + white tab bar — and a page-wide re-skin. The body (.oab-main) carries
    `.v2 .v2-app`, so the design kit in v2.css re-skins every screen's cards, tags,
    buttons, alerts, fields and tables; the rules below cover what the kit does not:
    the classic page title / sub-title and the classic stat tiles. Look only — no text is added. */
 
 /* ── frame ─────────────────────────────────────────────────────────────── */
-.v2-top{background:linear-gradient(100deg,#a9480a 0%,#c85b14 45%,#df762c 100%);color:#fff;min-height:58px;padding:8px 22px;
+.v2-top{background:#0e6fb8;color:#fff;min-height:58px;padding:8px 22px;
   display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:200;
-  box-shadow:0 2px 10px rgba(120,50,5,.18)}
+  box-shadow:0 2px 10px rgba(14,111,184,.20)}
 .v2-brand{display:flex;align-items:center;gap:12px;min-width:0}
 .v2-brand b{font-size:19px;letter-spacing:.6px;font-weight:900;white-space:nowrap}
 .v2-brand .sub{border-left:1px solid rgba(255,255,255,.5);padding-left:12px;font-size:13px;opacity:.95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .v2-top-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.v2-tbtn{background:#fff;color:#7a3a0a;border:0;border-radius:8px;height:30px;padding:0 12px;font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap}
-.v2-tbtn:hover{background:#fff6ee}
+.v2-tbtn{background:#fff;color:#0e6fb8;border:0;border-radius:8px;height:30px;padding:0 12px;font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap}
+.v2-tbtn:hover{background:#eef6fd}
 .v2-pill{font-size:11px;font-weight:700;padding:5px 11px;border-radius:20px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.45);color:#fff;white-space:nowrap}
 .v2-pill.err{background:#fff;color:#b3261e;border-color:#fff}
 .v2-who{font-size:12px;opacity:.95}
