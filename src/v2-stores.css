@@ -34,5 +34,9 @@
 
 /* GRN line table: inputs drawn like the V2 fields; the 9 Stores tabs fit one line at 1366 px */
 .v2 .v2-subnav > *{padding:9px 10px}
-.v2 table.v2-dense td input:not([type=checkbox]):not([type=radio]),.v2 table.v2-dense td select{border:1px solid #d8e2ee;border-radius:6px;min-height:32px;padding:0 7px;background:#fff;color:#263850;max-width:100%;box-sizing:border-box;font-size:12px}
+.v2 table.v2-dense td input:not([type=checkbox]):not([type=radio]),.v2 table.v2-dense td select{border:1px solid #d8e2ee;border-radius:6px;height:34px;min-height:34px;padding:0 7px;background:#fff;color:#263850;width:100%;max-width:100%;min-width:0;box-sizing:border-box;font-size:12px;vertical-align:middle}
+/* every cell's control fills exactly its own column (inputs without a type attribute were left at the
+   browser's default size, so some sat short of the column and others ran into the next one) */
+.v2 table.v2-dense td{vertical-align:top}
+.v2 table.v2-dense td input[type=date]{padding:0 4px}
 .v2 table.v2-dense td input[readonly]{background:#f3f6fa;color:#6b7b91}
