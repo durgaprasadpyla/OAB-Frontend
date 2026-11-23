@@ -1,0 +1,114 @@
+/* BloomFlex V2 design kit — the look of the BloomFlex V2 prototype.
+   EVERYTHING here is scoped under .v2, so only screens wrapped in <V2Page> (or a
+   .v2 element) change; the rest of OAB keeps its own styles. Inside .v2 the usual
+   OAB classes (.card, .ctitle, .btn-g, .btn-s, .tag, .al, .fg, .fbar, tables) are
+   re-skinned to the V2 look, so existing markup picks it up without rewriting. */
+.v2{--v2-blue:#156bd6;--v2-dark:#17243d;--v2-muted:#68788d;--v2-line:#dfe7f1;--v2-bg:#f2f6fb;
+  --v2-green:#148457;--v2-red:#c7353b;--v2-amber:#aa6a09;--v2-shadow:0 4px 18px rgba(22,46,82,.065);--v2-radius:13px;
+  color:var(--v2-dark);font-size:13px;line-height:1.45}
+.v2 h1{font-size:26px;letter-spacing:-.6px;margin:0;font-weight:750;color:var(--v2-dark)}
+.v2 h2{font-size:17px;letter-spacing:-.2px;margin:0;font-weight:700;color:var(--v2-dark)}
+
+/* page heading: breadcrumb overline, big title, subtitle, actions on the right */
+.v2-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;margin-bottom:19px}
+.v2-head p{color:var(--v2-muted);margin:5px 0 0;font-size:13px;max-width:760px}
+.v2-overline{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#74859a;font-weight:800;margin-bottom:4px}
+.v2-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* metric tiles */
+.v2-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:17px}
+.v2-metric{border:1px solid var(--v2-line);background:#fff;border-radius:12px;padding:14px 16px;box-shadow:var(--v2-shadow);min-height:88px;min-width:0}
+.v2-metric .lbl{font-size:11px;color:#5e7088;font-weight:700;margin-bottom:6px}
+.v2-metric strong{display:block;font-size:25px;line-height:1.1;letter-spacing:-.4px;color:var(--v2-dark);overflow-wrap:anywhere}
+.v2-metric strong.good{color:var(--v2-green)}.v2-metric strong.danger{color:var(--v2-red)}.v2-metric strong.warn{color:var(--v2-amber)}.v2-metric strong.blue{color:var(--v2-blue)}
+.v2-metric .detail{font-size:10px;color:#8792a3;margin-top:6px}
+
+/* panels with a title bar */
+.v2-panel,.v2 .card{background:#fff;border:1px solid var(--v2-line);border-radius:var(--v2-radius);box-shadow:var(--v2-shadow);margin-bottom:14px}
+.v2-panel{overflow:hidden}
+.v2 .card{padding:16px 18px}
+.v2-panel-title{padding:14px 17px;border-bottom:1px solid var(--v2-line);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:linear-gradient(#fff,#fbfcff)}
+.v2-panel-title .sub{font-size:11px;color:var(--v2-muted);margin-top:2px}
+.v2-pad{padding:16px 18px}
+.v2 .ctitle{font-size:15px;font-weight:700;color:var(--v2-dark);text-transform:none;letter-spacing:-.1px;margin-bottom:12px}
+.v2 .v2-panel > .card{border:0;box-shadow:none;border-radius:0;margin:0}
+
+/* layouts */
+.v2-grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.v2-main-side{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
+.v2-side-main{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px;align-items:start}
+.v2-stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+.v2-stack > .v2-panel,.v2-stack > .card{margin-bottom:0}
+
+/* badges (and the OAB .tag inside V2 screens) */
+.v2-badge,.v2 .tag{display:inline-flex;align-items:center;border-radius:30px;padding:3px 8px;font-size:11px;font-weight:750;white-space:nowrap;background:#e8f1ff;color:#1a69be}
+.v2-badge.green,.v2 .tag.tg{background:#e0f7e9;color:#15784a}
+.v2-badge.red,.v2 .tag.tr{background:#ffe6e6;color:#b82d36}
+.v2-badge.amber,.v2 .tag.ty{background:#fff1d7;color:#9b6204}
+.v2-badge.blue,.v2 .tag.tb{background:#e5f0ff;color:#2368ba}
+.v2-badge.gray,.v2 .tag.tgr{background:#edf0f5;color:#566377}
+.v2-demo{background:#fff4d6;color:#8a5a00;border:1px solid #f2d690;border-radius:6px;padding:5px 9px;font-size:11px;font-weight:800;letter-spacing:.2px}
+
+/* buttons */
+.v2 .btn{border-radius:8px;font-size:12px;font-weight:700;min-height:34px;padding:0 13px;gap:6px}
+.v2 .btn-s{background:#fff;color:#36465f;border:1px solid #d6e0ed}
+.v2 .btn-s:hover:not(:disabled){border-color:#9ebcdb;background:#fff;box-shadow:0 2px 10px #1d6fd014}
+.v2 .btn-g{background:#0966cd;color:#fff;border:1px solid #0966cd}
+.v2 .btn-g:hover:not(:disabled){background:#0055b9}
+.v2 .btn-r{background:#fff0f0;color:#b72a30;border:1px solid #ffd1d1}
+.v2 .btn:disabled{opacity:.55}
+.v2 .btn-ok{background:#0b8054;color:#fff;border:1px solid #0b8054}
+
+/* callouts */
+.v2 .al{border-radius:10px;font-size:12px;padding:11px 14px}
+.v2 .al-b,.v2-note.blue{background:#eef6ff;border:1px solid #cfe2fb;color:#244a77}
+.v2 .al-y,.v2-note{background:#fff9ea;border:1px solid #f2dfaf;color:#6c4b06}
+.v2 .al-g{background:#e9f8f0;border:1px solid #bfe6cf;color:#13643e}
+.v2 .al-r{background:#fff1f1;border:1px solid #ffcfcf;color:#8a2228}
+.v2-note{border-radius:10px;padding:11px 14px;font-size:12px;margin-bottom:14px}
+
+/* form fields */
+.v2 .fg label{color:#65758b;font-size:11px;font-weight:750}
+.v2 .fg input,.v2 .fg select,.v2 .fbar input,.v2 .fbar select{border:1px solid #d8e2ee;border-radius:7px;min-height:36px;height:36px;color:#263850;background:#fff}
+.v2 .fg input:focus,.v2 .fg select:focus,.v2 .fbar input:focus,.v2 .fbar select:focus{border-color:var(--v2-blue);box-shadow:0 0 0 3px #177af31b}
+.v2 .fg input[readonly]{background:#f3f6fa;color:#6b7b91}
+
+/* tables */
+.v2 table{border-collapse:collapse;width:100%;font-size:12px}
+.v2 thead th{background:#f6f8fb;font-size:10px;text-transform:uppercase;letter-spacing:.35px;font-weight:800;color:#62728a;padding:11px 12px;border-bottom:1px solid var(--v2-line)}
+.v2 tbody td{padding:10px 12px;border-bottom:1px solid #e9eef4;vertical-align:middle}
+.v2 .tw{border:1px solid var(--v2-line);border-radius:10px}
+.v2-panel .tw{border:0;border-radius:0}
+
+/* sub navigation (Stores tabs) */
+.v2-subnav{margin-bottom:17px;background:#fff;border:1px solid var(--v2-line);border-radius:11px;padding:5px;display:flex;flex-wrap:wrap;gap:4px}
+.v2-subnav > *{background:transparent;border:0;color:#718096;padding:9px 12px;border-radius:7px;font-weight:700;font-size:12px;cursor:pointer}
+.v2-subnav > .on{background:#eaf3ff;color:#1769c8}
+
+/* stepper + timeline */
+.v2-stepper{display:flex;gap:5px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.v2-stepper span{background:#f2f6fc;padding:7px 11px;border-radius:25px;color:#66768b;font-weight:700;font-size:11px}
+.v2-stepper span.on{background:#e8f2ff;color:#1465c6}
+.v2-timeline{display:flex;gap:5px;justify-content:space-between;margin-top:12px}
+.v2-timeline > *{flex:1;text-align:center;border-top:3px solid #dce5f0;padding-top:5px;font-size:10px;color:#8390a3}
+.v2-timeline > .done{border-top-color:#13a76e;color:#187e53}
+.v2-timeline > .on{border-top-color:#246bd4;color:#2364b9}
+
+/* list rows (side panels) */
+.v2-list{list-style:none;padding:0;margin:0}
+.v2-list > li{padding:11px 16px;border-bottom:1px solid #edf0f5;font-size:12px}
+.v2-list > li:last-child{border-bottom:0}
+.v2-list > li b{display:block;font-size:12px}
+.v2-empty{color:#8492a5;text-align:center;padding:26px 12px;font-size:12px}
+.v2-progress{height:6px;background:#e4ecf6;border-radius:6px;overflow:hidden}
+.v2-progress > span{display:block;height:100%;background:#2b7fe0}
+.v2-progress.green > span{background:#13a76e}
+
+/* hero banner (Overview) */
+.v2-hero{background:linear-gradient(110deg,#123a6b,#1a5aa3 60%,#2c84c9);color:#fff;border-radius:var(--v2-radius);padding:24px 28px;display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:17px;flex-wrap:wrap}
+.v2-hero h1{color:#fff;font-size:25px;margin-bottom:5px}
+.v2-hero p{color:#d4e6fa;margin:0}
+
+@media (max-width:1250px){.v2-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.v2-main-side{grid-template-columns:1fr}}
+@media (max-width:900px){.v2-grid2,.v2-side-main{grid-template-columns:1fr}}
+@media (max-width:740px){.v2-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.v2 h1{font-size:21px}}

@@ -239,13 +239,14 @@ describe('Stores — allocating a roll to an order from the desk (P3)', () => {
     await openIssues();
     await pickItem();
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '100' } });
+    // BloomFlex V2: the quantity is the whole roll - read-only
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(200));
     const allocate = screen.getByLabelText('Allocate BLMU-592 to 26/656');
     expect(allocate).toHaveTextContent('📌 Allocate to 26/656');
     fireEvent.click(allocate);
     await waitFor(() => expect(posted.some((p) => p.u.endsWith('/api/stores/allocations') && p.method === 'POST')).toBe(true));
-    expect(posted.find((p) => p.method === 'POST').body).toEqual({ so: '26/656', unitId: 592, qty: 100, department: 'Printing' });
-    expect(await screen.findByText(/BLMU-592 · 100 Kg allocated to 26\/656 — held for this order until it is issued or released/)).toBeInTheDocument();
+    expect(posted.find((p) => p.method === 'POST').body).toEqual({ so: '26/656', unitId: 592, qty: 200, department: 'Printing' });
+    expect(await screen.findByText(/BLMU-592 · 200 Kg allocated to 26\/656 — held for this order until it is issued or released/)).toBeInTheDocument();
 
     // the banner re-reads, and names the desk as the one that allocated it
     const banner = screen.getByLabelText('Material allocated to 26/656');
@@ -354,58 +355,47 @@ async function issueAndRead() {
   return posted.find((p) => p.u.includes('/api/stores/issues/batch')).body;
 }
 
-describe('Stores — the slip never names a roll twice (review A1)', () => {
-  it('a held roll put on the slip from the Roll list IS on the slip — Put on slip cannot add it again', async () => {
+describe('Stores — a roll goes on the slip whole (BloomFlex V2; was review A1)', () => {
+  it('a roll partly held for ANOTHER order cannot go out whole — from the Roll list or from Put on slip', async () => {
     partialHold();
     await openIssues();
     await pickItem();
-    // the part hold is preselected, with what is held for the order
     await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('601'));
-    expect(screen.getByLabelText('Quantity')).toHaveValue(100);
+    // the whole roll, not the part held for this order
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(300));
     fireEvent.click(screen.getByText('＋ Add to slip'));
+    expect(await screen.findByText(/100 Kg of BLMU-601 is allocated to 26\/701 \(Stores\) — only 200 can be issued to 26\/656/)).toBeInTheDocument();
+    expect(slipRows()).toHaveLength(0);
+    fireEvent.click(putBtn('BLMU-601'));
+    expect(await screen.findByText(/BLMU-601 goes out whole, but 100 of it is allocated to 26\/701 \(Stores\) — release that first/)).toBeInTheDocument();
+    expect(slipRows()).toHaveLength(0);
+  });
+
+  it('Put on slip puts the WHOLE roll on when only this order holds part of it — once', async () => {
+    partialHold();
+    units306 = units306.map((u) => (u.id === 601 ? { ...u, allocated: 100, allocatedTo: ['26/656'], holds: [{ so: '26/656', qty: 100, source: 'PLAN' }] } : u));
+    await openIssues();
+    await waitFor(() => expect(putBtn('BLMU-601')).toBeInTheDocument());
+    fireEvent.click(putBtn('BLMU-601'));
     expect(slipRows()).toHaveLength(1);
-    // the banner reads the slip itself, not only the lines its own button made
+    expect(slipRow('BLMU-601')).toHaveTextContent('300');
     expect(putBtn('BLMU-601')).toHaveTextContent('✓ on slip');
     expect(putBtn('BLMU-601')).toBeDisabled();
-    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 100 }]);
+    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 300 }]);
   });
 
-  it('puts only the REST of a part-taken hold on, onto the roll’s own line — and the picker merges too', async () => {
-    partialHold();
-    await openIssues();
-    await pickItem();
-    await waitFor(() => expect(screen.getByLabelText('Roll')).toHaveValue('601'));
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '40' } });
-    fireEvent.click(screen.getByText('＋ Add to slip'));
-    expect(slipRow('BLMU-601')).toHaveTextContent('40');
-    expect(putBtn('BLMU-601')).toHaveTextContent('↧ Put the rest on slip');
-    expect(putBtn('BLMU-601')).not.toBeDisabled();
-
-    fireEvent.click(putBtn('BLMU-601'));
-    expect(slipRows()).toHaveLength(1);                 // one line of the roll, never two
-    expect(slipRow('BLMU-601')).toHaveTextContent('100');
-    expect(putBtn('BLMU-601')).toHaveTextContent('✓ on slip');
-
-    // more of the same roll from the Roll list joins that line as well
-    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '601' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '50' } });
-    fireEvent.click(screen.getByText('＋ Add to slip'));
-    expect(slipRows()).toHaveLength(1);
-    expect(slipRow('BLMU-601')).toHaveTextContent('150');
-    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 150 }]);
-  });
-
-  it('two picks of a free roll make one line with both quantities', async () => {
+  it('a free roll already on the slip offers nothing more — one line, the whole roll', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await openIssues();
     await pickItem();
-    for (const q of ['50', '30']) {
-      fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
-      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: q } });
-      fireEvent.click(screen.getByText('＋ Add to slip'));
-    }
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(200));
+    fireEvent.click(screen.getByText('＋ Add to slip'));
+    fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '592' } });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(0));
+    fireEvent.click(screen.getByText('＋ Add to slip'));
     expect(slipRows()).toHaveLength(1);
-    expect(slipRow('BLMU-592')).toHaveTextContent('80');
+    expect(slipRow('BLMU-592')).toHaveTextContent('200');
   });
 });
 
@@ -492,61 +482,27 @@ function twoHolds() {
 const puts601 = () => within(screen.getByLabelText('Material allocated to 26/656')).getAllByLabelText('Put BLMU-601 on the slip');
 const releases601 = () => within(screen.getByLabelText('Material allocated to 26/656')).getAllByLabelText('Release BLMU-601 from 26/656');
 
-describe('Stores — two holds of one order on one roll (review F4)', () => {
-  it('one hold on the slip leaves the other still to put on — the roll’s line carries both', async () => {
+describe('Stores — two holds of one order on one roll (review F4, BloomFlex V2 whole rolls)', () => {
+  it('Put on slip takes the whole roll — both holds read as on the slip', async () => {
     twoHolds();
     await openIssues();
     await waitFor(() => expect(puts601()).toHaveLength(2));
     fireEvent.click(puts601()[0]);
-    expect(slipRow('BLMU-601')).toHaveTextContent('100');
-    expect(puts601()[0]).toHaveTextContent('✓ on slip');
-    expect(puts601()[0]).toBeDisabled();
-    // before the fix the WHOLE roll's slip quantity was counted against each hold: B read
-    // "✓ on slip" too, with only 100 of the 200 held on the slip
-    expect(puts601()[1]).toHaveTextContent('↧ Put on slip');
-    expect(puts601()[1]).not.toBeDisabled();
-
-    fireEvent.click(puts601()[1]);
-    expect(slipRows()).toHaveLength(1);                 // one line of the roll, never two
-    expect(slipRow('BLMU-601')).toHaveTextContent('200');
+    expect(slipRows()).toHaveLength(1);
+    expect(slipRow('BLMU-601')).toHaveTextContent('300');
     puts601().forEach((b) => expect(b).toHaveTextContent('✓ on slip'));
+    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 300 }]);
   });
 
-  it('releasing one of them takes only its share off the merged line', async () => {
+  it('releasing either hold takes the roll off the slip whole — no part roll is left behind', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     twoHolds();
     await openIssues();
     await waitFor(() => expect(puts601()).toHaveLength(2));
     fireEvent.click(puts601()[0]);
-    fireEvent.click(puts601()[1]);
-    expect(slipRow('BLMU-601')).toHaveTextContent('200');
-
-    // B is the hold the line does NOT name — before the fix it left all 200 on the slip
+    expect(slipRow('BLMU-601')).toHaveTextContent('300');
     fireEvent.click(releases601()[1]);
-    expect(window.confirm.mock.calls.at(-1)[0]).toContain('100 Kg of the roll\'s line on the slip being built is this allocation\'s');
-    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/8'))).toBe(true));
-    await waitFor(() => expect(slipRow('BLMU-601')).toHaveTextContent('100'));
-    expect(slipRow('BLMU-601')).not.toHaveTextContent('200');
-    await waitFor(() => expect(puts601()).toHaveLength(1));
-    expect(puts601()[0]).toHaveTextContent('✓ on slip');
-    expect((await issueAndRead()).lines).toEqual([{ unitId: 601, qty: 100 }]);
-  });
-
-  it('the line goes on under the hold that is left when the one it names is released', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    twoHolds();
-    await openIssues();
-    await waitFor(() => expect(puts601()).toHaveLength(2));
-    fireEvent.click(puts601()[0]);
-    fireEvent.click(puts601()[1]);
-    // A — the hold the merged line names — first
-    fireEvent.click(releases601()[0]);
-    await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/7'))).toBe(true));
-    await waitFor(() => expect(puts601()).toHaveLength(1));
-    expect(slipRow('BLMU-601')).toHaveTextContent('100');
-    expect(puts601()[0]).toHaveTextContent('✓ on slip');
-    // then B: what is left of the line is B's, so it comes off with it
-    fireEvent.click(releases601()[0]);
+    expect(window.confirm.mock.calls.at(-1)[0]).toContain('it comes off the slip too');
     await waitFor(() => expect(posted.some((p) => p.method === 'DELETE' && p.u.endsWith('/api/stores/allocations/8'))).toBe(true));
     await waitFor(() => expect(slipRows()).toHaveLength(0));
   });

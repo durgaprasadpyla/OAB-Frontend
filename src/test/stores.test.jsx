@@ -393,11 +393,12 @@ describe('Stores — purchase orders, GRN, issues and returns', () => {
     const rollSel2 = await screen.findByLabelText('Roll');
     await waitFor(() => expect([...rollSel2.options].length).toBeGreaterThan(1));
     fireEvent.change(rollSel2, { target: { value: '11' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '150' } });
+    // BloomFlex V2: the roll goes out whole — its full 250 remaining, filled in, not typed
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(250));
     await user.click(screen.getByRole('button', { name: /Add to slip/ }));
     await user.click(screen.getByRole('button', { name: /Issue & print slip/ }));
     await waitFor(() => expect(calls.some((c) => c.u.includes('/api/stores/issues/batch')
-      && c.body.lines[0].unitId === 11 && c.body.lines[0].qty === 150 && c.body.so === '26/500' && c.body.department === 'Printing')).toBe(true));
+      && c.body.lines[0].unitId === 11 && c.body.lines[0].qty === 250 && c.body.so === '26/500' && c.body.department === 'Printing')).toBe(true));
 
     // now the 1200 comes back as a 300 and a 200 — under the codes of those widths
     await user.click(screen.getByText('↙ Receive a return'));

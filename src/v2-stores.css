@@ -1,0 +1,38 @@
+/* BloomFlex V2 — the Stores screens (GRN, issue / return, material on hand, stock
+   reconciliation, stock movement). Scoped under .v2 like ../v2.css; identical copy in
+   every Stores BloomFlex V2 branch. */
+
+/* a table of inputs: less padding so the boxes keep their declared width */
+.v2 table.v2-dense th,.v2 table.v2-dense td{padding:7px 6px}
+
+/* GRN "Receipt summary": a 2 x 2 grid of label / figure pairs */
+.v2-sumgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;padding:6px 17px 12px}
+.v2-sumgrid > div{border-bottom:1px solid #edf0f5;padding:10px 0;min-width:0}
+.v2-sumgrid .lbl{display:block;font-size:11px;color:#65758b}
+.v2-sumgrid b{display:block;font-size:13px;margin-top:3px;overflow-wrap:anywhere}
+
+/* search box sitting in a panel's title bar */
+.v2-panel-title input.v2-search{border:1px solid #d8e2ee;border-radius:7px;height:34px;padding:0 10px;min-width:220px;font-size:12px}
+
+/* figures right-aligned in tables; variance colours */
+.v2 .v2-num{text-align:right;white-space:nowrap}
+.v2 .v2-pos{color:var(--v2-green);font-weight:700}
+.v2 .v2-neg{color:var(--v2-red);font-weight:700}
+
+/* Material on Hand: OAB's .stats / .stat tiles drawn as V2 metric tiles */
+.v2 .stats.v2-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:17px}
+.v2 .stats .stat.v2-metric{background:#fff;border:1px solid var(--v2-line);border-radius:12px;padding:14px 16px;box-shadow:var(--v2-shadow)}
+.v2 .stat.v2-metric .sl{font-size:11px;color:#5e7088;font-weight:700;text-transform:none;letter-spacing:0;margin-bottom:6px}
+.v2 .stat.v2-metric .sv{font-size:25px;line-height:1.1;letter-spacing:-.4px;font-weight:700;overflow-wrap:anywhere}
+.v2 .stat.v2-metric .detail{font-size:10px;color:#8792a3;margin-top:6px}
+@media (max-width:1250px){.v2 .stats.v2-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:740px){.v2 .stats.v2-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* a .card laid out as a V2 panel: the title bar and the table run edge to edge */
+.v2 .card.v2-cardpanel{padding:0;overflow:hidden}
+.v2 .v2-cardpanel > .tw{border:0;border-radius:0}
+
+/* GRN line table: inputs drawn like the V2 fields; the 9 Stores tabs fit one line at 1366 px */
+.v2 .v2-subnav > *{padding:9px 10px}
+.v2 table.v2-dense td input:not([type=checkbox]):not([type=radio]),.v2 table.v2-dense td select{border:1px solid #d8e2ee;border-radius:6px;min-height:32px;padding:0 7px;background:#fff;color:#263850;max-width:100%;box-sizing:border-box;font-size:12px}
+.v2 table.v2-dense td input[readonly]{background:#f3f6fa;color:#6b7b91}
