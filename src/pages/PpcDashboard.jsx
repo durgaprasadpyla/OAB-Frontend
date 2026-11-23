@@ -4,8 +4,11 @@ import { planningApi, reportsApi } from '../api.js';
 import { today } from '../lib/format.js';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 import MachineHoursPanel from '../components/MachineHoursPanel.jsx';
+import MachineCalendar from '../components/MachineCalendar.jsx';
 import WeeklyPlanner from './WeeklyPlanner.jsx';
 import DailyBoard from './DailyBoard.jsx';
+import { V2Page } from '../components/V2Ui.jsx';
+import '../v2-planner.css';
 
 // PPC (Production Planning & Control) landing page — Enhancements 2.0 §62: "Dashboard
 // where planned vs actual will be displayed including the wastages — this will be the
@@ -24,6 +27,7 @@ const sum = (arr, k) => (arr || []).reduce((s, r) => s + Number(r[k] || 0), 0);
 const PPC_TABS = [
   { k: 'dash', label: '📊 Dashboard' },
   { k: 'avail', label: '🕐 Machine Availability' },
+  { k: 'calendar', label: '📅 Machine Calendar' },   // BloomFlex V2: shift windows
   { k: 'weekly', label: '🗓 Weekly Plan' },
   { k: 'daily', label: '📋 Daily Planning' },
   { k: 'machinewise', label: '🏭 Machine-wise Planning' },
@@ -72,19 +76,20 @@ export default function PpcDashboard({ embedded = false }) {
   const changedJobs = useMemo(() => (week.jobs || []).filter((j) => j.changed), [week]);   // §56
 
   return (
-    <div id={embedded ? undefined : 'app'}>
+    <V2Page id={embedded ? undefined : 'app'}>
       {!embedded && <div className="pg-ttl">📊 PPC — Production Planning Dashboard</div>}
       {!embedded && <div className="pg-sub">Your at-a-glance view of planned vs actual and wastage. Plan and re-sequence machine jobs from the Weekly Plan and Daily Planning tabs.</div>}
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
 
-      {/* C1: the five PPC tabs from the requirements doc */}
-      <div className="step-bar" style={{ marginBottom: 10 }}>
+      {/* C1: the five PPC tabs from the requirements doc — V2 pill sub-navigation */}
+      <div className="v2-subnav" role="tablist" aria-label="PPC workspace">
         {PPC_TABS.map((t) => (
-          <button key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} onClick={() => setTab(t.k)}>{t.label}</button>
+          <button key={t.k} type="button" role="tab" aria-selected={tab === t.k} className={tab === t.k ? 'on' : undefined} onClick={() => setTab(t.k)}>{t.label}</button>
         ))}
       </div>
 
       {tab === 'avail' && <MachineHoursPanel withWeekPicker />}
+      {tab === 'calendar' && <MachineCalendar />}
       {tab === 'weekly' && <WeeklyPlanner embedded />}
       {tab === 'daily' && <DailyBoard embedded />}
       {tab === 'machinewise' && <MachineWisePanel />}
@@ -192,7 +197,7 @@ export default function PpcDashboard({ embedded = false }) {
         )}
       </div>
       </>)}
-    </div>
+    </V2Page>
   );
 }
 

@@ -286,18 +286,21 @@ describe('PPC daily board (§5, §6)', () => {
     });
   });
 
-  it('puts the machines above the pool of sale orders (§6)', async () => {
+  // BloomFlex V2 supersedes §6's "machines above the pool": the Ready to Plan pool is a
+  // sticky LEFT column beside the machines (the V2 design). It still never scrolls away
+  // from the shift a card is dragged onto — the reason §6 / Issues 3.0 moved it.
+  it('keeps the Ready to Plan pool in a sticky left column beside the machines (BloomFlex V2)', async () => {
     const { default: DailyBoard } = await import('../pages/DailyBoard.jsx');
     const { container } = render(<DailyBoard embedded />);
     await screen.findByText('Printing');
-    // The pool and the machine column live in one stacked container; CSS `order`
-    // decides which is read first, and the machines must be first.
-    const pool = screen.getByText('Ready to Plan').closest('.card');
-    const machines = screen.getByText('Printing').closest('div[style]');
-    expect(pool.style.order).toBe('2');
-    expect(container.querySelector('div[style*="order: 1"]')).toBeTruthy();
-    expect(machines).toBeTruthy();
-    // …and the tip points the operator upwards, not sideways.
+    expect(screen.getByText('Ready to Plan')).toBeTruthy();
+    const queue = screen.getByRole('complementary', { name: 'Ready to Plan' });
+    expect(queue).toHaveClass('board-queue');
+    const shell = container.querySelector('.board-shell');
+    expect(shell.firstElementChild).toBe(queue);                 // queue first = left column
+    expect(shell.contains(screen.getByText('Printing'))).toBe(true);
+    expect(queue.textContent).toContain('26/697');
+    // …and the tip keeps its original wording.
     expect(screen.getByText(/drag a card straight up onto a machine/)).toBeTruthy();
   });
 
