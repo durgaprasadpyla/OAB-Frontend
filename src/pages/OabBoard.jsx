@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useData } from '../data.jsx';
 import { jssApi, ordersApi } from '../api.js';
+import { V2Page, V2Panel } from '../components/V2Ui.jsx';
+import '../v2-orders.css';
 import { useApi } from '../lib/useApi.js';
 import { balance, calcMetres, kgFromMetres, num } from '../lib/calc.js';
 import { dash, fmtDate, inr } from '../lib/format.js';
@@ -282,12 +284,12 @@ export default function OabBoard() {
   });
 
   return (
-    <div id="app">
+    <V2Page id="app" className="v2-orders">
       <div className="pg-ttl">OAB — Order &amp; Production Balance</div>
       <div className="pg-sub">Live view of all open orders. Printable for production floor.</div>
       {rowsError && <div className="al al-r" style={{ margin: '8px 0' }}>Failed to load orders: {rowsError}</div>}
 
-      <div className="fbar">
+      <div className="fbar v2o-tools">
         <select value={sheet} aria-label="Sheet" onChange={(e) => setSheet(e.target.value)}>
           <option value="SF">Stay Fresh OAB</option><option value="OT">Others OAB</option>
         </select>
@@ -329,10 +331,11 @@ export default function OabBoard() {
             />
           </div>
 
-          <div className="al al-g" style={{ fontSize: 11, padding: '6px 13px', marginBottom: 6 }}>
+          <div className="al al-g v2o-wastage">
             📏 Metres shown include <strong>&nbsp;5% wastage allowance</strong>
           </div>
 
+          <V2Panel className="v2o-reg">
           <div className="tw sy" ref={tableRef}>
             <table>
               <thead>
@@ -400,9 +403,10 @@ export default function OabBoard() {
               </tbody>
             </table>
           </div>
+          </V2Panel>
         </>
       )}
-    </div>
+    </V2Page>
   );
 }
 

@@ -8,6 +8,11 @@ import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
 import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
 import { ArtworkButton } from '../components/Artwork.jsx';
+import { useAuth } from '../auth.jsx';
+import { BomCell, MaterialCell } from '../components/BomApproval.jsx';
+import { bomApprovalApi, canApproveBom, bomPending, readyRefusal } from '../lib/bomApprovalApi.js';
+import { V2Page, V2Metrics, V2Panel } from '../components/V2Ui.jsx';
+import '../v2-plan.css';
 
 // PLAN landing page — Enhancements 2.0 §46-56. Against each open sale order the
 // readiness gatekeeper picks: Ready to plan (entire / partial SO with metres), or
@@ -36,6 +41,11 @@ const REASON_LABEL = { PLATES: 'Plates', MATERIAL: 'Material', OTHERS: 'Others' 
 
 export default function PlanReadiness() {
   const { mods } = useData();
+  // rendered without an AuthProvider in some older tests — no role then
+  const { role } = useAuth() || {};
+  // BloomFlex V2: BOM approval gates Ready to Plan; the Super Admin may override.
+  const isSA = role === 'superadmin';
+  const mayApprove = canApproveBom(role);
   const [board, setBoard] = useState([]);        // /readiness rows keyed by SO
   // Issues 17.10 §6: the action bar's inline form — '' | 'PARTIAL' | 'NOTREADY'.
   const [act, setAct] = useState('');
@@ -161,14 +171,35 @@ export default function PlanReadiness() {
       flash(okMsg);
       setAct('');
       await loadBoard();
-    } catch (e) { setErr(e.message || `Could not update ${so}`); }
+    } catch (e) { setErr(readyRefusal(e) || `Could not update ${so}`); }
     finally { setBusy(''); }
+  }
+
+  // BloomFlex V2: approve the BOM of an order (from the board's BOM column or the panel).
+  async function approveBom(so, note) {
+    setErr('');
+    setBusy(so);
+    try {
+      await bomApprovalApi.approve(so, note);
+      flash(`${so}: BOM approved`);
+      await loadBoard();
+    } catch (e) { setErr(e.message || `Could not approve the BOM of ${so}`); }
+    finally { setBusy(''); }
+  }
+
+  // The gate, as the board shows it: pending BOM => Full / Partial locked, except for
+  // the Super Admin, who is asked to confirm the override.
+  function bomGateOk(so) {
+    if (!bomPending(stateBySo[so])) return true;
+    if (!isSA) { setErr(`${so}: BOM not approved — approve the BOM before marking it Ready to Plan`); return false; }
+    return window.confirm(`The BOM of ${so} is not approved. Override and mark it Ready to Plan anyway?`);
   }
 
   function markFull() {
     if (!pickedRow) return;
     const so = pickedRow.so;
     setErr('');
+    if (!bomGateOk(so)) return;
     send(so, () => planningApi.setReady(so, true, 'COMPLETE', undefined), `${so}: Ready to Plan — Entire SO`);
   }
 
@@ -186,6 +217,7 @@ export default function PlanReadiness() {
       setErr(`${so}: metres ready cannot exceed the ${Math.round(jobMetres).toLocaleString('en-IN')} m this order runs to`);
       return;
     }
+    if (!bomGateOk(so)) return;
     send(so, () => planningApi.setReady(so, true, 'PARTIAL', qty), `${so}: Ready to Plan — Partial (${qty} m)`);
   }
 
@@ -218,40 +250,47 @@ export default function PlanReadiness() {
 
   const noPick = !pickedRow;
   const saving = !!pickedRow && busy === pickedRow.so;
+  // BloomFlex V2: Full / Partial locked while the picked order's BOM is pending (SA: override).
+  const bomLocked = !!pickedRow && bomPending(pickedState);
+  const bomLockTip = bomLocked
+    ? (isSA ? 'BOM not approved — as Super Admin you may override (you will be asked to confirm)'
+      : 'BOM not approved — approve the BOM first')
+    : undefined;
   const barBtn = { height: 28, fontSize: 12 };
   // With an order picked, its messages show in the action bar the user is looking at
   // (the board can sit a long scroll below the page title).
   const msgInBar = !!pickedRow;
 
   return (
-    <div id="app">
+    <V2Page id="app" className="v2-plan">
       <div className="pg-ttl">✅ Planning — Ready to Plan</div>
       <div className="pg-sub">Pick the radio button against a sale order, then use the buttons above the table to mark it Ready to Plan (full / partial SO), or record why it is not ready (plates / material / others) with the tentative ready date. Download the weekly / daily plans the PPC has saved.</div>
       {!msgInBar && err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
       {!msgInBar && msg && <div className="al al-g" style={{ margin: '8px 0' }}>{msg}</div>}
 
-      <div className="stats">
-        <div className="stat"><div className="sl">Open sale orders</div><div className="sv">{openRows.length}</div></div>
-        <div className="stat"><div className="sl">Ready to Plan</div><div className="sv" style={{ color: '#1e7e34' }}>{readyCount}</div></div>
-        <div className="stat"><div className="sl">Not ready (with reason)</div><div className="sv" style={{ color: '#c0392b' }}>{notReadyCount}</div></div>
-        <div className="stat"><div className="sl">Unmarked</div><div className="sv">{openRows.length - readyCount - notReadyCount}</div></div>
-      </div>
+      <V2Metrics className="v2-metrics v2-m4" items={[
+        { key: 'open', label: 'Open sale orders', value: openRows.length },
+        { key: 'ready', label: 'Ready to Plan', value: readyCount, tone: 'good' },
+        { key: 'nr', label: 'Not ready (with reason)', value: notReadyCount, tone: 'danger' },
+        { key: 'un', label: 'Unmarked', value: openRows.length - readyCount - notReadyCount },
+      ]} />
 
       {/* The picked order's material — above the board, per §5. */}
       {pickedRow && (
-        <div className="card" id="plan-material-panel" style={{ marginTop: 12 }} aria-label="Material for the picked sale order">
-          <div className="fbar" style={{ flexWrap: 'wrap' }}>
-            <div className="ctitle" style={{ margin: 0 }}>
+        <V2Panel id="plan-material-panel" style={{ marginTop: 12 }} aria-label="Material for the picked sale order"
+          title={(
+            <h2>
               Material for <span className="so-pill">{pickedRow.so}</span>
               <span className="tag tb" style={{ marginLeft: 8, fontSize: 9 }}>{pickedRow.spec}</span>
               <span style={{ fontWeight: 400, color: 'var(--i3)', marginLeft: 8, fontSize: 11 }}>
                 {pickedRow.customer} · {pickedRow.sku}
               </span>
-            </div>
-            <span style={{ flex: 1 }} />
+            </h2>
+          )}
+          right={(
             <button className="btn btn-s" style={{ height: 26, fontSize: 11 }}
               aria-label="Close the material panel" onClick={() => setMatFor('')}>✕ Close</button>
-          </div>
+          )}>
           {/* 30.09: the BOM is scaled on the ORDER quantity, not the balance — what has
               been issued to an order is a lifetime figure, and the stores desk and the
               server's BOM cap measure it against the whole order too. */}
@@ -265,27 +304,29 @@ export default function PlanReadiness() {
             material={pickedRow.substrate}
             soQty={num(pickedRow.poQty)}
             onChange={loadBoard}
+            approval={pickedState && pickedState.bomApproved != null ? pickedState : undefined}
+            canApprove={mayApprove}
+            onApprove={approveBom}
           />
-        </div>
+        </V2Panel>
       )}
 
       {/* Readiness list (§46-54) */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <div className="fbar" style={{ flexWrap: 'wrap' }}>
-          <div className="ctitle" style={{ margin: 0 }}>Sale orders <span className="tag ty">{visibleRows.length}</span></div>
+      <V2Panel style={{ marginTop: 12 }} title={<h2>Sale orders <span className="tag ty">{visibleRows.length}</span></h2>}
+        right={(
+          <>
           <input placeholder="Search SO / customer / spec / SKU…" value={q} aria-label="Search sale orders"
             onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
           <select value={specFil} onChange={(e) => setSpecFil(e.target.value)} aria-label="Filter by spec">
             <option value="">All specs</option>
             {specOptions.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
           </select>
-        </div>
+          </>
+        )}>
         {/* Issues 17.10 §6: the action bar — directly on top of the board's scroll box,
             so it always sits with the table header while the rows scroll beneath. */}
         {openRows.length > 0 && (
-          <div role="toolbar" aria-label="Ready to Plan actions"
-            style={{ background: noPick ? 'var(--bg)' : '#fff8e1', border: '1px solid var(--bd)', borderBottom: 'none',
-              borderRadius: '8px 8px 0 0', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div role="toolbar" aria-label="Ready to Plan actions" className={'v2-ready-bar' + (noPick ? '' : ' picked')}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               {noPick ? (
                 <span style={{ fontSize: 12, color: 'var(--i3)' }}>Pick the radio button against a sale order to mark it Ready to Plan.</span>
@@ -299,9 +340,9 @@ export default function PlanReadiness() {
                 </span>
               )}
               <span style={{ flex: 1 }} />
-              <button className="btn btn-g" style={barBtn} disabled={noPick || saving} onClick={markFull}>✓ Ready to Plan — Full</button>
+              <button className="btn btn-g" style={barBtn} disabled={noPick || saving || (bomLocked && !isSA)} title={bomLockTip} onClick={markFull}>✓ Ready to Plan — Full</button>
               <button className="btn btn-s" style={{ ...barBtn, ...(act === 'PARTIAL' ? { borderColor: 'var(--g)', color: 'var(--g)' } : null) }}
-                disabled={noPick || saving} aria-pressed={act === 'PARTIAL'}
+                disabled={noPick || saving || (bomLocked && !isSA)} title={bomLockTip} aria-pressed={act === 'PARTIAL'}
                 onClick={() => setAct(act === 'PARTIAL' ? '' : 'PARTIAL')}>◐ Ready to Plan — Partial</button>
               {pickedState?.readyToPlan && (
                 <button className="btn btn-s" style={barBtn} disabled={saving} onClick={clearReady}>Clear Ready</button>
@@ -362,11 +403,12 @@ export default function PlanReadiness() {
               <th style={rt}>PO Qty</th><th style={rt}>Dispatched</th><th style={rt}>Balance</th>
               <th>Substrate</th><th style={rt}>Film W</th><th style={rt}>Thick (mic)</th><th style={rt}>GSM</th>
               <th style={rt}>Pouch W</th><th style={rt}>Pouch H</th><th style={rt}>Total Kg</th><th style={rt}>Total Mt</th>
+              <th>BOM</th><th>Material</th>
               <th>Readiness</th>
             </tr></thead>
             <tbody>
               {visibleRows.length === 0 && (
-                <tr><td colSpan={18} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
+                <tr><td colSpan={20} style={{ textAlign: 'center', padding: 18, color: 'var(--i3)' }}>No sale orders match</td></tr>
               )}
               {visibleRows.map((r) => {
                 const cur = stateBySo[r.so];
@@ -399,6 +441,8 @@ export default function PlanReadiness() {
                     <td style={rt}>{r.pouchH || '—'}</td>
                     <td style={rt}>{r.totalKg ? r.totalKg.toFixed(1) : '—'}</td>
                     <td style={rt}>{r.totalMt ? Math.round(r.totalMt).toLocaleString('en-IN') : '—'}</td>
+                    <td><BomCell so={r.so} state={cur} canApprove={mayApprove} busy={busy === r.so} onApprove={(so) => approveBom(so)} /></td>
+                    <td><MaterialCell so={r.so} state={cur} /></td>
                     <td>{statusTag(cur)}</td>
                   </tr>
                   </Fragment>
@@ -407,7 +451,7 @@ export default function PlanReadiness() {
             </tbody>
           </table></div>
         )}
-      </div>
+      </V2Panel>
 
       {/* 19.11: "remove the department-wise BOM … just show the list of sale orders directly" —
           the sale orders come first; the plan downloads, wastage and plan changes follow them. */}
@@ -419,8 +463,8 @@ export default function PlanReadiness() {
 
       {/* §56: changes to an already-saved plan, clearly visible */}
       {changes.length > 0 && (
-        <div className="card" style={{ marginTop: 12, borderLeft: '4px solid #c9a100' }}>
-          <div className="ctitle">⚠ Plan changes this week <span className="tag ty">{changes.length}</span></div>
+        <V2Panel title={<h2>⚠ Plan changes this week <span className="tag ty">{changes.length}</span></h2>}
+          style={{ marginTop: 12, borderLeft: '4px solid #c9a100' }}>
           <div className="tw sy" style={{ maxHeight: 220 }}><table>
             <thead><tr><th>Date</th><th>Shift</th><th>Sale Order</th><th>Department</th><th>Machine</th><th>Qty</th><th>Start–End</th></tr></thead>
             <tbody>{changes.map((j) => (
@@ -431,8 +475,8 @@ export default function PlanReadiness() {
                 <td>{j.plannedQty}</td><td>{j.startTime || '—'}–{j.endTime || '—'}</td>
               </tr>))}</tbody>
           </table></div>
-        </div>
+        </V2Panel>
       )}
-    </div>
+    </V2Page>
   );
 }
