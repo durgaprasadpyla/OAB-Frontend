@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth.jsx';
 import { useData } from '../data.jsx';
+import '../v2.css';
+import '../v2-stores.css';
 import { GrnEditor } from '../components/GrnAdmin.jsx';
 import { PurchaseOrders } from '../components/PurchaseOrdersTab.jsx';
 import { isOpenPo, poStatus } from '../lib/poLines.js';
@@ -13,6 +15,9 @@ import { parseWidthMm, itemWidthMm, unitWidthMm } from '../lib/itemWidth.js';
 import { saveIssueSlipPdf } from '../lib/issueSlipPdf.js';
 import { useFreshModule } from '../lib/useFreshModule.js';
 import StoresIssueHistory, { HISTORY_LIMIT } from '../components/StoresIssueHistory.jsx';
+import { RollStickerModal, StickerButton } from '../components/RollSticker.jsx';
+import RollScanBox from '../components/RollScanBox.jsx';
+import { rollStickerApi } from '../lib/rollStickerApi.js';
 import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, isInk, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
 
 // Stores Login. Four desks, in the order the day runs:
@@ -75,12 +80,13 @@ export default function Stores() {
   }, []);
 
   return (
-    <div id="app">
+    <div id="app" className="v2">
       <div className="pg-ttl">🏬 Stores</div>
       <div className="pg-sub">Stock on hand, goods receipts, and material issued to (and returned from) the shop floor.</div>
-      <div className="step-bar" style={{ flexWrap: 'wrap' }}>
+      {/* BloomFlex V2: the tabs as the prototype's pill sub-navigation */}
+      <div className="v2-subnav" role="tablist">
         {TABS.map((t) => (
-          <div key={t.k} className={'step-tab' + (tab === t.k ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setTab(t.k)}>{t.label}</div>
+          <div key={t.k} className={tab === t.k ? 'on' : undefined} role="tab" aria-selected={tab === t.k} onClick={() => setTab(t.k)}>{t.label}</div>
         ))}
       </div>
       {msg && <div className={'al al-' + msg.t}>{msg.text}</div>}
@@ -560,6 +566,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                                       title="Cut from another roll — click for the parent roll, the issue line and the return slip"
                                       aria-label={`Where ${u.internalCode} came from`} onClick={() => setTraceOf(u)}>split ↗</button>
                                   ) : null}
+                                  <StickerButton code={u.internalCode} style={{ marginLeft: 4 }} />
                                 </td>
                                 <td style={{ fontSize: 11 }}>{u.supplier || '—'}</td>
                                 <td style={{ fontSize: 11 }}>{u.supplierCode || '—'}</td>
@@ -623,6 +630,7 @@ function UnitTraceModal({ unit, onClose, flash }) {
         <div className="fbar">
           <div className="ctitle" style={{ margin: 0 }}>🔗 {unit.internalCode} — where this roll came from</div>
           <span style={{ flex: 1 }} />
+          <StickerButton code={unit.internalCode} style={{ height: 28, marginRight: 6 }} />
           <button className="btn btn-s" onClick={onClose}>Close</button>
         </div>
         {err && <div className="al al-r">{err}</div>}
@@ -663,7 +671,7 @@ function UnitTraceModal({ unit, onClose, flash }) {
                   <tbody>
                     {t.siblings.map((sb) => (
                       <tr key={sb.id}>
-                        <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{sb.internalCode}</td>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{sb.internalCode} <StickerButton code={sb.internalCode} /></td>
                         <td style={{ fontSize: 11 }}>{sb.itemCode || sb.itemId}</td>
                         <td style={{ textAlign: 'right' }}>{sb.widthMm ? qty(sb.widthMm) : '—'}</td>
                         <td style={{ textAlign: 'right' }}>{qty(sb.qtyRemaining)} {sb.uom || ''}</td>
@@ -833,7 +841,7 @@ function GrnRow({ g, items, open, onToggle, flash, onChanged }) {
   );
 }
 
-const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: '', supplierCode: '', internalCode: '', widthMm: '', expiryDate: '', status: 'MOVING' });
+const blankLine = () => ({ itemId: '', qty: '', uom: '', price: '', location: '', supplierCode: '', batchCode: '', internalCode: '', widthMm: '', expiryDate: '', status: 'MOVING' });
 
 // §12: the supplier is a property of the GRN, not of each line — one GRN is one
 // SKU from one supplier on one despatch.
@@ -864,6 +872,8 @@ function Grn({ flash }) {
   // making a GRN." The next numbers in the sequence, read from the server; each
   // line without a hand-typed code shows the one it will get.
   const [nextCodes, setNextCodes] = useState([]);
+  // BloomFlex V2: the rolls the last receipt created — their stickers are offered at once
+  const [posted, setPosted] = useState(null);
 
   /**
    * Issues 2.4 §9 — every supplier the business buys from, for the header picker.
@@ -1133,6 +1143,7 @@ function Grn({ flash }) {
           itemId: Number(l.itemId), qty: Number(l.qty), uom: l.uom || undefined,
           price: l.price === '' ? undefined : Number(l.price),
           location: l.location || undefined, supplierCode: l.supplierCode || undefined,
+          batchCode: String(l.batchCode || '').trim() || undefined,
           // §12: one supplier for the whole receipt.
           supplier: head.supplier || undefined,
           internalCode: l.internalCode || undefined,
@@ -1150,6 +1161,7 @@ function Grn({ flash }) {
       const poNum = r.poNum || head.poNum;
       const closedNote = r.poStatus === 'Closed' && poNum ? ` ${poNum} is now fully received and closed.` : '';
       flash('g', `✓ ${r.grnNo} received — print stickers for ${codes}.${closedNote}`);
+      if ((r.units || []).length) setPosted({ grnNo: r.grnNo, codes: r.units.map((u) => u.internalCode) });
       setHead({ grnNo: '', poNum: '', supplier: '', grnDate: today(), invoiceNo: '', invoiceDate: '', notes: '' });
       setLines([blankLine()]);
       if (reloadModule) {
@@ -1291,20 +1303,21 @@ function Grn({ flash }) {
             little bit so that, for selecting the location, I need not have a
             horizontal scroll. The item code width also can go down as the item code
             is a maximum of 7 letters." The row now fits a normal desk screen. */}
-        <div className="tw"><table style={{ minWidth: 1195, tableLayout: 'fixed' }}>
+        <div className="tw"><table className="v2-dense" style={{ minWidth: 1195, tableLayout: 'fixed' }}>
           <thead><tr>
             {/* Issues 3.1: "let us not club the item code and item description into
                 one" — the code is picked, the description and the item's material
                 identity read back from the Item Master beside it. */}
-            <th style={{ width: 112 }}>Item Code *</th><th style={{ width: 170 }}>Description</th>
-            <th style={{ width: 140 }}>Material / Sub-Group</th><th style={{ width: 115 }}>Supplier Label Code</th>
-            <th style={{ width: 125 }}>Internal Code</th>
+            <th style={{ width: 112 }}>Item Code *</th><th style={{ width: 130 }}>Description</th>
+            <th style={{ width: 140, whiteSpace: 'normal' }}>Material / Sub-Group</th><th style={{ width: 100, whiteSpace: 'normal' }}>Supplier Label Code</th>
+            <th style={{ width: 90 }}>Batch Code</th>
+            <th style={{ width: 105 }}>Internal Code</th>
             {/* Issues 2.7: the stepper arrows are gone (.nospin), so a 90 px box still
                 shows a five-figure quantity or a four-figure price comfortably. */}
             {/* Issues 3.0: Width is gone — it is fixed on the item in the Item Master,
                 so typing it per receipt could only ever disagree with it. */}
             <th style={{ width: 100 }}>Qty *</th><th style={{ width: 55 }}>UOM</th>
-            <th style={{ width: 100 }}>Price</th><th style={{ width: 125 }}>Location</th>
+            <th style={{ width: 100 }}>Price</th><th style={{ width: 107 }}>Location</th>
             <th style={{ width: 120 }}>Expiry</th><th style={{ width: 36 }}></th>
           </tr></thead>
           <tbody>
@@ -1366,6 +1379,7 @@ function Grn({ flash }) {
                     title="Material type · sub-group · speciality, from the Item Master"
                     style={{ background: 'var(--bg)', color: 'var(--i3)', cursor: 'not-allowed' }} /></td>
                   <td><input value={l.supplierCode} onChange={(e) => setLine(i, { supplierCode: e.target.value })} aria-label={`Supplier code line ${i + 1}`} /></td>
+                  <td><input value={l.batchCode || ''} maxLength={80} placeholder="optional" onChange={(e) => setLine(i, { batchCode: e.target.value })} aria-label={`Batch code line ${i + 1}`} title="The supplier's batch / lot number — printed on the roll sticker" /></td>
                   <td>
                     {/* Stores 5.1: the sticker number this roll will get, shown before the
                         receipt is booked so it can be written on the roll now. Typing a
@@ -1437,6 +1451,11 @@ function Grn({ flash }) {
           </table>
         </div>
       </div>
+      {posted && (
+        <RollStickerModal codes={posted.codes} title={`🏷 ${posted.grnNo} posted · stickers ready`}
+          intro={`${posted.codes.length} physical roll${posted.codes.length === 1 ? '' : 's'} created. Stick each label on its roll before it goes to the rack.`}
+          onClose={() => setPosted(null)} />
+      )}
     </>
   );
 }
@@ -1683,6 +1702,7 @@ function IssuesReturns({ flash }) {
   const [issueSlipPick, setIssueSlipPick] = useState('');
   const [issueLinePick, setIssueLinePick] = useState('');
   const [lastReturn, setLastReturn] = useState(null);
+  const [retStickers, setRetStickers] = useState(null);   // BloomFlex V2: roll codes whose labels to reprint
 
   const loadIssueLines = useCallback(async () => {
     try { setIssueLines((await storesApi.issueLines({ open: 1, limit: 300 })) || []); } catch { setIssueLines([]); }
@@ -2016,6 +2036,56 @@ function IssuesReturns({ flash }) {
   }
 
   /**
+   * BloomFlex V2: a roll's sticker scanned on the ISSUE side. The roll goes in the picker
+   * only when it is one this slip may take — of the item already chosen, and (against a
+   * sale order) of a material on its BOM for the department. Anything else is refused
+   * with the reason; nothing on the form changes.
+   */
+  async function scanIssue(code) {
+    let u;
+    try { u = await rollStickerApi.unitByCode(code); } catch (e) { return e.message; }
+    const label = `${u.internalCode} (${u.itemCode || 'item ' + u.itemId})`;
+    if (num(u.qtyRemaining) <= 0) return `${label} is empty — nothing is left on it to issue.`;
+    if (soChosen && !ctxReady) return `Wait for ${form.so} to load, then scan again.`;
+    if (itemId && String(itemId) !== String(u.itemId)) {
+      return `${label} is not a roll of ${(chosenItem || {}).code || 'the chosen item'} — scan a roll of that item, or clear the item first.`;
+    }
+    if (!pool.some((it) => String(it.id) === String(u.itemId))) {
+      return soChosen
+        ? `${label} is not on the BOM of ${form.so}${form.department ? ` for ${form.department}` : ''} — it cannot be issued against this order.`
+        : `${label} cannot be issued from here — its item is withdrawn or has no stock on the board.`;
+    }
+    if (basket.some((b) => String(b.unitId) === String(u.id))) return `${u.internalCode} is already on this slip.`;
+    if (String(itemId) !== String(u.itemId)) chooseItem(String(u.itemId));
+    setForm((f) => ({ ...f, unitId: String(u.id), qty: String(+num(u.qtyRemaining).toFixed(3)) }));
+    return null;
+  }
+
+  /**
+   * BloomFlex V2: a roll's sticker scanned on the RETURN side. With an issue line picked
+   * the roll must be THAT line's roll — the server checks the same thing. With none, the
+   * roll's own open line is picked (when there is exactly one).
+   */
+  async function scanReturn(code) {
+    const c = String(code || '').trim().toUpperCase();
+    const same = (l) => String(l.internalCode || '').trim().toUpperCase() === c;
+    if (pickedLine) {
+      return same(pickedLine) ? null
+        : `${c} is not the roll of ${pickedLine.lineNo || pickedLine.slipNo} — that line went out on ${pickedLine.internalCode}. Scan that roll, or pick the line ${c} went out on.`;
+    }
+    const open = issueLines.filter(same);
+    if (!open.length) {
+      try { await rollStickerApi.unitByCode(c); } catch (e) { return e.message; }
+      return `${c} has no open issue line — nothing of it is out on the floor to come back.`;
+    }
+    const onSlip = issueSlipPick ? open.filter((l) => l.slipNo === issueSlipPick) : open;
+    if (!onSlip.length) return `${c} is not on slip ${issueSlipPick} — it went out on ${open.map((l) => l.lineNo || l.slipNo).join(', ')}.`;
+    if (onSlip.length > 1) return `${c} is out on ${onSlip.length} open lines (${onSlip.map((l) => l.lineNo || l.slipNo).join(', ')}) — pick the slip first.`;
+    pickIssueLine(String(onSlip[0].txnId));
+    return null;
+  }
+
+  /**
    * The picked line was closed: let it go, and — on a return — everything it filled in
    * with it. Issuing, the form is the slip's (the desk switched to Issue after picking
    * the line): its sale order, department, item and roll stay as they are, or a slip
@@ -2051,6 +2121,12 @@ function IssuesReturns({ flash }) {
   const withStock = units.filter((u) => num(u.qtyRemaining) > 0);
   // what the basket already holds of a roll, so the same roll cannot be over-promised
   const inBasket = (unitId) => basket.filter((b) => String(b.unitId) === String(unitId)).reduce((s, b) => s + num(b.qty), 0);
+  // BloomFlex V2: a roll goes out WHOLE — the issue quantity is what is left on the roll,
+  // filled in and not typed. What the floor does not use comes back on the same roll.
+  const wholeRoll = mode === 'issue' && selectedUnit ? +Math.max(0, num(selectedUnit.qtyRemaining) - inBasket(selectedUnit.id)).toFixed(3) : null;
+  useEffect(() => {
+    if (wholeRoll != null && String(form.qty) !== String(wholeRoll)) setForm((f) => ({ ...f, qty: String(wholeRoll) }));
+  }, [wholeRoll, form.qty]);
 
   /* ── Issues 4.1: a slit roll cannot come back bigger than it went out ────────
      "The total width should not be more than the initial film width", and the same
@@ -2288,6 +2364,7 @@ function IssuesReturns({ flash }) {
   function addToBasket() {
     if (!selectedUnit) { flash('r', 'Pick a roll to put on the slip.'); return; }
     const q = num(form.qty);
+    if (q <= 0 && inBasket(selectedUnit.id) > 0) { flash('r', `${selectedUnit.internalCode} is already on this slip — the whole roll.`); return; }
     if (q <= 0) { flash('r', 'Enter the quantity to issue from ' + selectedUnit.internalCode + '.'); return; }
     const free = freeFor(selectedUnit);
     if (q > free + 1e-9) {
@@ -2302,7 +2379,8 @@ function IssuesReturns({ flash }) {
       return;
     }
     // S3: the BOM cap — the server's own rule, said before the slip is sent
-    const block = chosenLine ? bomCapBlock(chosenLine, {
+    // BloomFlex V2: the rest of a roll this order holds goes out with it - the server never caps that
+    const block = chosenLine && !isMine(selectedUnit) ? bomCapBlock(chosenLine, {
       so: form.so, increase: increaseIf(selectedUnit, q), pending: slipAdds, rollUom: selectedUnit.uom,
     }) : null;
     if (block) { flash('r', block); return; }
@@ -2381,7 +2459,17 @@ function IssuesReturns({ flash }) {
    */
   function takeAllocated(a) {
     if (a.unitId == null) { flash('r', `${a.internalCode} cannot be put on the slip from here — pick it in the Roll list below.`); return; }
-    const q = holdLeftToTake(a);
+    let q = holdLeftToTake(a);
+    // BloomFlex V2: the roll goes out whole, not just the part held for this order
+    const allocRoll = units.find((u) => String(u.id) === String(a.unitId));
+    const rollLeft = a.unitRemaining != null ? num(a.unitRemaining) : allocRoll ? num(allocRoll.qtyRemaining) : null;
+    if (q > 1e-9 && rollLeft != null && rollLeft - inBasket(a.unitId) > q + 1e-9) {
+      if (allocRoll && heldOther(allocRoll) > 1e-9) {
+        flash('r', `${a.internalCode} goes out whole, but ${qty(heldOther(allocRoll))} of it is allocated to ${holdersText(holdsOther(allocRoll))} — release that first.`);
+        return;
+      }
+      q = rollLeft - inBasket(a.unitId);
+    }
     if (q <= 1e-9) {
       flash('r', shareOnSlip(a) > 1e-9 ? `${a.internalCode} is already on the slip.`
         : `Nothing of ${a.internalCode} is left to issue against this hold.`);
@@ -2412,12 +2500,11 @@ function IssuesReturns({ flash }) {
     // order may now hold the freed roll), and nothing on screen would say so.
     // Only THIS hold's share of the roll's line goes: the order may hold the same roll
     // twice, and one line of the slip then carries both holds.
-    const linkedQty = a.unitId == null ? 0 : basket
-      .filter((b) => String(b.unitId) === String(a.unitId) && b.allocationId != null)
-      .reduce((s, b) => s + num(b.qty), 0);
-    const drop = linkedQty > 1e-9 ? Math.min(shareOnSlip(a), linkedQty) : 0;
-    const whole = drop > 1e-9 && drop >= linkedQty - 1e-9;
-    const heir = drop > 1e-9 ? holdsOnRoll(a.unitId).find((h) => String(h.id) !== String(a.id)) : null;
+    // BloomFlex V2: a roll goes out whole, so a released hold takes its roll's WHOLE line
+    // off the slip (a part of it left behind could not be issued); the desk adds the roll
+    // again from the Roll list if it is still going out.
+    const drop = a.unitId == null ? 0 : inBasket(a.unitId);
+    const whole = drop > 1e-9;
     if (!window.confirm(`Release ${a.internalCode} from ${form.so}?\n\n${qty(a.qty)} ${a.uom || ''} held for this order`
       + `${sourceLabel(a.source) ? ` (allocated by ${sourceLabel(a.source)})` : ''} goes back to the free stock, and any order can then be given it.`
       + (whole ? `\n\nIt is on the slip being built — it comes off the slip too.`
@@ -2431,7 +2518,7 @@ function IssuesReturns({ flash }) {
       // picker already showed for that hold leaves it: it is free stock now, not the order's.
       preselectOff.current = `${form.so}|${itemId}`;
       if (a.unitId != null && String(form.unitId) === String(a.unitId)) setForm((f) => ({ ...f, unitId: '', qty: '' }));
-      if (drop > 1e-9) setBasket((b) => dropHoldShare(b, a, drop, heir ? heir.id : null));
+      if (whole) setBasket((b) => b.filter((x) => String(x.unitId) !== String(a.unitId)));
       flash('g', `${a.internalCode} released from ${form.so} — it is free stock again.`
         + (whole ? ` It was taken off the slip; add it again from the Roll list if it is still going out.`
           : drop > 1e-9 ? ` Its ${qty(drop)} ${a.uom || ''} was taken off the roll's line on the slip.` : ''));
@@ -2562,6 +2649,9 @@ function IssuesReturns({ flash }) {
     setBusy(true);
     try {
       const r = await storesApi.receiveReturn(body);
+      // BloomFlex V2: the same roll keeps its sticker — offer it reprinted with what is now on it
+      const rollCode = (selectedUnit && selectedUnit.internalCode) || (pickedLine && pickedLine.internalCode) || '';
+      r.stickerCodes = split ? (r.returned || []).map((x) => x.internalCode).filter(Boolean) : (rollCode ? [rollCode] : []);
       setLastReturn(r);
       const nos = r.returnNos || [];
       // §12: every returned roll gets its own return slip — downloaded as it is booked
@@ -2600,9 +2690,9 @@ function IssuesReturns({ flash }) {
           its <strong>route</strong> and the material from its <strong>BOM</strong> — nothing else is offered.
         </div>
 
-        <div className="step-bar" style={{ marginBottom: 6 }}>
-          <div className={'step-tab' + (mode === 'issue' ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => setMode('issue')} role="tab" aria-selected={mode === 'issue'}>↗ Issue material</div>
-          <div className={'step-tab' + (mode === 'return' ? ' on' : '')} style={{ cursor: 'pointer' }} onClick={() => { setMode('return'); setBasket([]); }} role="tab" aria-selected={mode === 'return'}>↙ Receive a return</div>
+        <div className="v2-subnav" role="tablist" style={{ display: 'inline-flex', marginBottom: 6 }}>
+          <div className={mode === 'issue' ? 'on' : undefined} onClick={() => setMode('issue')} role="tab" aria-selected={mode === 'issue'}>↗ Issue material</div>
+          <div className={mode === 'return' ? 'on' : undefined} onClick={() => { setMode('return'); setBasket([]); }} role="tab" aria-selected={mode === 'return'}>↙ Receive a return</div>
         </div>
 
         {/* Stores 5.1: "the first selection should be for Sale Order and then … the
@@ -2657,6 +2747,8 @@ function IssuesReturns({ flash }) {
         {mode === 'return' && (
           <>
             <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>② The issue line the roll went out on</div>
+            <RollScanBox onScan={scanReturn} label="Scan / type roll barcode (return)"
+              hint="Scan the returned roll's sticker — it must be the roll of the issue line picked below." />
             <div className="pg-sub" style={{ marginTop: 0 }}>
               Every roll issued has its own number — <b>ISS/2026/3.1</b>, <b>ISS/2026/3.2</b> (a lone roll is <b>.0</b>). Pick the slip, then the roll;
               what comes back is booked against that line, in as many instalments as it takes, and each returned roll gets its own
@@ -2813,6 +2905,10 @@ function IssuesReturns({ flash }) {
             </select>
           </div>
         </div>
+        {/* BloomFlex V2: scan a roll's sticker to pick it */}
+        {mode === 'issue' && (
+          <RollScanBox onScan={scanIssue} hint="Scan the roll's sticker (or type its BLMU code + Enter) to pick it below." />
+        )}
         <div className="g4">
           <div className="fg"><label>Item description</label>
             <input value={itemDesc} readOnly tabIndex={-1}
@@ -2830,9 +2926,18 @@ function IssuesReturns({ flash }) {
             </select>
           </div>
           <div className="fg"><label>Quantity</label>
-            <input type="number" step="any" min="0" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
-              aria-label="Quantity" disabled={mode === 'return' && split}
+            {/* BloomFlex V2: a roll is issued whole — the quantity is filled in, not typed */}
+            <input type="number" step="any" min="0" className="nospin" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })}
+              onWheel={(e) => e.currentTarget.blur()}
+              aria-label="Quantity" disabled={mode === 'return' && split} readOnly={mode === 'issue'}
+              title={mode === 'issue' ? 'A roll is issued whole — return the unused balance on the same roll' : undefined}
+              style={mode === 'issue' ? { background: 'var(--bg)', cursor: 'not-allowed' } : undefined}
               placeholder={selectedUnit ? `max ${qty(mode === 'issue' ? Math.max(0, freeFor(selectedUnit)) : num(selectedUnit.qtyRemaining))}` : ''} />
+            {mode === 'issue' && (
+              <div className="pg-sub" style={{ margin: '2px 0 0', fontSize: 10.5 }} aria-label="Whole roll hint">
+                Whole roll{selectedUnit ? ` (${qty(wholeRoll)} ${selectedUnit.uom || ''})` : ''} — return the unused balance on the same roll.
+              </div>
+            )}
           </div>
           <div className="fg"><label>Internal code</label>
             <input value={selectedUnit ? selectedUnit.internalCode : ''} readOnly tabIndex={-1} aria-label="Internal code of the roll"
@@ -3074,6 +3179,11 @@ function IssuesReturns({ flash }) {
               {lastReturn && (lastReturn.returnNos || []).map((no) => (
                 <button key={no} className="btn btn-s" onClick={() => reprint(no)} aria-label={`Download return slip ${no} again`}>⬇ {no}</button>
               ))}
+              {lastReturn && (lastReturn.stickerCodes || []).length > 0 && (
+                <button className="btn btn-g" onClick={() => setRetStickers(lastReturn.stickerCodes)} aria-label="Print updated label">
+                  🏷 {lastReturn.stickerCodes.length === 1 ? 'Print updated label' : `Print ${lastReturn.stickerCodes.length} new labels`}
+                </button>
+              )}
             </div>
           </>
         )}
@@ -3090,7 +3200,7 @@ function IssuesReturns({ flash }) {
                 // not simply the first, which another order may hold in full
                 <tr key={u.id} className={num(u.qtyRemaining) > 0 && u === fifoPick ? 'hi' : undefined} style={num(u.qtyRemaining) <= 0 ? { opacity: 0.5 } : undefined}>
                   <td>{i + 1}</td>
-                  <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{u.internalCode}</td>
+                  <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>{u.internalCode} <StickerButton code={u.internalCode} /></td>
                   <td style={{ fontSize: 11 }}>{u.location || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{u.widthMm ? qty(u.widthMm) : '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{qty(u.qtyRemaining)}</td>
@@ -3105,6 +3215,11 @@ function IssuesReturns({ flash }) {
         </div>
       )}
 
+      {retStickers && (
+        <RollStickerModal codes={retStickers} title="🏷 Reprint with the updated quantity"
+          intro="The roll keeps its barcode — the label now shows what is left on it. Replace the old label on the roll."
+          onClose={() => setRetStickers(null)} />
+      )}
       {/* Issues 30.09 S4-S6: every slip, filterable, with the identity columns, and
           issue lines ticked here are closed to return in one go. */}
       <StoresIssueHistory txns={txns} masterItems={masterItems} onReprint={onHistoryReprint} onCloseLines={onHistoryClose} />

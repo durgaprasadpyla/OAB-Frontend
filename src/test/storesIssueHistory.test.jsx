@@ -353,7 +353,8 @@ describe('Recent issues & returns — closing the line being returned against (r
     fireEvent.click(screen.getByText('↗ Issue material'));
     await waitFor(() => expect([...screen.getByLabelText('Roll').options].map((o) => o.value)).toContain('595'));
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '595' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '20' } });
+    // BloomFlex V2: the whole roll goes out
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(150));
     fireEvent.click(screen.getByText('＋ Add to slip'));
     expect(screen.getByLabelText('Remove BLMU-595 from the slip')).toBeInTheDocument();
 
@@ -370,7 +371,7 @@ describe('Recent issues & returns — closing the line being returned against (r
     fireEvent.click(screen.getByText(/Issue & print slip/));
     await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/issues/batch'))).toBe(true));
     expect(posted.find((p) => p.u.includes('/api/stores/issues/batch')).body)
-      .toEqual({ so: '26/656', department: 'Printing', lines: [{ unitId: 595, qty: 20 }] });
+      .toEqual({ so: '26/656', department: 'Printing', lines: [{ unitId: 595, qty: 150 }] });
     // back on Return, the closed line is not offered — nor still picked
     fireEvent.click(screen.getByText('↙ Receive a return'));
     await waitFor(() => expect(optionsOf(screen.getByLabelText('Issue line'))).toEqual(['102']));

@@ -107,24 +107,24 @@ describe('Stores — issuing on a slip', () => {
     fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'Printing' } });
     fireEvent.change(screen.getByLabelText('Item'), { target: { value: '37' } });
     await waitFor(() => expect(screen.getByLabelText('Roll').options.length).toBe(3));
-    // two rolls onto the slip
+    // two rolls onto the slip - whole rolls (BloomFlex V2): the quantity fills itself in
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '200' } });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(200));
     fireEvent.click(screen.getByText('＋ Add to slip'));
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '12' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '30' } });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(150));
     fireEvent.click(screen.getByText('＋ Add to slip'));
     expect(screen.getAllByLabelText(/Remove BLMU-\d+ from the slip/)).toHaveLength(2);
-    // a roll already fully on the slip cannot be added again
+    // a roll already on the slip cannot be added again
     fireEvent.change(screen.getByLabelText('Roll'), { target: { value: '11' } });
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveValue(0));
     fireEvent.click(screen.getByText('＋ Add to slip'));
-    expect(await screen.findByText(/Only 0 Kg of BLMU-7 is left after what is already on this slip/)).toBeInTheDocument();
+    expect(await screen.findByText(/BLMU-7 is already on this slip — the whole roll/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText(/Issue & print slip/));
     await waitFor(() => expect(posted.some((p) => p.u.includes('/api/stores/issues/batch'))).toBe(true));
     const body = posted.find((p) => p.u.includes('/api/stores/issues/batch')).body;
-    expect(body).toEqual({ so: '26/737', department: 'Printing', lines: [{ unitId: 11, qty: 200 }, { unitId: 12, qty: 30 }] });
+    expect(body).toEqual({ so: '26/737', department: 'Printing', lines: [{ unitId: 11, qty: 200 }, { unitId: 12, qty: 150 }] });
     // the PDF is generated from the slip the server returned, and can be fetched again
     await waitFor(() => expect(slipSaved).toHaveLength(1));
     expect(slipSaved[0].slipNo).toBe('ISS/2026/5');
