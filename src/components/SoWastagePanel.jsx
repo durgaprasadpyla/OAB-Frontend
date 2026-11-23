@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { reportsApi } from '../api.js';
+import { V2Panel } from './V2Ui.jsx';
+import '../v2-ops.css';
 
 // P6: department-wise wastage analysis listed AGAINST EACH SALE ORDER — shown on
 // both the PLAN (PlanReadiness) and PPC (PpcDashboard) dashboards. Read-only;
@@ -19,12 +21,12 @@ export default function SoWastagePanel({ from, to }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <div className="ctitle">Wastage by Sale Order &amp; Department</div>
+    <div className="v2" style={{ marginTop: 12 }}>
+    <V2Panel title="Wastage by Sale Order & Department">
       {err && <div className="al al-r">{err}</div>}
       {rows.length === 0 ? <div className="al al-g">No production recorded in this period.</div> : (
         <div className="tw sy" style={{ maxHeight: 300 }}><table>
-          <thead><tr><th>Sale Order</th><th>Department</th><th>Planned</th><th>Actual</th><th>Wastage</th><th>Wastage %</th></tr></thead>
+          <thead><tr><th>Sale Order</th><th>Department</th><th>Planned</th><th>Actual</th><th>Wastage</th><th>Rejected</th><th>Wastage %</th></tr></thead>
           <tbody>{rows.map((r, i) => {
             const a = Number(r.actualQty || 0), w = Number(r.wastageQty || 0);
             const pct = a + w > 0 ? ((w / (a + w)) * 100).toFixed(1) : null;
@@ -35,12 +37,14 @@ export default function SoWastagePanel({ from, to }) {
                 <td>{n1(r.plannedQty)}</td>
                 <td>{n1(r.actualQty)}</td>
                 <td style={{ fontWeight: 700, color: w > 0 ? 'var(--red)' : undefined }}>{n1(r.wastageQty)}</td>
+                <td>{n1(r.rejectQty)}</td>
                 <td>{pct == null ? '—' : <span className={'tag ' + (Number(pct) > 5 ? 'tr' : 'ty')}>{pct}%</span>}</td>
               </tr>
             );
           })}</tbody>
         </table></div>
       )}
+    </V2Panel>
     </div>
   );
 }

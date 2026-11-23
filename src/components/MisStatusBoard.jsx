@@ -4,6 +4,8 @@ import { productionApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 import { custGroupOf, findSpecForRow } from '../lib/master.js';
 import { exportAOA } from '../lib/xlsx.js';
+import { V2Panel, V2Badge } from './V2Ui.jsx';
+import '../v2-ops.css';
 
 // MIS → Status (Issues 3.0/3.1), built to the sheet the business drew.
 //
@@ -99,31 +101,30 @@ export default function MisStatusBoard() {
     if (!visible.length) return;
     const aoa = [['MIS status — planned against actual'], ['Printed', today()], [],
       ['Sale Order', 'Group / Company', 'Spec', 'Substrate', 'PO Qty', 'Mtrs planned', 'Department',
-        'Machines', 'Planned', 'Actual', 'Wastage', 'Planned date', 'Actual date',
+        'Machines', 'Planned', 'Actual', 'Wastage', 'Rejected', 'Planned date', 'Actual date',
         'Planned start', 'Actual start', 'End', 'Time taken', 'Late by (min)', 'Status']];
     visible.forEach((r) => (r.departments || []).forEach((d) => aoa.push([
       r.so, r.group, r.spec, r.substrate, n1(r.poQty), n1(r.plannedQty), d.departmentName,
-      d.machines || '', n1(d.plannedQty), n1(d.actualQty), n1(d.wastageQty),
+      d.machines || '', n1(d.plannedQty), n1(d.actualQty), n1(d.wastageQty), n1(d.rejectQty),
       d.plannedDate || '', d.actualDate || '', d.plannedStart || '', d.startTime || '',
       d.endTime || '', hhmm(d.durationMin), d.delayMin == null ? '' : d.delayMin, d.status || '',
     ])));
     exportAOA(aoa, `MIS_Status_${today()}`, 'Status');
   }
 
+  // BloomFlex V2 look: a titled panel (title + count, search and actions on the right).
   return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <div className="fbar">
-        <div className="ctitle" style={{ margin: 0 }}>Status <span className="tag ty">{visible.length}</span></div>
-        <input placeholder="Search SO / spec / customer…" value={q} onChange={(e) => setQ(e.target.value)}
-          aria-label="Search the status board" style={{ minWidth: 220 }} />
-        <span style={{ flex: 1 }} />
+    <div className="v2" style={{ marginTop: 12 }}>
+    <V2Panel
+      title={<h2>Status <V2Badge tone="amber">{visible.length}</V2Badge></h2>}
+      sub="Every sale order the PPC has planned. Open one to record what each department actually did."
+      right={<>
+        <input className="v2o-search" placeholder="Search SO / spec / customer…" value={q} onChange={(e) => setQ(e.target.value)}
+          aria-label="Search the status board" />
         <button className="btn btn-s" onClick={load} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
         <button className="btn btn-s" onClick={exportBoard} disabled={!visible.length}
           aria-label="Export the status board to Excel">⬇ Excel</button>
-      </div>
-      <div className="pg-sub" style={{ marginTop: 0 }}>
-        Every sale order the PPC has planned. Open one to record what each department actually did.
-      </div>
+      </>}>
       {err && <div className="al al-r">{err}</div>}
       {msg && <div className="al al-g">{msg}</div>}
 
@@ -147,6 +148,7 @@ export default function MisStatusBoard() {
           </table>
         </div>
       )}
+    </V2Panel>
     </div>
   );
 }
@@ -210,20 +212,27 @@ function DeptGrid({ so, departments, onSaved, onError }) {
     const wastage = Number(v.wastageQty ?? '');
     const hasQty = String(v.actualQty ?? '').trim() !== '' && produced > 0;
     const hasWaste = String(v.wastageQty ?? '').trim() !== '' && wastage > 0;
+    // BloomFlex V2: rejected (failed QC) is a loss like wastage, recorded apart from it.
+    const reject = Number(v.rejectQty ?? '');
+    const hasReject = String(v.rejectQty ?? '').trim() !== '' && reject > 0;
     const wantStatus = v.status || '';
-    if (!hasQty && !hasWaste && !wantStatus) {
-      onError(`${d.departmentName}: enter the actual metres, the wastage, or a status before saving.`);
+    if (!hasQty && !hasWaste && !hasReject && !wantStatus) {
+      onError(`${d.departmentName}: enter the actual metres, the wastage, or a status before saving (or a rejected quantity).`);
       return;
     }
     setBusy(String(d.stageSeq));
     onError('');
     try {
-      if (hasQty || hasWaste) {
+      if (hasQty || hasWaste || hasReject) {
+        // rejectQty is always sent (even 0): the server then asks for a note when there
+        // is any loss, or when this entry closes the stage short of its input.
         await productionApi.record({
           so,
           stageSeq: d.stageSeq,
           producedQty: hasQty ? produced : 0,
           wastageQty: hasWaste ? wastage : 0,
+          rejectQty: hasReject ? reject : 0,
+          note: (v.note || '').trim() || undefined,
           prodDate: v.actualDate || d.actualDate || today(),
           startTime: (v.startTime ?? d.startTime) || undefined,
           endTime: (v.endTime ?? d.endTime) || undefined,
@@ -289,6 +298,27 @@ function DeptGrid({ so, departments, onSaved, onError }) {
                   aria-label={`Wastage for ${d.departmentName}`}
                   placeholder={n1(d.wastageQty) ? String(n1(d.wastageQty)) : '0'}
                   value={d0(d).wastageQty ?? ''} onChange={(e) => set(d, { wastageQty: e.target.value })} />
+              </td>
+            ))}
+          </tr>
+          <tr>
+            {label('Rejected', 'made, failed QC')}
+            {departments.map((d) => (
+              <td key={d.stageSeq}>
+                <input type="number" step="any" min="0" className="nospin" style={{ width: 110 }}
+                  aria-label={`Rejected for ${d.departmentName}`}
+                  placeholder={n1(d.rejectQty) ? String(n1(d.rejectQty)) : '0'}
+                  value={d0(d).rejectQty ?? ''} onChange={(e) => set(d, { rejectQty: e.target.value })} />
+              </td>
+            ))}
+          </tr>
+          <tr>
+            {label('Note', 'needed for wastage / reject / short close')}
+            {departments.map((d) => (
+              <td key={d.stageSeq}>
+                <input type="text" maxLength={255} style={{ width: 170 }}
+                  aria-label={`Note for ${d.departmentName}`}
+                  value={d0(d).note ?? ''} onChange={(e) => set(d, { note: e.target.value })} />
               </td>
             ))}
           </tr>

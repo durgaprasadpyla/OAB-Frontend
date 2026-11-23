@@ -74,6 +74,8 @@ export function navTabs(role) {
   // NOT add a separate nav tab per planning screen (Enhancements 2.0: role-specific
   // landing pages, not extra tabs); the PPC / MIS / PLAN logins reach those directly.
   if (role === 'superadmin') tabs.push({ to: '/ppc', label: '🗂 Planning' });
+  // BloomFlex V2: the order → dispatch overview (also reached from the PPC / PM bars).
+  if (role === 'superadmin') tabs.push({ to: '/overview', label: '🧭 Overview' });
   // Future projections: what sales expect to sell before the POs exist. The Sales
   // Admin owns the entry; Super Admin reads it alongside the rest of the business.
   if (role === 'superadmin') tabs.push({ to: '/projections', label: '📈 Projections' });
@@ -110,6 +112,8 @@ export function canAccess(role, path) {
   // daily board in the PM login." The two logins plan the same machines off the same
   // data — the Plant Manager was simply missing the two screens.
   if (p === '/ppc') return ['ppc', 'superadmin', 'pm'].includes(role);
+  // BloomFlex V2: Operations Overview — the same three who run the planning desk.
+  if (p === '/overview') return ['superadmin', 'pm', 'ppc'].includes(role);
   if (p === '/mis') return role === 'mis' || role === 'superadmin';
   if (p === '/plan') return role === 'plan' || role === 'superadmin';
   // Sales surfaces. Superadmin keeps a break-glass view of all three, matching

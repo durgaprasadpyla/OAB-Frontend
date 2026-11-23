@@ -34,6 +34,7 @@ import PlanReadiness from './pages/PlanReadiness.jsx';
 import Stores from './pages/Stores.jsx';
 import Projections from './pages/Projections.jsx';
 import JssDesk from './pages/JssDesk.jsx';
+import OpsOverview from './pages/OpsOverview.jsx';
 import ChangePasswordGate from './components/ChangePasswordGate.jsx';
 
 function Protected({ children }) {
@@ -83,6 +84,7 @@ export default function App() {
         <Route path="/reports" element={<RoleRoute path="/reports"><Reports /></RoleRoute>} />
         {/* Enhancements 2.0 — the three planning-module login landing pages. */}
         <Route path="/ppc" element={<RoleRoute path="/ppc"><PpcDashboard /></RoleRoute>} />
+        <Route path="/overview" element={<RoleRoute path="/overview"><OpsOverview /></RoleRoute>} />
         <Route path="/mis" element={<RoleRoute path="/mis"><MisStatus /></RoleRoute>} />
         <Route path="/plan" element={<RoleRoute path="/plan"><PlanReadiness /></RoleRoute>} />
         <Route path="/stores" element={<RoleRoute path="/stores"><Stores /></RoleRoute>} />
