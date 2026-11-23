@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { reportsApi } from '../api.js';
 import { today } from '../lib/format.js';
+import { V2Page, V2Panel } from '../components/V2Ui.jsx';
+import '../v2-ops.css';
 
 // Production planning reports (Stage 8): planned vs actual + wastage (machine- or
 // department-wise) and per-machine utilization, over any date range (daily / weekly
@@ -34,43 +36,41 @@ export default function Reports() {
 
   return (
     <div id="app">
+      <V2Page>
       <div className="pg-ttl">📈 Reports</div>
       <div className="pg-sub">Planned vs actual, wastage and machine utilization over any period.</div>
-      {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
+      {err && <div className="al al-r" style={{ margin: '0 0 12px' }}>{err}</div>}
 
-      <div className="card">
-        <div className="fbar">
-          <div className="fg"><label>From</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
-          <div className="fg"><label>To</label><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+      <V2Panel pad>
+        <div className="fbar" style={{ margin: 0, alignItems: 'flex-end' }}>
+          <div className="fg" style={{ margin: 0 }}><label>From</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+          <div className="fg" style={{ margin: 0 }}><label>To</label><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
           <button className="btn btn-s" onClick={() => preset(1)}>Today</button>
           <button className="btn btn-s" onClick={() => preset(7)}>7 days</button>
           <button className="btn btn-s" onClick={() => preset(30)}>30 days</button>
         </div>
+      </V2Panel>
+
+      <div className="v2-subnav">
+        <button className={tab === 'production' ? 'on' : undefined} onClick={() => setTab('production')}>Planned vs Actual</button>
+        <button className={tab === 'utilization' ? 'on' : undefined} onClick={() => setTab('utilization')}>Machine Utilization</button>
+        <button className={tab === 'delays' ? 'on' : undefined} onClick={() => setTab('delays')}>⏰ Delayed Starts{delays.length ? ` (${delays.length})` : ''}</button>
       </div>
 
-      <div className="step-bar" style={{ marginTop: 10 }}>
-        <button className={'step-tab' + (tab === 'production' ? ' on' : '')} onClick={() => setTab('production')}>Planned vs Actual</button>
-        <button className={'step-tab' + (tab === 'utilization' ? ' on' : '')} onClick={() => setTab('utilization')}>Machine Utilization</button>
-        <button className={'step-tab' + (tab === 'delays' ? ' on' : '')} onClick={() => setTab('delays')}>⏰ Delayed Starts{delays.length ? ` (${delays.length})` : ''}</button>
-      </div>
-
-      {loading && <div className="card" style={{ marginTop: 12 }}><div className="spin" /> Loading…</div>}
+      {loading && <div className="card"><div className="spin" /> Loading…</div>}
 
       {!loading && tab === 'production' && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="fbar" style={{ justifyContent: 'space-between' }}>
-            <div className="ctitle" style={{ margin: 0 }}>Planned vs Actual + Wastage</div>
-            <div className="fg" style={{ margin: 0 }}>
+        <V2Panel title="Planned vs Actual + Wastage"
+          right={<div className="fg" style={{ margin: 0 }}>
               <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
                 <option value="department">By department</option>
                 <option value="machine">By machine</option>
               </select>
-            </div>
-          </div>
+            </div>}>
           {prod.length === 0 ? <div className="al al-g">No data for this period.</div> : (
             <div className="tw sy">
               <table>
-                <thead><tr><th>{groupBy === 'machine' ? 'Machine' : 'Department'}</th><th>Planned</th><th>Actual</th><th>Wastage</th><th>Variance</th></tr></thead>
+                <thead><tr><th>{groupBy === 'machine' ? 'Machine' : 'Department'}</th><th>Planned</th><th>Actual</th><th>Wastage</th><th>Rejected</th><th>Variance</th></tr></thead>
                 <tbody>
                   {prod.map((r, i) => {
                     const variance = Number(r.actualQty || 0) - Number(r.plannedQty || 0);
@@ -80,6 +80,7 @@ export default function Reports() {
                         <td>{r.plannedQty}</td>
                         <td>{r.actualQty}</td>
                         <td>{r.wastageQty}</td>
+                        <td>{r.rejectQty ?? 0}</td>
                         <td><span className={'tag ' + (variance < 0 ? 'ty' : 'tg')}>{variance}</span></td>
                       </tr>
                     );
@@ -88,12 +89,11 @@ export default function Reports() {
               </table>
             </div>
           )}
-        </div>
+        </V2Panel>
       )}
 
       {!loading && tab === 'utilization' && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="ctitle">Machine Utilization</div>
+        <V2Panel title="Machine Utilization">
           {util.length === 0 ? <div className="al al-g">No machines.</div> : (
             <div className="tw sy">
               <table>
@@ -117,13 +117,13 @@ export default function Reports() {
               </table>
             </div>
           )}
-        </div>
+        </V2Panel>
       )}
 
       {/* §82: jobs that started later than planned */}
       {!loading && tab === 'delays' && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="ctitle">Delayed Starts <span className={'tag ' + (delays.length ? 'tr' : 'tg')}>{delays.length}</span></div>
+        <V2Panel title="Delayed Starts"
+          right={<span className={'tag ' + (delays.length ? 'tr' : 'tg')}>{delays.length}</span>}>
           {delays.length === 0 ? <div className="al al-g">No delayed starts in this period.</div> : (
             <div className="tw sy">
               <table>
@@ -146,8 +146,9 @@ export default function Reports() {
               </table>
             </div>
           )}
-        </div>
+        </V2Panel>
       )}
+      </V2Page>
     </div>
   );
 }

@@ -1,0 +1,46 @@
+/* BloomFlex V2 — Operations screens (Overview, Production entry, Reports, MIS status).
+   Everything is scoped under .v2; the shared kit lives in v2.css. */
+
+/* order-to-dispatch workflow: one icon card per stage */
+.v2 .v2o-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;padding:16px 17px}
+.v2 .v2o-step{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;
+  border:1px solid var(--v2-line);border-radius:11px;padding:16px 8px;min-height:104px;background:#fff;color:var(--v2-dark);text-decoration:none;min-width:0}
+.v2 a.v2o-step:hover{border-color:#9ebcdb;box-shadow:0 2px 10px #1d6fd014}
+.v2 .v2o-step .ic{font-size:20px;line-height:1;margin-bottom:6px}
+.v2 .v2o-step b{font-size:12px;font-weight:750}
+.v2 .v2o-step span.s{font-size:11px;color:var(--v2-muted)}
+.v2 .v2o-step.off{background:#f7f9fc;color:#8492a5;cursor:not-allowed}
+.v2 .v2o-step.off b{color:#8492a5}
+
+/* attention rows: icon, text, action on the right */
+.v2 .v2o-row{display:flex;align-items:center;gap:12px;padding:13px 17px;border-bottom:1px solid #edf0f5}
+.v2 .v2o-row:last-child{border-bottom:0}
+.v2 .v2o-row .ic{flex:none;width:32px;height:32px;border-radius:9px;background:#eaf3ff;color:#1769c8;display:flex;align-items:center;justify-content:center;font-size:15px}
+.v2 .v2o-row .tx{flex:1;min-width:0}
+.v2 .v2o-row .tx b{font-size:13px}
+.v2 .v2o-row .tx .s{font-size:11px;color:var(--v2-muted);margin-top:2px}
+.v2 .v2o-row .tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}
+.v2 .v2o-row .btn,.v2 .v2o-link{flex:none;text-decoration:none;display:inline-flex;align-items:center}
+
+/* machine capacity bars */
+.v2 .v2o-cap{display:grid;gap:12px;padding:16px 17px}
+.v2 .v2o-cap-row{display:grid;grid-template-columns:minmax(110px,190px) minmax(0,1fr) auto;gap:12px;align-items:center;font-size:12px}
+.v2 .v2o-cap-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v2 .v2o-cap-row .nm span{color:var(--v2-muted)}
+.v2 .v2o-cap-row .v{white-space:nowrap;color:var(--v2-muted);font-size:11px}
+.v2 .v2o-cap-row .v.over{color:var(--v2-red);font-weight:700}
+.v2 .v2-progress > span.over{background:var(--v2-red)}
+
+/* machine execution board (Production) */
+.v2 .v2o-board{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;padding:16px 17px}
+.v2 .v2o-mc{border:1px solid var(--v2-line);border-radius:11px;padding:12px 13px;min-width:0}
+.v2 .v2o-mc .hd{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.v2 .v2o-mc .hd b{font-size:13px}
+.v2 .v2o-mc .sub{font-size:11px;color:var(--v2-muted);margin:2px 0 8px}
+.v2 .v2o-job{border-top:1px solid #edf0f5;padding:6px 0 0;margin-top:6px;font-size:11px;display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.v2 .v2o-idle{padding:0 17px 14px;font-size:11px;color:var(--v2-muted)}
+
+/* page-level odds and ends */
+.v2 .v2o-search{min-height:34px;height:34px;border:1px solid #d8e2ee;border-radius:7px;padding:0 10px;min-width:220px}
+.v2 .v2-panel > div > .al{margin:12px 17px}
+.v2 .v2-subnav > button{font-family:inherit}

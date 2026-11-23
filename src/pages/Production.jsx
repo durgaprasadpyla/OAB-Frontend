@@ -3,6 +3,8 @@ import { productionApi, masterApi, planningApi } from '../api.js';
 import { today } from '../lib/format.js';
 import Modal from '../components/Modal.jsx';
 import { useAuth } from '../auth.jsx';
+import { V2Page } from '../components/V2Ui.jsx';
+import '../v2-ops.css';
 
 // Production execution (Stage 5): Plant / Plant Manager record actual production +
 // wastage against an SO's route stages. Good output automatically becomes available
@@ -15,6 +17,8 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
   const deptMachines = (machines || []).filter((m) => String(m.departmentId) === String(stage.departmentId));
   const [produced, setProduced] = useState('');
   const [wastage, setWastage] = useState('');
+  const [reject, setReject] = useState('');   // BloomFlex V2: made, failed QC
+  const [note, setNote] = useState('');
   const [machineId, setMachineId] = useState('');
   const [prodDate, setProdDate] = useState(today());
   const [startTime, setStartTime] = useState('');   // §59: actual start (HH:mm)
@@ -23,11 +27,15 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
 
   async function submit(e) {
     e.preventDefault(); setErr('');
-    const p = Number(produced) || 0, w = Number(wastage) || 0;
-    if (p + w <= 0) { setErr('Enter a produced and/or wastage quantity'); return; }
-    if (p + w > Number(stage.remaining) + 1e-9) { setErr(`Only ${stage.remaining} remain at this stage`); return; }
+    const p = Number(produced) || 0, w = Number(wastage) || 0, rj = Number(reject) || 0;
+    if (p < 0 || w < 0 || rj < 0) { setErr('Quantities cannot be negative'); return; }
+    if (p + w + rj <= 0) { setErr('Enter a produced, wastage and/or rejected quantity'); return; }
+    if (p + w + rj > Number(stage.remaining) + 1e-9) { setErr(`Only ${stage.remaining} remain at this stage`); return; }
     try {
-      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, machineId: machineId ? Number(machineId) : undefined, prodDate,
+      // rejectQty is always sent (even 0): the server then requires a note for any loss
+      // or for an entry that closes the stage short of its input.
+      await onSubmit({ stageSeq: stage.stageSeq, producedQty: p, wastageQty: w, rejectQty: rj, note: note.trim() || undefined,
+        machineId: machineId ? Number(machineId) : undefined, prodDate,
         startTime: startTime || undefined, endTime: endTime || undefined });
     } catch (e2) { setErr(e2.message || 'Save failed'); }
   }
@@ -36,11 +44,16 @@ function RecordForm({ stage, machines, onSubmit, onCancel }) {
     <form onSubmit={submit}>
       {err && <div className="al al-r" style={{ marginBottom: 10 }}>{err}</div>}
       <div className="al al-b" style={{ marginBottom: 10 }}>
-        {stage.stageSeq}. <b>{stage.departmentName}</b> · input {stage.qtyIn} · done {Number(stage.qtyCompleted) + Number(stage.qtyWastage)} · <b>remaining {stage.remaining}</b>
+        {stage.stageSeq}. <b>{stage.departmentName}</b> · input {stage.qtyIn} · done {Number(stage.qtyCompleted) + Number(stage.qtyWastage) + Number(stage.qtyReject || 0)} · <b>remaining {stage.remaining}</b>
       </div>
       <div className="g3">
         <div className="fg"><label>Actual produced (good)</label><input type="number" step="any" value={produced} onChange={(e) => setProduced(e.target.value)} /></div>
         <div className="fg"><label>Wastage</label><input type="number" step="any" value={wastage} onChange={(e) => setWastage(e.target.value)} /></div>
+        <div className="fg"><label>Rejected (failed QC)</label><input type="number" step="any" min="0" className="nospin" aria-label="Rejected" value={reject} onChange={(e) => setReject(e.target.value)} /></div>
+      </div>
+      <div className="g3">
+        <div className="fg" style={{ gridColumn: 'span 2' }}><label>Note (needed for wastage / reject / closing short)</label>
+          <input type="text" maxLength={255} aria-label="Note" value={note} onChange={(e) => setNote(e.target.value)} /></div>
         <div className="fg"><label>Date</label><input type="date" value={prodDate} onChange={(e) => setProdDate(e.target.value)} /></div>
       </div>
       {/* §59: actual start/end → the server computes duration and start-delay vs plan. */}
@@ -164,6 +177,7 @@ export default function Production() {
 
   return (
     <div id="app">
+      <V2Page>
       <div className="pg-ttl">🏭 Production</div>
       <div className="pg-sub">Record actual production and wastage against each route stage. Completed quantity moves to the next department automatically; the remainder stays pending.</div>
       {err && <div className="al al-r" style={{ margin: '8px 0' }}>{err}</div>}
@@ -257,7 +271,7 @@ export default function Production() {
           ) : (
             <div className="tw sy">
               <table>
-                <thead><tr><th>Seq</th><th>Department</th><th>Input</th><th>Completed</th><th>Wastage</th><th>Remaining</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Seq</th><th>Department</th><th>Input</th><th>Completed</th><th>Wastage</th><th>Rejected</th><th>Remaining</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {prod.stages.map((st) => (
                     <tr key={st.stageSeq} className={Number(st.remaining) > 0 ? 'hi' : undefined}>
@@ -266,6 +280,7 @@ export default function Production() {
                       <td>{st.qtyIn}</td>
                       <td>{st.qtyCompleted}</td>
                       <td>{st.qtyWastage}</td>
+                      <td>{st.qtyReject ?? 0}</td>
                       <td><b>{st.remaining}</b></td>
                       <td><span className={'tag ' + statusTag(st.status)}>{st.status}</span></td>
                       <td>{Number(st.remaining) > 0 ? <button className="btn btn-g" onClick={() => setRec(st)}>Record</button> : <span className="tag tg">done</span>}</td>
@@ -280,7 +295,7 @@ export default function Production() {
               <div className="ctitle" style={{ marginTop: 14 }}>Production log</div>
               <div className="tw">
                 <table>
-                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>Start–End</th><th>Duration</th><th>Delay</th><th>By</th></tr></thead>
+                  <thead><tr><th>Date</th><th>Department</th><th>Machine</th><th>Produced</th><th>Wastage</th><th>Rejected</th><th>Note</th><th>Start–End</th><th>Duration</th><th>Delay</th><th>By</th></tr></thead>
                   <tbody>
                     {prod.runs.map((r) => (
                       <tr key={r.id} className={Number(r.delayMin) > 0 ? 'nr' : undefined}>
@@ -289,6 +304,8 @@ export default function Production() {
                         <td>{r.machineName || '—'}</td>
                         <td>{r.producedQty}</td>
                         <td>{r.wastageQty}</td>
+                        <td>{r.rejectQty ?? 0}</td>
+                        <td style={{ maxWidth: 220, whiteSpace: 'normal' }}>{r.note || '—'}</td>
                         <td>{r.startTime ? `${r.startTime}–${r.endTime || '…'}` : '—'}</td>
                         <td>{r.durationMin != null ? `${r.durationMin} min` : '—'}</td>
                         <td>{r.delayMin != null && Number(r.delayMin) > 0
@@ -304,6 +321,7 @@ export default function Production() {
           )}
         </div>
       )}
+      </V2Page>
 
       <Modal open={!!rec} title="Record Production" onClose={() => setRec(null)}>
         {rec && <RecordForm stage={rec} machines={machines} onCancel={() => setRec(null)} onSubmit={saveRecord} />}

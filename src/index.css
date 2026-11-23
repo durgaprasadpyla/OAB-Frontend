@@ -67,6 +67,9 @@ td input:focus,td select:focus{border-color:var(--g);outline:none}
 /* Up to four figures, keep the tiles a readable width instead of letting them stretch:
    three tiles on a wide screen became 400px each, leaving each number marooned at the
    left edge of an empty box. Five or more still share the row as before. */
+.stats.ov-stats{grid-template-columns:repeat(6,minmax(0,1fr))}
+@media (max-width:1100px){.stats.ov-stats{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:700px){.stats.ov-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .stats:not(:has(> :nth-child(5))){grid-template-columns:repeat(auto-fit,minmax(150px,240px));justify-content:start}
 .stat{background:var(--wh);border:1px solid var(--bd);border-radius:8px;padding:10px 13px}
 .sl{font-size:10px;color:var(--i3);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
