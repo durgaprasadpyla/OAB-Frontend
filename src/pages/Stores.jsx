@@ -8,6 +8,8 @@ import { PurchaseOrders } from '../components/PurchaseOrdersTab.jsx';
 import { isOpenPo, poStatus } from '../lib/poLines.js';
 import FgEntryPanel from '../components/FgEntryPanel.jsx';
 import { StoresIndents } from '../components/IndentPanel.jsx';
+import StockReconciliation from '../components/StockReconciliation.jsx';
+import StockMovementReport from '../components/StockMovementReport.jsx';
 import { storesApi, masterApi, planningApi } from '../api.js';
 import { inr, today } from '../lib/format.js';
 import { exportSheets } from '../lib/xlsx.js';
@@ -41,6 +43,9 @@ const TABS = [
   { k: 'issues', label: '🔄 Issues & Returns' },
   // Issues 11.11: "a provision to make a PI from the stores login"
   { k: 'pi', label: '📝 Purchase Indents' },
+  // BloomFlex V2: physical counts against the ledger, and the period movement report
+  { k: 'recon', label: '⚖️ Stock Reconciliation' },
+  { k: 'movement', label: '📊 Stock Movement' },
 ];
 
 // The five dispositions the business named. RETURNED is what a split roll comes
@@ -100,6 +105,8 @@ export default function Stores() {
       {tab === 'grn' && <Grn flash={flash} />}
       {tab === 'issues' && <IssuesReturns flash={flash} />}
       {tab === 'pi' && <StoresIndents />}
+      {tab === 'recon' && <StockReconciliation />}
+      {tab === 'movement' && <StockMovementReport />}
     </div>
   );
 }
@@ -386,27 +393,34 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
   }
 
   return (
-    <div className="card">
+    // BloomFlex V2: the prototype's "Material on Hand" — the figures as metric tiles, then one
+    // panel with the search in its title bar, the filters, and the board.
+    <div className="v2">
       {/* Stores 5.1: "the data items listed below MSL stock value, all of them, to move
           to the top and the filters to be closer to the table" — so the figures come
           first, and the filters with Refresh sit directly above the rows they act on. */}
-      <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
-        <div className="ctitle" style={{ margin: 0 }}>Material on hand <span className="tag tgr">{totals.items}</span></div>
-      </div>
-      <div className="stats" style={{ marginBottom: 6 }}>
-        <div className="stat"><div className="sl">Items listed</div><div className="sv">{totals.items}</div></div>
-        <div className="stat"><div className="sl">Below MSL</div><div className="sv" style={{ color: totals.below ? 'var(--red)' : undefined }}>{totals.below}</div></div>
-        <div className="stat">
+      <div className="stats v2-metrics" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+        <div className="stat v2-metric"><div className="sl">Items listed</div><div className="sv">{totals.items}</div></div>
+        <div className="stat v2-metric"><div className="sl">Below MSL</div><div className="sv" style={{ color: totals.below ? 'var(--red)' : undefined }}>{totals.below}</div></div>
+        <div className="stat v2-metric">
           <div className="sl">{fStatus ? `Value — ${statusLabel(fStatus)}` : 'Stock value'}</div>
           <div className="sv">{inr(Math.round(totals.value))}</div>
         </div>
-        <div className="stat" aria-label="Total kgs on hand"
+        <div className="stat v2-metric" aria-label="Total kgs on hand"
           title={totals.notKg ? `${totals.notKg} item(s) stocked in other units (metres, litres, numbers) are not included` : 'Every item shown is stocked in kilograms'}>
           <div className="sl">{fStatus ? `Total KG — ${statusLabel(fStatus)}` : 'Total on hand (KG)'}</div>
           <div className="sv">{qty(Math.round(totals.kg * 100) / 100)} kg</div>
-          {totals.notKg > 0 && <div style={{ fontSize: 10, color: 'var(--i3)' }}>excl. {totals.notKg} non-kg item{totals.notKg === 1 ? '' : 's'}</div>}
+          {totals.notKg > 0 && <div className="detail">excl. {totals.notKg} non-kg item{totals.notKg === 1 ? '' : 's'}</div>}
         </div>
       </div>
+      <div className="card v2-cardpanel">
+        <div className="v2-panel-title">
+          <div><h2>Material on hand <span className="tag tgr">{totals.items}</span></h2></div>
+          <div className="v2-actions">
+            <input className="v2-search" placeholder="Search item / code / internal code (BLMU-…)…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 280 }} />
+          </div>
+        </div>
+        <div className="v2-pad">
       <div className="pg-sub" style={{ marginTop: 0 }}>
         Closing stock is the sum of the rolls / cans actually in the racks — click a row to see them, their location and their status.
         {readOnly ? ' This is the Stores login\u2019s board, read here as it stands; MSL and dispositions are set by Stores.' : ' MSL can be typed per item, or set for every item at once from the average of the last three months\u2019 consumption.'}
@@ -456,9 +470,8 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
           </table></div>
         </div>
       )}
-
-      <div className="fbar" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
-        <input placeholder="Search item / code / internal code (BLMU-…)…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search items" style={{ minWidth: 240 }} />
+        </div>
+      <div className="fbar" style={{ flexWrap: 'wrap', margin: 0, padding: '0 18px 12px' }}>
         <select value={fCode} onChange={(e) => setFCode(e.target.value)} aria-label="Filter by item code">
           <option value="">All item codes</option>
           {opts('code').map((v) => {
@@ -501,20 +514,22 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
           <button className="btn btn-s" onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
         </div>
       </div>
-
       <div className="tw sy" style={{ maxHeight: 'calc(100vh - 380px)' }}>
-        <table>
+        <table className="v2-dense">
           <thead><tr>
             <th style={{ width: 30 }}></th><th>Item Code</th><th style={{ minWidth: 200 }}>Description</th>
             <th>Material</th><th>Sub-Group</th><th>Speciality</th><th>Microns</th><th>Department</th>
-            <th style={{ textAlign: 'right' }}>Closing Stock</th><th style={{ width: 60 }}>UOM</th>
+            <th style={{ textAlign: 'right' }}>Closing Stock</th>
+            <th style={{ textAlign: 'right' }} title="Allocated to sale orders on live rolls">Reserved</th>
+            <th style={{ textAlign: 'right' }} title="Closing stock less reserved">Free</th>
+            <th style={{ width: 60 }}>UOM</th>
             <th style={{ textAlign: 'right', width: 110 }}>MSL</th>
             <th style={{ textAlign: 'right', width: 110 }}>3-mo avg</th>
             <th style={{ textAlign: 'right' }}>Stock Value</th>
           </tr></thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
+              <tr><td colSpan={15} style={{ textAlign: 'center', padding: 20, color: 'var(--i3)' }}>
                 {rows.length ? 'No items match these filters' : 'No items yet — the Item Master (P Dashboard) feeds this list'}
               </td></tr>
             ) : visible.map((r) => (
@@ -529,6 +544,8 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                   <td style={{ fontSize: 11 }}>{r.microns || '—'}</td>
                   <td style={{ fontSize: 11 }}>{r.departmentName || '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: r.belowMsl ? 'var(--red)' : 'var(--g)' }}>{qty(r.closingStock)}</td>
+                  <td style={{ textAlign: 'right', fontSize: 11 }}>{num(r.reserved) ? qty(r.reserved) : '—'}</td>
+                  <td style={{ textAlign: 'right', fontSize: 11, fontWeight: 600 }}>{r.free == null ? qty(r.closingStock) : qty(r.free)}</td>
                   <td style={{ fontSize: 11 }}>{r.uom || '—'}</td>
                   <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
                     {readOnly ? qty(r.msl) : (
@@ -543,7 +560,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
                 </tr>
                 {open === r.id && (
                   <tr>
-                    <td colSpan={13} style={{ background: 'var(--bg)', padding: '10px 16px' }}>
+                    <td colSpan={15} style={{ background: 'var(--bg)', padding: '10px 16px' }}>
                       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
                         Rolls / cans of {r.code} <span className="tag tgr">{units.length}</span>
                         <span className="pg-sub" style={{ display: 'inline', marginLeft: 8 }}>oldest first — issue in this order (FIFO)</span>
@@ -598,6 +615,7 @@ The rolls keep their stickers, GRN and history — only the item they belong to 
         </table>
       </div>
       {traceOf && <UnitTraceModal unit={traceOf} onClose={() => setTraceOf(null)} flash={flash} />}
+      </div>
     </div>
   );
 }

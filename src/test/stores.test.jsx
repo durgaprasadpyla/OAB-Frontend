@@ -109,7 +109,9 @@ describe('Stores — the material-on-hand board', () => {
     ['BOPP', 'Films', 'High Barrier', '20', 'Printing'].forEach((v) => {
       expect(within(row).getByText(v)).toBeInTheDocument();
     });
-    expect(within(row).getByText('400')).toBeInTheDocument();            // closing stock
+    // closing stock — and, with nothing reserved, the BloomFlex V2 Free column shows
+    // the same 400, so two cells carry it (Reserved shows 0).
+    expect(within(row).getAllByText('400')).toHaveLength(2);
     expect(within(row).getByLabelText('MSL for FILM-BOPP20')).toHaveValue(500);
   });
 
