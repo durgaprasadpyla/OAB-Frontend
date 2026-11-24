@@ -99,3 +99,11 @@
   .v2 .pl-grid3{grid-template-columns:1fr 1fr}
 }
 @media (max-width:740px){.v2 .pl-days,.v2 .pl-grid3{grid-template-columns:1fr}}
+
+/* Daily board filters (view only) */
+.v2 .board-qfilters{display:flex;flex-direction:column;gap:6px;margin:0 0 10px;padding:8px;border:1px solid #e2eaf5;border-radius:9px;background:#f9fbff}
+.v2 .board-qfilters input,.v2 .board-qfilters select{height:32px;border:1px solid #d8e2ee;border-radius:7px;padding:0 8px;font-size:12px;width:100%;min-width:0;box-sizing:border-box;background:#fff}
+.v2 .board-qrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.v2 .board-mfilters .pl-controls{flex-wrap:wrap;align-items:flex-end}
+.v2 .board-mfilters .fg{margin-bottom:0}
+.v2 .board-job.so-hit{outline:2px solid #f59e0b;outline-offset:1px;background:#fff7e6}

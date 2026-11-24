@@ -34,6 +34,17 @@ export default function DailyBoard({ embedded = false }) {
   // pointer. Both are UI-only: a drag that is dropped nowhere leaves no trace.
   const [dragging, setDragging] = useState(null);
   const [hover, setHover] = useState('');
+  // Board filters — VIEW ONLY: they hide queue cards, machines and shifts, never a plan.
+  // Kept while the date changes or the board refreshes.
+  const [qText, setQText] = useState('');      // queue: SO / spec / job / route
+  const [qDept, setQDept] = useState('');      // queue: still to plan at this department
+  const [qReady, setQReady] = useState('');    // queue: COMPLETE | PARTIAL
+  const [fDept, setFDept] = useState('');      // machines: department
+  const [fMachine, setFMachine] = useState(''); // machines: one machine
+  const [fShift, setFShift] = useState('');    // machines: one shift
+  const [fSo, setFSo] = useState('');          // machines: where an SO is planned
+  const [fShow, setFShow] = useState('');      // machines: '' | 'jobs' | 'free'
+  const clearFilters = () => { setQText(''); setQDept(''); setQReady(''); setFDept(''); setFMachine(''); setFShift(''); setFSo(''); setFShow(''); };
   // A drop fires dragend + drop, and the modal's Plan it can be double-clicked; this
   // guard makes an assign/move idempotent per gesture so the SO cannot be planned twice.
   const busy = useRef(false);
@@ -81,6 +92,32 @@ export default function DailyBoard({ embedded = false }) {
   const jobsFor = (machineId, shift) => (board.jobs || []).filter((j) => String(j.machineId) === String(machineId) && j.planDate === date
     && (shift ? (j.shift || 'A') === shift : true)).sort((a, b) => (a.seqOrder || 0) - (b.seqOrder || 0));
   const capFor = (machineId) => (board.capacity || []).find((c) => String(c.machineId) === String(machineId) && c.date === date);
+
+  // ── filters ────────────────────────────────────────────────────────────────
+  const qMatch = (p) => {
+    const t = qText.trim().toLowerCase();
+    if (t && ![p.so, p.spec, p.jobName, p.routeName].some((v) => String(v || '').toLowerCase().includes(t))) return false;
+    if (qDept && !(p.routeProgress || []).some((st) => !st.planned && String(st.departmentId) === qDept)) return false;
+    if (qReady && (p.readyMode === 'PARTIAL' ? 'PARTIAL' : 'COMPLETE') !== qReady) return false;
+    return true;
+  };
+  const soQ = fSo.trim().toLowerCase();
+  const soHit = (j) => !!soQ && String(j.so || '').toLowerCase().includes(soQ);
+  const machineVisible = (mc) => {
+    if (fDept && String(mc.departmentId) !== fDept) return false;
+    if (fMachine && String(mc.id) !== fMachine) return false;
+    const js = jobsFor(mc.id);
+    if (soQ && !js.some(soHit)) return false;
+    if (fShow === 'jobs' && js.length === 0) return false;
+    if (fShow === 'free') {
+      const cap = capFor(mc.id);
+      const used = mins(cap?.usedMinutes), capM = mins(cap?.capMinutes) || mins((mc.functionalHoursPerDay || 12) * 60);
+      if (used >= capM) return false;
+    }
+    return true;
+  };
+  const shownMachines = (machines || []).filter(machineVisible).length;
+  const boardFiltered = !!(fDept || fMachine || fShift || soQ || fShow);
 
   // ── drag/drop ──────────────────────────────────────────────────────────────
   // The payload travels on the dataTransfer (so a drop works even across a re-render)
@@ -280,12 +317,34 @@ export default function DailyBoard({ embedded = false }) {
           {(() => {
             const open = pool.filter((p) => !p.fullyPlanned);
             const done = pool.length - open.length;
+            const shown = open.filter(qMatch);
+            const queueDepts = departments.filter((d) => open.some((p) => (p.routeProgress || []).some((st) => !st.planned && String(st.departmentId) === String(d.id))));
             return (
               <>
                 <div className="ctitle">Ready to Plan <span className="tag ty">{open.length}</span></div>
-                {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned.</div> : (
+                {open.length > 0 && (
+                  <div className="board-qfilters" aria-label="Filter the Ready to Plan list">
+                    <input value={qText} onChange={(e) => setQText(e.target.value)} placeholder="Search SO / spec / job / route"
+                      aria-label="Search the Ready to Plan list" />
+                    <div className="board-qrow">
+                      <select value={qDept} onChange={(e) => setQDept(e.target.value)} aria-label="Waiting at department">
+                        <option value="">Waiting at: all</option>
+                        {queueDepts.map((d) => <option key={d.id} value={String(d.id)}>{d.name} ({open.filter((p) => (p.routeProgress || []).some((st) => !st.planned && String(st.departmentId) === String(d.id))).length} SO)</option>)}
+                      </select>
+                      <select value={qReady} onChange={(e) => setQReady(e.target.value)} aria-label="Complete or partial">
+                        <option value="">Ready: all</option>
+                        <option value="COMPLETE">Complete only</option>
+                        <option value="PARTIAL">Partial only</option>
+                      </select>
+                    </div>
+                    {shown.length !== open.length && <div className="pg-sub" style={{ margin: 0 }}>Showing {shown.length} of {open.length}</div>}
+                  </div>
+                )}
+                {open.length === 0 ? <div className="al al-b">No SOs waiting to be planned.</div> : shown.length === 0 ? (
+                  <div className="al al-b">No sale orders match the filters.</div>
+                ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {open.map((p) => {
+                    {shown.map((p) => {
                       const stages = p.routeProgress || [];
                       const doneN = stages.filter((st) => st.planned).length;
                       const held = dragging && dragging.kind === 'so' && dragging.so === p.so;
@@ -333,7 +392,42 @@ export default function DailyBoard({ embedded = false }) {
 
         {/* Machine columns by department */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-          {Object.entries(machinesByDept).map(([deptId, list]) => (
+          {machines.length > 0 && (
+            <section className="v2-panel board-mfilters" style={{ marginBottom: 0 }} aria-label="Filter the machines">
+              <div className="pl-controls">
+                <div className="fg"><label>Department</label>
+                  <select value={fDept} onChange={(e) => { setFDept(e.target.value); setFMachine(''); }} aria-label="Department filter">
+                    <option value="">All departments</option>
+                    {Object.keys(machinesByDept).filter((k) => k !== 'none').map((k) => <option key={k} value={String(k)}>{deptName(k)} ({machinesByDept[k].length} machine{machinesByDept[k].length === 1 ? '' : 's'})</option>)}
+                  </select></div>
+                <div className="fg"><label>Machine</label>
+                  <select value={fMachine} onChange={(e) => setFMachine(e.target.value)} aria-label="Machine filter">
+                    <option value="">All machines</option>
+                    {(machines || []).filter((mc) => !fDept || String(mc.departmentId) === fDept)
+                      .map((mc) => <option key={mc.id} value={String(mc.id)}>{mc.code} · {mc.name}</option>)}
+                  </select></div>
+                <div className="fg"><label>Shift</label>
+                  <select value={fShift} onChange={(e) => setFShift(e.target.value)} aria-label="Shift filter">
+                    <option value="">All shifts</option><option value="A">Shift A</option><option value="B">Shift B</option><option value="C">Shift C</option>
+                  </select></div>
+                <div className="fg"><label>Find SO on the board</label>
+                  <input value={fSo} onChange={(e) => setFSo(e.target.value)} placeholder="e.g. 26/903" aria-label="Find SO on the board" style={{ width: 120 }} /></div>
+                <div className="fg"><label>Show</label>
+                  <select value={fShow} onChange={(e) => setFShow(e.target.value)} aria-label="Show machines">
+                    <option value="">All machines</option><option value="jobs">Machines with jobs</option><option value="free">Machines with free time</option>
+                  </select></div>
+                <button className="btn btn-s" onClick={clearFilters}>✕ Clear filters</button>
+                <span className="pg-sub" style={{ margin: 0, alignSelf: 'center' }}>Showing {shownMachines} of {machines.length} machines</span>
+              </div>
+            </section>
+          )}
+          {boardFiltered && shownMachines === 0 && machines.length > 0 && (
+            <div className="al al-b" style={{ margin: 0 }}>No machines match the filters.</div>
+          )}
+          {Object.entries(machinesByDept).map(([deptId, all]) => {
+            const list = all.filter(machineVisible);
+            if (list.length === 0) return null;
+            return (
             <section className="v2-panel" key={deptId} style={{ marginBottom: 0 }}>
               <div className="v2-panel-title">
                 <h2>{deptName(deptId)}</h2>
@@ -391,7 +485,7 @@ export default function DailyBoard({ embedded = false }) {
                         );
                       })()}
                       {/* §77-78: one drop zone per shift; drag between them to re-shift a job. */}
-                      {shiftsFor(mc.id).map((sh) => {
+                      {shiftsFor(mc.id).filter((sh) => !fShift || sh.k === fShift).map((sh) => {
                         const jobs = jobsFor(mc.id, sh.k);
                         const hot = hover === mc.id + '|' + sh.k && ok;
                         const winText = shiftWindows(mc.id, sh.k);   // null = Unavailable (BloomFlex V2)
@@ -423,7 +517,7 @@ export default function DailyBoard({ embedded = false }) {
                             ) : jobs.map((j) => (
                               <div key={j.id} draggable onDragStart={(e) => startDragJob(e, j.id)} onDragEnd={endDrag}
                                 title={j.changed ? 'Changed after the plan was saved' : undefined}
-                                className={'board-job' + (j.changed ? ' chg' : '')}>
+                                className={'board-job' + (j.changed ? ' chg' : '') + (soHit(j) ? ' so-hit' : '')}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
                                   <span><b className="pl-so">{j.so}</b> {j.plannedQty} <span className="pg-sub">({mins(j.estMinutes)}m)</span>{j.changed ? ' ⚠' : ''}
                                     {j.planStatus === 'DRAFT' && <span className="tag ty" style={{ marginLeft: 4, fontSize: 9 }} title="Auto-planner draft — publish it from the 3-Day Planner tab">Draft</span>}</span>
@@ -460,7 +554,8 @@ export default function DailyBoard({ embedded = false }) {
                 {list.length === 0 && <div className="al al-b">No machines.</div>}
               </div>
             </section>
-          ))}
+            );
+          })}
           {machines.length === 0 && <div className="card"><div className="al al-b">No machines configured. Add them in Master Data.</div></div>}
         </div>
       </div>
