@@ -162,6 +162,10 @@ input.kam-numinput,input.nospin{-moz-appearance:textfield;appearance:textfield}
 .inv-items-tbl td{border:1pt solid #000;padding:3pt 4pt;font-size:9pt;vertical-align:top}
 .inv-items-tbl td.r{text-align:right}
 .inv-items-tbl td.c{text-align:center}
+/* Printed documents (tax invoice / proforma .inv, packing list #pl-doc, purchase order .po-doc):
+   no letter-spacing on table text. html2canvas draws letter-spaced text one character at a
+   time, and on some screens/fonts the letters drift apart in the PDF ("H SN", "G ST%"). */
+.inv th,.inv td,#pl-doc th,#pl-doc td,.po-doc th,.po-doc td{letter-spacing:0}
 .inv-bottom{display:grid;grid-template-columns:55% 45%;border:1pt solid #000;border-top:none}
 .inv-decl{padding:5pt 7pt;border-right:1pt solid #000;font-size:7.5pt;color:#333;line-height:1.5}
 .inv-tots{padding:5pt 7pt}
