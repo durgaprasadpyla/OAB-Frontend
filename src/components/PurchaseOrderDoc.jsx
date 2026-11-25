@@ -53,7 +53,7 @@ export function PurchaseOrderDoc({ po, asl, innerRef }) {
   const rawTerms = String((po && po.paymentTerms) || supplier.paymentTerms || '').trim();
   const payTerms = isNoLimit(rawTerms) ? '' : rawTerms;
   return (
-    <div ref={innerRef} style={{ width: 794, background: '#fff', color: '#111', fontFamily: 'Arial, sans-serif' }}>
+    <div ref={innerRef} className="po-doc" style={{ width: 794, background: '#fff', color: '#111', fontFamily: 'Arial, sans-serif' }}>
       <div style={{ border: '2px solid #1a3a6b', minHeight: 1100, display: 'flex', flexDirection: 'column' }}>
         <div style={{ background: '#1a3a6b', color: '#fff', display: 'flex', alignItems: 'stretch', height: 90, flexShrink: 0 }}>
           <div style={{ background: '#fff', padding: '4px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 190, flexShrink: 0 }}>

@@ -73,11 +73,13 @@
 .v2 .fg input:focus,.v2 .fg select:focus,.v2 .fbar input:focus,.v2 .fbar select:focus{border-color:var(--v2-blue);box-shadow:0 0 0 3px #177af31b}
 .v2 .fg input[readonly]{background:#f3f6fa;color:#6b7b91}
 
-/* tables */
-.v2 table{border-collapse:collapse;width:100%;font-size:12px}
-.v2 thead th{background:#f6f8fb;font-size:10px;text-transform:uppercase;letter-spacing:.35px;font-weight:800;color:#62728a;padding:11px 12px;border-bottom:1px solid var(--v2-line)}
-.v2 tbody td{padding:10px 12px;border-bottom:1px solid #e9eef4;vertical-align:middle}
-.v2 .tw{border:1px solid var(--v2-line);border-radius:10px}
+/* tables — never inside a printed document (tax invoice / proforma .inv, packing list #pl-doc,
+   purchase order .po-doc): those are captured to PDF as drawn and keep their own styles exactly.
+   :where() keeps the exclusion at zero specificity, so nothing else changes. */
+.v2 table:not(:where(.inv, #pl-doc, .po-doc) *){border-collapse:collapse;width:100%;font-size:12px}
+.v2 thead th:not(:where(.inv, #pl-doc, .po-doc) *){background:#f6f8fb;font-size:10px;text-transform:uppercase;letter-spacing:.35px;font-weight:800;color:#62728a;padding:11px 12px;border-bottom:1px solid var(--v2-line)}
+.v2 tbody td:not(:where(.inv, #pl-doc, .po-doc) *){padding:10px 12px;border-bottom:1px solid #e9eef4;vertical-align:middle}
+.v2 .tw:not(:where(.inv, #pl-doc, .po-doc) *){border:1px solid var(--v2-line);border-radius:10px}
 .v2-panel .tw{border:0;border-radius:0}
 
 /* sub navigation (Stores tabs) */
