@@ -12,6 +12,7 @@ import DailyUpdate from './pages/DailyUpdate.jsx';
 import FGLedger from './pages/FGLedger.jsx';
 import Invoice from './pages/Invoice.jsx';
 import DispatchBySO from './pages/DispatchBySO.jsx';
+import Dispatches from './pages/Dispatches.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import PDashboard from './pages/PDashboard.jsx';
 import Plant from './pages/Plant.jsx';
@@ -65,6 +66,8 @@ export default function App() {
         <Route path="/fg" element={<RoleRoute path="/fg"><FGLedger /></RoleRoute>} />
         <Route path="/invoice" element={<RoleRoute path="/invoice"><Invoice /></RoleRoute>} />
         <Route path="/specdisp" element={<RoleRoute path="/specdisp"><DispatchBySO /></RoleRoute>} />
+        {/* 27.11: the Dispatches login — invoices Account raises, Not Opened until opened here. */}
+        <Route path="/dispatches" element={<RoleRoute path="/dispatches"><Dispatches /></RoleRoute>} />
         <Route path="/dashboard" element={<RoleRoute path="/dashboard"><Dashboard /></RoleRoute>} />
         <Route path="/pdashboard" element={<RoleRoute path="/pdashboard"><PDashboard /></RoleRoute>} />
         <Route path="/plant" element={<RoleRoute path="/plant"><Plant /></RoleRoute>} />

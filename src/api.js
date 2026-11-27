@@ -82,6 +82,9 @@ export const ordersApi = {
   deleteRow: (so) => api('/api/oab-rows/delete', { method: 'POST', body: { so } }),
   // Persist the packing list onto an already-saved invoice (built after Generate).
   saveInvoicePackingList: (no, packingList) => api('/api/invoices/packing-list', { method: 'POST', body: { no, packingList } }),
+  // 27.11 Dispatches: mark an invoice "Opened" in the Dispatches desk (dispatch /
+  // superadmin only). Invoices land there "Not Opened" until this is called once.
+  openDispatch: (no) => api('/api/invoices/open', { method: 'POST', body: { no } }),
   // 30.09 §QC: a JSS edit carries the spec's identity (customer, sub-brand, job name,
   // dispatch form, job type) onto every OAB row on that spec, server-side — so the
   // JSS login, which may neither read nor write module 1, still syncs the orders.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useData } from '../data.jsx';
 import { storesApi } from '../api.js';
+import { isStayFreshJobType } from '../lib/jssSpec.js';
 import { uniqueSpecs, specFor } from '../lib/specs.js';
 import { today, fmtDate, inr } from '../lib/format.js';
 import { getPM } from '../lib/pricing.js';
@@ -43,10 +44,25 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
  *   'summary' — the Super Admin's FG Entry: the cumulative money in moving and
  *               non-moving FG at the top, no line-wise value (that lives on the
  *               Dashboard → FG Value tab, which keeps every line priced).
+ *
+ * `scope` restricts which jobs the sheet shows (27.11 Enhancements — the U1 / U2 logins):
+ *   'all' — every job (the Super Admin / Purchase Admin / Stores view).
+ *   'sf'  — StayFresh jobs only (the U2 login).
+ *   'ot'  — every NON-StayFresh job (the U1 login).
+ * A spec is StayFresh when its JSS job type is (isStayFreshJobType); a spec with no
+ * JSS / no job type is treated as "others", so it only ever shows on the 'ot' / 'all'
+ * sheets and an operator can never book StayFresh FG from the Others login or vice versa.
  */
-export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
+export default function FgEntryPanel({ heading = true, costing = 'summary', scope = 'all' }) {
   const { mods, save, reloadModule } = useData();
   const showMoney = costing !== 'none';
+  // The scope predicate over a JSS record (not a spec string): kept here so both the
+  // picker pool and the summary filter apply the exact same rule.
+  const inScope = useCallback((j) => {
+    if (scope === 'sf') return isStayFreshJobType(j && j.jobType);
+    if (scope === 'ot') return !isStayFreshJobType(j && j.jobType);
+    return true;
+  }, [scope]);
   // Issues 6 §14 — the root cause of "the two logins show different FG": every module
   // is loaded ONCE at sign-in and this sheet read that copy for as long as the tab
   // stayed open, so an entry booked from the other login (or by anyone else) was
@@ -130,12 +146,16 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
   // Spec pool: one row per code — the row specs.js picks (an Active record wins
   // when the same spec appears twice, which this screen has always assumed and
   // every other screen now does too).
+  // allPool stays UNSCOPED so a spec always resolves to its real JSS (and so the summary
+  // can classify every spec by its true job type). The picker pool is what the scope
+  // narrows — the operator can only ever pick a spec their login owns.
   const allPool = useMemo(() => uniqueSpecs(jss), [jss]);
   const specPool = useMemo(
-    () => (inclInactive ? allPool : allPool.filter(jssActive)),
-    [allPool, inclInactive], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (inclInactive ? allPool : allPool.filter(jssActive)).filter(inScope),
+    [allPool, inclInactive, inScope], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const inactiveCount = allPool.length - allPool.filter(jssActive).length;
+  const scopedPool = useMemo(() => allPool.filter(inScope), [allPool, inScope]);
+  const inactiveCount = scopedPool.length - scopedPool.filter(jssActive).length;
 
   // §43: the buying Group of a spec (via the customer master) drives a filter of
   // its own, next to the Customer filter.
@@ -181,17 +201,18 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     });
     return m;
   }, [specPool]);
-  // The same index over every JSS, so typing an inactive spec with the toggle off
-  // gets an explanation instead of silently matching nothing.
+  // The same index over every IN-SCOPE JSS, so typing an inactive (but in-scope) spec
+  // with the toggle off gets an explanation. An out-of-scope spec is absent here too, so
+  // it simply does not match — this login never books, nor hints about, another's jobs.
   const anyLookup = useMemo(() => {
     const m = {};
-    allPool.forEach((j) => {
+    scopedPool.forEach((j) => {
       const sp = String(j.spec).trim();
       m[norm(sp)] = sp;
       m[norm(`${j.jobName || '(no name)'} — ${sp}`)] = sp;
     });
     return m;
-  }, [allPool]);
+  }, [scopedPool]);
   const hiddenInactiveHint = (v) => {
     const sp = anyLookup[norm(v)];
     return sp && !specLookup[norm(v)]
@@ -351,7 +372,9 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     })
     // Hide fully-consumed specs: once FG is allocated + dispatched the available
     // qty is zero, so the SKU drops off this stock summary (client 2026-08-22).
-    .filter((r) => r.av > 0.0001), [ledger, jss, prices, mods.customers, flags, orders]); // eslint-disable-line react-hooks/exhaustive-deps
+    // 27.11: and keep only the jobs this login owns (StayFresh vs others), classified by
+    // the spec's true JSS — a spec with no JSS counts as "others".
+    .filter((r) => r.av > 0.0001 && inScope(jssFor(r.spec))), [ledger, jss, prices, mods.customers, flags, orders, inScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const summary = useMemo(() => {
     const s = sumQ.trim().toLowerCase();
@@ -388,11 +411,17 @@ export default function FgEntryPanel({ heading = true, costing = 'summary' }) {
     <>
       {heading && (
         <>
-          <div className="pg-ttl">📦 FG Entry — JSS / Finished Goods Sheet</div>
+          <div className="pg-ttl">
+            📦 FG Entry — JSS / Finished Goods Sheet
+            {scope === 'sf' && <span className="tag tgr" style={{ marginLeft: 10, fontSize: 11, verticalAlign: 'middle' }}>StayFresh jobs</span>}
+            {scope === 'ot' && <span className="tag tb" style={{ marginLeft: 10, fontSize: 11, verticalAlign: 'middle' }}>Other jobs</span>}
+          </div>
           <div className="pg-sub">
             Record finished goods produced per spec on a given date. Entries are append-only — each day's production
             is added to the spec's running FG total and can't be edited. Available FG here is what the New PO prompt and the Daily Update FG field draw from.
-            The same sheet is used from the Stores login, so both see one FG figure and one moving / non-moving report.
+            {scope === 'sf' && ' This login books FG for StayFresh jobs only.'}
+            {scope === 'ot' && ' This login books FG for every job except StayFresh.'}
+            {scope === 'all' && ' The same sheet is used from the Stores login, so both see one FG figure and one moving / non-moving report.'}
           </div>
         </>
       )}

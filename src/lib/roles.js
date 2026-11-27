@@ -16,6 +16,10 @@ export const ROLE_LABEL = {
   // 30.09 §QC: a login that does ONE thing — edit the JSS specs (the one-time
   // structuring of ~500 specs against the Item Master).
   jss: 'JSS',
+  // 27.11 Enhancements — the Superstar login split into single-purpose logins:
+  //   U1 / U2 book FG (U2 StayFresh jobs only, U1 all other jobs); Account raises
+  //   invoices; Dispatches works the invoices Account creates.
+  u1: 'FG — Others', u2: 'FG — StayFresh', account: 'Account', dispatch: 'Dispatches',
 };
 
 /** Where a role lands after sign-in. */
@@ -42,6 +46,11 @@ export function landingPath(role) {
     case 'plan': return '/plan';
     // 30.09 §QC: the JSS login has the JSS editor and nothing else.
     case 'jss': return '/jss';
+    // 27.11: FG-entry logins land on the FG sheet (scoped to their jobs); the Account
+    // login on the Invoice screen; the Dispatches login on its own desk.
+    case 'u1': case 'u2': return '/fg';
+    case 'account': return '/invoice';
+    case 'dispatch': return '/dispatches';
     default: return '/po'; // user / padmin / superadmin → main workspace
   }
 }
@@ -56,10 +65,15 @@ export function navTabs(role) {
     { to: '/oab?sheet=SF', label: 'Stay Fresh OAB', match: '/oab', sheet: 'SF' },
     { to: '/oab?sheet=OT', label: 'Others OAB', match: '/oab', sheet: 'OT' },
     { to: '/daily', label: 'Daily Update' },
-    { to: '/fg', label: '📦 FG Entry' },
-    { to: '/invoice', label: 'Invoice' },
+    // 27.11 Enhancements: "Remove the invoicing and FG update features or tabs from the
+    // Superstar user login." FG Entry moved to the U1 / U2 logins and Invoice to the
+    // Account login, so the Superstar (role 'user') no longer carries either tab. The
+    // Super Admin and Purchase Admin keep them (break-glass / admin oversight).
+    ...(role === 'user' ? [] : [{ to: '/fg', label: '📦 FG Entry' }, { to: '/invoice', label: 'Invoice' }]),
     { to: '/specdisp', label: '📊 Dispatch by SO' },
   ];
+  // 27.11: the Super Admin oversees the Dispatches desk too (the Dispatches login owns it).
+  if (role === 'superadmin') tabs.push({ to: '/dispatches', label: '🚚 Dispatches' });
   if (role === 'superadmin') tabs.push({ to: '/dashboard', label: '📊 Dashboard' });
   // Superadmin keeps the full operations view AND gets an HR tab; role 'hr' has
   // an HR-only workspace and never reaches these ops tabs at all.
@@ -85,7 +99,15 @@ export function navTabs(role) {
 /** Whether a role may view a route (base path, query ignored). */
 export function canAccess(role, path) {
   const p = String(path || '').split('?')[0];
-  if (['/po', '/po-to-so', '/oab', '/daily', '/fg', '/invoice', '/specdisp'].includes(p)) return OPS_ROLES.includes(role);
+  // 27.11: FG Entry and Invoice left the Superstar (role 'user') login. FG Entry is now
+  // the U1 (non-StayFresh) / U2 (StayFresh) logins — plus padmin / superadmin oversight;
+  // Invoice is the Account login — plus padmin / superadmin. The remaining ops screens
+  // are unchanged for every ops role.
+  if (['/po', '/po-to-so', '/oab', '/daily', '/specdisp'].includes(p)) return OPS_ROLES.includes(role);
+  if (p === '/fg') return ['padmin', 'superadmin', 'u1', 'u2'].includes(role);
+  if (p === '/invoice') return ['padmin', 'superadmin', 'account'].includes(role);
+  // Dispatches desk: the Dispatches login plus the Super Admin.
+  if (p === '/dispatches') return role === 'dispatch' || role === 'superadmin';
   if (p === '/dashboard') return role === 'superadmin';
   if (p === '/pdashboard') return role === 'padmin' || role === 'superadmin';
   if (p === '/plant') return role === 'plant';

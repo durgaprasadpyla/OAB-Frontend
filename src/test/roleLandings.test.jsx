@@ -99,3 +99,62 @@ describe('role landings — the JSS login', () => {
       .forEach((r) => expect(canAccess(r, '/jss')).toBe(false));
   });
 });
+
+// 27.11 Enhancements: the Superstar login split into single-purpose logins —
+//   U2 FG (StayFresh) · U1 FG (others) · Account (invoicing) · Dispatches.
+describe('role landings — the 27.11 FG / Account / Dispatches logins', () => {
+  it('each new login lands on its own page and is labelled', () => {
+    expect(landingPath('u1')).toBe('/fg');
+    expect(landingPath('u2')).toBe('/fg');
+    expect(landingPath('account')).toBe('/invoice');
+    expect(landingPath('dispatch')).toBe('/dispatches');
+    expect(ROLE_LABEL.u1).toBe('FG — Others');
+    expect(ROLE_LABEL.u2).toBe('FG — StayFresh');
+    expect(ROLE_LABEL.account).toBe('Account');
+    expect(ROLE_LABEL.dispatch).toBe('Dispatches');
+  });
+
+  it('FG Entry moved off the Superstar (user) onto the U1 / U2 logins', () => {
+    // the Superstar no longer reaches FG Entry or Invoice …
+    expect(canAccess('user', '/fg')).toBe(false);
+    expect(canAccess('user', '/invoice')).toBe(false);
+    // … but keeps the rest of the ops workspace
+    ['/po', '/po-to-so', '/oab', '/daily', '/specdisp'].forEach((p) => expect(canAccess('user', p)).toBe(true));
+    // the FG logins reach only the FG sheet
+    ['u1', 'u2'].forEach((r) => {
+      expect(canAccess(r, '/fg')).toBe(true);
+      ['/invoice', '/dispatches', '/po', '/oab', '/daily', '/specdisp'].forEach((p) => expect(canAccess(r, p)).toBe(false));
+      expect(navTabs(r)).toHaveLength(0);
+    });
+  });
+
+  it('Account reaches only invoicing; Dispatches only its desk', () => {
+    expect(canAccess('account', '/invoice')).toBe(true);
+    ['/fg', '/dispatches', '/po', '/oab', '/daily'].forEach((p) => expect(canAccess('account', p)).toBe(false));
+    expect(navTabs('account')).toHaveLength(0);
+
+    expect(canAccess('dispatch', '/dispatches')).toBe(true);
+    ['/invoice', '/fg', '/po', '/oab', '/specdisp'].forEach((p) => expect(canAccess('dispatch', p)).toBe(false));
+    expect(navTabs('dispatch')).toHaveLength(0);
+  });
+
+  it('the Super Admin keeps FG, Invoice and the Dispatches desk (break-glass); Purchase Admin keeps FG + Invoice', () => {
+    ['/fg', '/invoice', '/dispatches'].forEach((p) => expect(canAccess('superadmin', p)).toBe(true));
+    expect(canAccess('padmin', '/fg')).toBe(true);
+    expect(canAccess('padmin', '/invoice')).toBe(true);
+    expect(canAccess('padmin', '/dispatches')).toBe(false);
+  });
+
+  it('the Superstar ops nav drops FG Entry + Invoice but keeps Dispatch by SO; Super Admin keeps all three', () => {
+    const user = navTabs('user').map((t) => t.to);
+    expect(user).not.toContain('/fg');
+    expect(user).not.toContain('/invoice');
+    expect(user).toContain('/specdisp');
+    expect(user).toContain('/po');
+
+    const sa = navTabs('superadmin').map((t) => t.to);
+    expect(sa).toContain('/fg');
+    expect(sa).toContain('/invoice');
+    expect(sa).toContain('/dispatches');
+  });
+});

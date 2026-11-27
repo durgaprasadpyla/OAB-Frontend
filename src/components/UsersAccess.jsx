@@ -37,6 +37,11 @@ const ROLE_OPTIONS = [
   { v: 'plan', l: 'Planning — Ready to Plan' },
   // 30.09 §QC: a login that edits the JSS specs and nothing else.
   { v: 'jss', l: 'JSS Editor — edit JSS specs only' },
+  // 27.11 Enhancements — the Superstar login split into single-purpose logins.
+  { v: 'u2', l: 'FG Entry — StayFresh jobs only' },
+  { v: 'u1', l: 'FG Entry — all other jobs' },
+  { v: 'account', l: 'Account — Invoicing' },
+  { v: 'dispatch', l: 'Dispatches — open & dispatch invoices' },
 ];
 const ROLES = ROLE_OPTIONS.map((r) => r.v);
 const roleLabel = (v) => (ROLE_OPTIONS.find((r) => r.v === v) || {}).l || (v || '-');

@@ -42,6 +42,12 @@ const ROLE_BAR = {
     links: [{ to: '/plan', label: '✅ Ready to Plan' }, { to: '/reports', label: '📈 Reports' }] },
   // 30.09 §QC: the JSS login — one screen, the JSS editor.
   jss: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'JSS Editor', signOut: 'Sign Out' },
+  // 27.11 Enhancements — the Superstar login split into single-purpose logins, each a
+  // single-screen (panel) role with its own brand bar and no ops nav tabs.
+  u1: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'FG Entry — Other Jobs', signOut: 'Sign Out' },
+  u2: { bg: '#0e6fb8', brand: 'BLOOMFLEX', sub: 'FG Entry — StayFresh', signOut: 'Sign Out' },
+  account: { bg: '#1a3a6b', brand: 'BLOOMFLEX', sub: 'Account — Invoicing', signOut: 'Sign Out' },
+  dispatch: { bg: '#0a5aa0', brand: 'BLOOMFLEX', sub: 'Dispatches', signOut: 'Sign Out' },
 };
 
 

@@ -65,7 +65,8 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
     if (u.includes('/api/admin/users/roles')) {
       if (role !== 'superadmin') return res(403, { error: 'Forbidden' });
       return res(200, ['superadmin', 'user', 'padmin', 'plant', 'qc', 'pm', 'scrap', 'purchase', 'sadmin', 'quote',
-        'sales', 'hr', 'planner', 'stores', 'ppc', 'mis', 'plan', 'jss'].map((r) => ({ role: r })));
+        'sales', 'hr', 'planner', 'stores', 'ppc', 'mis', 'plan', 'jss',
+        'u1', 'u2', 'account', 'dispatch'].map((r) => ({ role: r })));
     }
 
     if (u.includes('/api/seq/')) {
@@ -111,6 +112,15 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       entry.packingList = body.packingList || [];
       recordOab('/api/invoices/packing-list', body);
       return res(200, { no: body.no, items: (body.packingList || []).length });
+    }
+
+    // 27.11 Dispatches: mark an invoice Opened — matched before the generic POST.
+    if (u.includes('/api/invoices/open') && method === 'POST') {
+      const entry = ((modules.oab && modules.oab.INV_REG) || []).find((e) => e.no === body.no);
+      if (!entry) return res(404, { status: 404, message: 'No invoice ' + body.no });
+      entry.opened = true; entry.openedBy = user; entry.openedAt = '2026-11-27T10:00:00';
+      recordOab('/api/invoices/open', body);
+      return res(200, { no: body.no, opened: true, openedBy: user, openedAt: entry.openedAt });
     }
 
     if (u.includes('/api/invoices') && method === 'POST') {
@@ -333,6 +343,8 @@ export function installFetch(modules, { conflictOnce = {}, forbidRead = {}, fail
       return res(200, regList.map((e) => ({
         id: e.no, inv_no: e.no, inv_date: e.date, po: e.po, customer: e.customer,
         qty: e.qty, amount: e.amount, margin: e.margin, items: e.items || [],
+        // 27.11 Dispatches: the open / not-opened status travels with each row.
+        opened: !!e.opened, openedBy: e.openedBy || null, openedAt: e.openedAt || null,
         payload: JSON.stringify(e),
       })));
     }

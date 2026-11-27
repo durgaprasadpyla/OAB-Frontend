@@ -24,7 +24,7 @@ describe('Super Admin role switcher', () => {
     expect(badge()).toHaveAttribute('aria-expanded', 'true');
     const list = await screen.findByRole('listbox');
     const opts = await within(list).findAllByRole('option');
-    expect(opts.length).toBe(18);                                    // every role the server listed
+    expect(opts.length).toBe(22);                                    // every role the server listed (+ u1/u2/account/dispatch, 27.11)
     const sel = opts.filter((o) => o.getAttribute('aria-selected') === 'true');
     expect(sel).toHaveLength(1);
     expect(sel[0]).toHaveTextContent('Super Admin');
