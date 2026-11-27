@@ -123,6 +123,27 @@ export function getUOM(dispatchForm) {
   return 'Pcs';
 }
 
+/**
+ * 27.11: "in the auto-generated invoice whenever there is a roll form despatch, the unit
+ * of measurement should be Kgs whereas now it is coming as metres. Where are we mapping
+ * the despatch form and the unit of measurement?"
+ *
+ * The unit PRINTED on the invoice, proforma, packing list and portal copy. Orders,
+ * balances and planning keep getUOM (rolls in metres, 17.10). The Super Admin maps it
+ * per dispatch form under Drop-down selections → Invoice unit per dispatch form
+ * (`sales.invoice_uom`, { "roll": "Kgs" }); a form not mapped there prints Kgs for a
+ * roll and getUOM's unit for everything else.
+ */
+export const INVOICE_UOMS = ['Kgs', 'Mtrs', 'Pcs', 'Nos'];
+export function invoiceUOM(dispatchForm, sales) {
+  const df = String(dispatchForm || '').toLowerCase().trim();
+  const map = (sales && sales.invoice_uom && typeof sales.invoice_uom === 'object') ? sales.invoice_uom : {};
+  const set = df && String(map[df] || '').trim();
+  if (set) return set;
+  if (df === 'roll' || df === 'rolls') return 'Kgs';
+  return getUOM(dispatchForm);
+}
+
 // Raw-material ₹/kg rates now live on the server (rm_rate table) instead of
 // per-device localStorage, so margins are identical on every device. Load them
 // via api.js `rmRatesApi.get()` and pass them in as ctx.matRates.

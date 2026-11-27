@@ -4,7 +4,7 @@
 // Powers the "Portal Entry" copy panel so the fields can be copied straight into
 // the portal instead of being re-typed from the PDF.
 import { billedFreight, gstBreakup } from './calc.js';
-import { getUOM } from './pricing.js';
+import { invoiceUOM } from './pricing.js';
 import { fmtDate } from './format.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -15,7 +15,7 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
  * @param {Array}  lines  pendInv-style rows ({ spec, jobName, qty, rate, lineTotal, dispatchForm })
  * @returns fields with both display-ready and raw values.
  */
-export function invoicePortalFields(header, lines) {
+export function invoicePortalFields(header, lines, sales) {
   const h = header || {};
   const rows = (lines || []).map((l) => {
     const qty = num(l.qty);
@@ -26,7 +26,7 @@ export function invoicePortalFields(header, lines) {
       spec: l.spec || '',
       qty,
       rate,
-      uom: getUOM(l.dispatchForm),
+      uom: invoiceUOM(l.dispatchForm, sales),   // 27.11: the unit the invoice prints
       amount,
     };
   });

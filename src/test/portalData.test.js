@@ -51,14 +51,15 @@ describe('invoicePortalFields — customer-portal extraction', () => {
     expect(f.subTotal).toBe(75 * 100 + 80 * 40);    // 11700
   });
 
-  it('roll dispatch form reports Mtrs / per-Metre', () => {
-    const f = invoicePortalFields(
-      { ivNo: 'BL/26-27/11', ivDt: '2026-06-01', gstType: 'IGST' },
-      [{ spec: 'R1', jobName: 'Roll', qty: 500, rate: 120, dispatchForm: 'roll' }],
-    );
-    expect(f.uom).toBe('Mtrs');
-    expect(unitNoun(f.uom)).toBe('Metre');
-    expect(unitNoun('Kgs')).toBe('Kg');
+  // 27.11: the client — a roll invoice is in Kgs (orders and balances stay in metres)
+  it('roll dispatch form reports Kgs / per-Kg, unless the Super Admin maps it otherwise', () => {
+    const lines = [{ spec: 'R1', jobName: 'Roll', qty: 500, rate: 120, dispatchForm: 'roll' }];
+    const f = invoicePortalFields({ ivNo: 'BL/26-27/11', ivDt: '2026-06-01', gstType: 'IGST' }, lines);
+    expect(f.uom).toBe('Kgs');
+    expect(unitNoun(f.uom)).toBe('Kg');
+    const mapped = invoicePortalFields({ ivNo: 'BL/26-27/11', ivDt: '2026-06-01', gstType: 'IGST' }, lines, { invoice_uom: { roll: 'Mtrs' } });
+    expect(mapped.uom).toBe('Mtrs');
+    expect(unitNoun('Mtrs')).toBe('Metre');
   });
 
   it('honours an explicit lineTotal over qty*rate', () => {

@@ -4,6 +4,7 @@ import { useAuth } from '../auth.jsx';
 import { masterApi, storesApi, hrApi } from '../api.js';
 import { DROPDOWN_DEFS, DD_DEFAULTS, UOM_DEFAULTS, ddList, ddPatch, ddIsOverridden } from '../lib/dropdowns.js';
 import { syncDespatchMaster, effectiveDespatchList } from '../lib/despatchSync.js';
+import { INVOICE_UOMS, invoiceUOM } from '../lib/pricing.js';
 import {
   defaultDensity, densityList, printingMachines, laminationMachines, machineKey, machineLabel, parseWidths,
 } from '../lib/specSheet.js';
@@ -225,7 +226,9 @@ export default function DropdownAdmin() {
         </div>
       </div>
 
-      {def.panel === 'density' ? (
+      {def.panel === 'invoiceUom' ? (
+        <InvoiceUomPanel sales={sales} save={save} forms={ddList(sales, 'despatch')} />
+      ) : def.panel === 'density' ? (
         <DensityPanel sales={sales} save={save} materials={filmSubstrates} />
       ) : def.panel === 'tooling' ? (
         <ToolingPanel sales={sales} save={save} machines={machines} error={machErr} />
@@ -392,6 +395,58 @@ function DensityPanel({ sales, save, materials }) {
  * its rollers (width, mm). The machines are the Machines master's Printing and
  * Lamination departments.
  */
+/**
+ * 27.11 — the unit each dispatch form prints with on the invoice, proforma, packing list
+ * and portal copy. Orders, balances and planning keep their own units (rolls in metres).
+ * A form left on "Default" prints Kgs for a roll and Pcs for the rest.
+ */
+function InvoiceUomPanel({ sales, save, forms }) {
+  const saved = (sales && sales.invoice_uom && typeof sales.invoice_uom === 'object') ? sales.invoice_uom : {};
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const list = [...new Set([...(forms || []).map((f) => String(f || '').trim()).filter(Boolean), 'Roll'])];
+  async function setUnit(form, unit) {
+    const key = form.toLowerCase();
+    const next = { ...saved };
+    if (unit) next[key] = unit; else delete next[key];
+    setBusy(true); setNote(null);
+    try {
+      await save('sales', (prev) => ({ ...(prev || {}), invoice_uom: next }));
+      setNote({ t: 'g', text: `✓ ${form} prints ${invoiceUOM(form, { invoice_uom: next })} on the invoice.` });
+    } catch (e) { setNote({ t: 'r', text: 'Save failed: ' + (e.message || e) }); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="card" aria-label="Invoice unit per dispatch form">
+      <div className="ctitle">Invoice unit per dispatch form</div>
+      <div className="pg-sub" style={{ marginTop: 0 }}>
+        The unit printed against each line of the tax invoice, proforma and packing list. Orders, balances and planning are not changed by this.
+      </div>
+      {note && <div className={'al al-' + note.t}>{note.text}</div>}
+      <div className="tw"><table>
+        <thead><tr><th>Dispatch form</th><th style={{ width: 200 }}>Unit on the invoice</th><th>Prints as</th></tr></thead>
+        <tbody>
+          {list.map((form) => {
+            const cur = String(saved[form.toLowerCase()] || '');
+            return (
+              <tr key={form}>
+                <td>{form}</td>
+                <td>
+                  <select value={cur} disabled={busy} aria-label={`Invoice unit for ${form}`} onChange={(e) => setUnit(form, e.target.value)}>
+                    <option value="">Default</option>
+                    {INVOICE_UOMS.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </td>
+                <td style={{ fontWeight: 700 }}>{invoiceUOM(form, sales)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table></div>
+    </div>
+  );
+}
+
 function ToolingPanel({ sales, save, machines, error }) {
   const saved = sales.machine_tooling || {};
   const [work, setWork] = useState(null);

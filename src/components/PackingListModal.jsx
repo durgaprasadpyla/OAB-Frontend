@@ -1,5 +1,6 @@
 import { Fragment, useRef } from 'react';
-import { getUOM } from '../lib/pricing.js';
+import { invoiceUOM } from '../lib/pricing.js';
+import { useDataOptional } from '../data.jsx';
 import { fmtDate } from '../lib/format.js';
 import { saveDocPdf, PLAIN_PDF } from '../lib/invoicePdf.js';
 
@@ -52,6 +53,7 @@ export function buildAutoPackingList(lines, qtyPerBagOf) {
 }
 
 export default function PackingListModal({ items, setItems, invNo, header, lines, onClose }) {
+  const salesBlob = (useDataOptional() || {}).mods?.sales;   // 27.11: roll → Kgs on the documents
   const docRef = useRef(null);
   const h = header || {};
   const rows = items || [];
@@ -103,7 +105,7 @@ export default function PackingListModal({ items, setItems, invNo, header, lines
   function handlePrint() {
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { alert('Allow pop-ups to print the packing list.'); return; }
-    win.document.write(buildPlPrintDoc({ rows, invNo, h, dispLoc, warehouse, billAddr, shipAddr }));
+    win.document.write(buildPlPrintDoc({ rows, invNo, h, dispLoc, warehouse, billAddr, shipAddr, salesBlob }));
     win.document.close();
     setTimeout(() => win.print(), 600);
   }
@@ -171,7 +173,7 @@ export default function PackingListModal({ items, setItems, invNo, header, lines
                       <td colSpan={5} style={{ padding: '7px 10px', fontSize: 11, fontWeight: 700, borderBottom: '2px solid #C5DFC8' }}>
                         {item.jobName || item.spec}
                         <span style={{ fontWeight: 400, color: '#555', fontSize: 10, marginLeft: 8 }}>
-                          Invoice Qty: <strong>{grp(item.totalQty)}</strong> {getUOM(item.dispatchForm).toLowerCase()}
+                          Invoice Qty: <strong>{grp(item.totalQty)}</strong> {invoiceUOM(item.dispatchForm, salesBlob).toLowerCase()}
                         </span>
                         {complete
                           ? <span style={{ color: '#0e6fb8', fontWeight: 700, marginLeft: 10 }}>✓ Complete</span>
@@ -271,7 +273,7 @@ const esc = (v) => String(v == null ? '' : v)
  * The standalone print sheet: three real columns, no inputs, no add buttons —
  * a verbatim port of buildPlPrintDoc().
  */
-function buildPlPrintDoc({ rows, invNo, h, dispLoc, warehouse, billAddr, shipAddr }) {
+function buildPlPrintDoc({ rows, invNo, h, dispLoc, warehouse, billAddr, shipAddr, salesBlob }) {
   let itemsHtml = '';
   let grandBags = 0;
   let grandDisp = 0;
@@ -282,7 +284,7 @@ function buildPlPrintDoc({ rows, invNo, h, dispLoc, warehouse, billAddr, shipAdd
     grandDisp += dispatched;
     itemsHtml += '<tr style="background:#eef4fc"><td colspan="3" style="padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #C5DFC8">'
       + esc(item.jobName || item.spec) + '<span style="font-weight:400;color:#555;font-size:10px;margin-left:8px">Invoice Qty: <strong>'
-      + grp(item.totalQty) + '</strong> ' + getUOM(item.dispatchForm).toLowerCase() + '</span></td></tr>';
+      + grp(item.totalQty) + '</strong> ' + invoiceUOM(item.dispatchForm, salesBlob).toLowerCase() + '</span></td></tr>';
     (item.bags || []).forEach((bag) => {
       const from = int(bag.from) || 1;
       const to = int(bag.to);

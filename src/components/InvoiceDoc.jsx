@@ -2,7 +2,8 @@ import { forwardRef } from 'react';
 import { COMPANY, INVOICE_DOC } from '../lib/company.js';
 import { COMPANY_LOGO } from '../lib/companyLogo.js';
 import { billedFreight, gstBreakup } from '../lib/calc.js';
-import { getUOM } from '../lib/pricing.js';
+import { invoiceUOM } from '../lib/pricing.js';
+import { useDataOptional } from '../data.jsx';
 import { amountInWords, fmtDate } from '../lib/format.js';
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -23,6 +24,7 @@ const rs = (v) => 'Rs.' + money2(v);
  * against OAB-App before touching it.
  */
 const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
+  const salesBlob = (useDataOptional() || {}).mods?.sales;
   const h = header || {};
   const rows = lines || [];
   const subTotal = rows.reduce((s, l) => s + (n(l.lineTotal) || n(l.qty) * n(l.rate)), 0);
@@ -141,7 +143,7 @@ const InvoiceDoc = forwardRef(function InvoiceDoc({ header, lines }, ref) {
                 <td className="c">{INVOICE_DOC.hsn}</td>
                 <td>{l.jobName || l.spec}</td>
                 <td className="r">{qty.toLocaleString('en-IN')}</td>
-                <td className="c">{getUOM(l.dispatchForm)}</td>
+                <td className="c">{invoiceUOM(l.dispatchForm, salesBlob)}</td>
                 <td className="r">{rate > 0 ? rate.toFixed(2) : '—'}</td>
                 <td className="r">{amt > 0 ? money2(amt) : '—'}</td>
                 <td className="c">-</td>

@@ -1,7 +1,8 @@
 import { forwardRef } from 'react';
 import { COMPANY, INVOICE_DOC } from '../lib/company.js';
 import { gstBreakup } from '../lib/calc.js';
-import { getUOM } from '../lib/pricing.js';
+import { invoiceUOM } from '../lib/pricing.js';
+import { useDataOptional } from '../data.jsx';
 import { amountInWords, fmtDate } from '../lib/format.js';
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -24,6 +25,7 @@ const PF_DECLARATIONS = [
  * `f` is the proforma form state, `rows` the priced item rows.
  */
 const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
+  const salesBlob = (useDataOptional() || {}).mods?.sales;   // 27.11: roll → Kgs on the documents
   const d = f || {};
   const items = rows || [];
   const subTotal = items.reduce((s, r) => s + (n(r.amount) || n(r.qty) * n(r.rate)), 0);
@@ -120,7 +122,7 @@ const ProformaDoc = forwardRef(function ProformaDoc({ f, rows }, ref) {
                 <td className="c">{INVOICE_DOC.hsn}</td>
                 <td>{r.jobName || r.spec}</td>
                 <td className="r">{n(r.qty).toLocaleString('en-IN')}</td>
-                <td className="c">{getUOM(r.dispatchForm)}</td>
+                <td className="c">{invoiceUOM(r.dispatchForm, salesBlob)}</td>
                 <td className="r">{n(r.rate) > 0 ? n(r.rate).toFixed(2) : '—'}</td>
                 <td className="r">{amt > 0 ? money2(amt) : '—'}</td>
                 <td className="c">-</td>

@@ -74,6 +74,9 @@ export const DROPDOWN_DEFS = [
   // the rollers of each lamination machine — what the CSA / JSS printing and lamination
   // sections offer and check against.
   { key: 'machineTooling', label: 'Printing sleeves & lamination rollers', where: 'QC — CSA · JSS (printing / lamination)', type: 'tooling', superadminOnly: true, panel: 'tooling' },
+  // 27.11: "Where are we mapping the despatch form and the unit of measurement?" — the
+  // unit each dispatch form prints with on the invoice, proforma and packing list.
+  { key: 'invoiceUom', label: 'Invoice unit per dispatch form', where: 'Invoice · Proforma · Packing list', type: 'invoiceUom', store: 'invoice_uom', superadminOnly: true, panel: 'invoiceUom' },
 ];
 
 /**

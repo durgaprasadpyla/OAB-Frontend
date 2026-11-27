@@ -3,7 +3,7 @@ import { useData } from '../data.jsx';
 import { invBalance, gstBreakup } from '../lib/calc.js';
 import { specFor } from '../lib/specs.js';
 import { sheetForJobType } from '../lib/jssSpec.js';
-import { orderPrice } from '../lib/pricing.js';
+import { invoiceUOM, orderPrice } from '../lib/pricing.js';
 import { ordersApi } from '../api.js';
 import { useApi } from '../lib/useApi.js';
 import { getCustByLoc, getCustLocations } from '../lib/master.js';
@@ -371,7 +371,7 @@ export default function Invoice() {
                         </span>
                       </label>
                       <div className="g3">
-                        <div><div style={{ fontSize: 9, color: 'var(--i3)', marginBottom: 2 }}>Invoice Qty (max {dash(b)})</div>
+                        <div><div style={{ fontSize: 9, color: 'var(--i3)', marginBottom: 2 }}>Invoice Qty in {invoiceUOM(r.dispatchForm, mods.sales)} (max {dash(b)})</div>
                           <input type="number" min="1" max={b} placeholder="0" disabled={b <= 0} title={b <= 0 ? 'No balance left' : undefined} value={e.qty ?? ''} onChange={(ev) => setLine(r.so, { qty: ev.target.value })} style={inpS} /></div>
                         {/* FG is consumed automatically up to the invoice qty — read-only,
                             exactly as the .iv-fguse cell is in production. */}

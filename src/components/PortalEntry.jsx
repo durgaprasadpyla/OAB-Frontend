@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invoicePortalFields, unitNoun } from '../lib/portalData.js';
 import { inr } from '../lib/format.js';
+import { useDataOptional } from '../data.jsx';
 
 // Raw, portal-friendly copy values: money as plain 2dp (no ₹, no thousands
 // separators — those get rejected by numeric form fields), qty as an integer.
@@ -36,7 +37,7 @@ async function copyText(text) {
  * outside the printable invoice, so it never appears on the PDF or printout.
  */
 export default function PortalEntry({ header, lines }) {
-  const f = invoicePortalFields(header, lines);
+  const f = invoicePortalFields(header, lines, ((useDataOptional() || {}).mods || {}).sales);
   const [copied, setCopied] = useState('');   // key of the last-copied field
   const flash = (key) => { setCopied(key); setTimeout(() => setCopied((k) => (k === key ? '' : k)), 1500); };
   const doCopy = async (key, value) => { if (await copyText(value)) flash(key); };
