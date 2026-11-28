@@ -20,6 +20,8 @@ import StoresIssueHistory, { HISTORY_LIMIT } from '../components/StoresIssueHist
 import { RollStickerModal, StickerButton } from '../components/RollSticker.jsx';
 import RollScanBox from '../components/RollScanBox.jsx';
 import { rollStickerApi } from '../lib/rollStickerApi.js';
+import { exportMatReportExcel, exportMatReportPDF } from '../lib/matReport.js';
+import { bomApprovalApi } from '../lib/bomApprovalApi.js';
 import { asSoMaterial, bomCapBlock, codeKey, coveredOf, hasCap, isComplete, isInk, netOut, openOf, sourceLabel } from '../lib/soMaterial.js';
 
 // Stores Login. Four desks, in the order the day runs:
@@ -1604,7 +1606,50 @@ export function dropHoldShare(basket, hold, drop, heirId) {
  * once it reaches the need the line is complete and takes nothing more. The figures
  * are the server's (GET /api/stores/so-material); the slip being built is added here.
  */
-function SoBomPosition({ so, lines, issues, department, slipAddsOf }) {
+/**
+ * Requirement 2 output — Mat Report (A), the material allocated to this job — from the
+ * stores desk. The order's status is the server's (/bom-approval, which the stores may
+ * read); free stock is read so an ink the stores hold none of reads "mixed on the
+ * spot", exactly as the PLAN panel reports it.
+ */
+function MatReportButtons({ so, ctx, mat }) {
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  async function go(kind) {
+    setBusy(kind); setErr('');
+    try {
+      const [readiness, free] = await Promise.all([
+        bomApprovalApi.status(so).catch(() => null),
+        storesApi.available().catch(() => []),
+      ]);
+      const freeBy = new Map();
+      (Array.isArray(free) ? free : []).forEach((u) => {
+        const k = codeKey(u.itemCode);
+        freeBy.set(k, (freeBy.get(k) || 0) + num(u.free));
+      });
+      const input = {
+        so, spec: (ctx && ctx.spec) || mat.spec, customer: ctx && ctx.customer, jobName: ctx && ctx.jobName,
+        poQty: mat.poQty, mat, readiness, freeOf: (l) => freeBy.get(codeKey(l.itemCode)) || 0,
+      };
+      const ok = kind === 'pdf' ? await exportMatReportPDF(input) : exportMatReportExcel(input);
+      if (!ok) setErr(`No BOM lines for ${so} — there is nothing to report yet.`);
+    } catch (e) { setErr(e.message || 'Could not build the Mat Report'); }
+    finally { setBusy(''); }
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
+      <button type="button" className="btn btn-s" style={{ height: 24, fontSize: 11 }} disabled={!!busy}
+        aria-label={`Download Mat Report A of ${so} as Excel`} title="Mat Report (A): material allocated to this job"
+        onClick={() => go('xlsx')}>{busy === 'xlsx' ? '…' : '⬇ Mat Report (Excel)'}</button>
+      <button type="button" className="btn btn-s" style={{ height: 24, fontSize: 11 }} disabled={!!busy}
+        aria-label={`Download Mat Report A of ${so} as PDF`} title="Mat Report (A): material allocated to this job"
+        onClick={() => go('pdf')}>{busy === 'pdf' ? '…' : '⬇ PDF'}</button>
+      {err && <span style={{ color: 'var(--red)', fontSize: 11 }}>{err}</span>}
+    </span>
+  );
+}
+
+function SoBomPosition({ so, lines, issues, department, slipAddsOf, ctx, mat }) {
   const rt = { textAlign: 'right' };
   const grey = { fontSize: 10, color: 'var(--i3)' };
   const dept = String(department || '').trim().toLowerCase();
@@ -1621,6 +1666,7 @@ function SoBomPosition({ so, lines, issues, department, slipAddsOf }) {
           {shown.length < lines.length ? ` · the lines for ${department}` : ''} · on the order quantity; a line is complete once
           what is allocated and issued reaches what it needs
         </span>
+        {mat && <MatReportButtons so={so} ctx={ctx} mat={mat} />}
       </div>
       <div className="tw"><table aria-label={`BOM position for ${so}`}>
         <thead><tr>
@@ -2876,7 +2922,7 @@ function IssuesReturns({ flash }) {
             allowed to assign only 300 kg." */}
         {mode === 'issue' && soChosen && matReady && matLines.length > 0 && (
           <SoBomPosition so={form.so} lines={matLines} issues={soMat.issues} department={form.department}
-            slipAddsOf={slipIncrease} />
+            slipAddsOf={slipIncrease} ctx={ctx} mat={soMat} />
         )}
         <div className="ctitle" style={{ fontSize: 11, margin: '4px 0 2px' }}>{mode === 'return' ? '③ The roll' : '② The material'}{mode === 'issue' && soChosen && ctxReady && bomItems.length ? <span style={{ fontWeight: 400, color: 'var(--i3)' }}> — from the BOM of {form.so}{form.department ? ` for ${form.department}` : ''}</span> : null}</div>
         {mode === 'issue' && soChosen && ctxReady && !bomMissing && form.department && bomItems.length === 0 && (

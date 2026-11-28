@@ -6,7 +6,7 @@ import { balance, calcMetres, calcKg } from '../lib/calc.js';
 import { findSpecForRow } from '../lib/master.js';
 import PlanDownloads from '../components/PlanDownloads.jsx';
 import SoWastagePanel from '../components/SoWastagePanel.jsx';
-import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
+import MaterialAssignPanel from '../components/MaterialAssignPanel.jsx';
 import { ArtworkButton } from '../components/Artwork.jsx';
 import { useAuth } from '../auth.jsx';
 import { BomCell, MaterialCell } from '../components/BomApproval.jsx';
@@ -303,6 +303,8 @@ export default function PlanReadiness() {
             spec={pickedRow.spec}
             material={pickedRow.substrate}
             soQty={num(pickedRow.poQty)}
+            customer={pickedRow.customer}
+            jobName={pickedRow.sku}
             onChange={loadBoard}
             approval={pickedState && pickedState.bomApproved != null ? pickedState : undefined}
             canApprove={mayApprove}

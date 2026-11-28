@@ -6,6 +6,7 @@ import { asSoMaterial, codeKey, isComplete, isInk, netOut, sourceLabel } from '.
 import { useData } from '../data.jsx';
 import { BomApprovalHeader } from './BomApproval.jsx';
 import { coverFromLines } from '../lib/bomApprovalApi.js';
+import { exportMatReportExcel, exportMatReportPDF } from '../lib/matReport.js';
 
 // Assigning material to a sale order, from the PLAN login.
 //
@@ -177,7 +178,7 @@ function Line({ it, so, needs, held, issued, rolls, pick, setPickFor, busy, cove
  * measured against has to be one too — and the stores desk and the server cap
  * reckon on the same number.
  */
-export default function MaterialAssignPanel({ so, spec, material, soQty, onChange, approval, canApprove, onApprove }) {
+export default function MaterialAssignPanel({ so, spec, material, soQty, onChange, approval, canApprove, onApprove, customer, jobName }) {
   const { mods } = useData();
   const planned = useApi('/api/bom');
   const bom = useMemo(
@@ -285,6 +286,18 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
 
+  async function downloadMatReport(kind) {
+    const input = {
+      so, spec, customer, jobName, poQty: soQty, mat, readiness: approval,
+      freeOf: (l) => (freeByItem.get(codeKey(l.itemCode)) || []).reduce((t, u) => t + num(u.free), 0),
+    };
+    setErr('');
+    try {
+      const ok = kind === 'pdf' ? await exportMatReportPDF(input) : exportMatReportExcel(input);
+      if (!ok) setErr(`No BOM lines for ${so} — there is nothing to report yet.`);
+    } catch (e) { setErr(e.message || 'Could not build the Mat Report'); }
+  }
+
   async function release(id) {
     setBusy(true); setErr('');
     try { await storesApi.releaseAllocation(id); await load(); if (onChange) onChange(); }
@@ -306,6 +319,13 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
         <span style={{ fontSize: 11, color: 'var(--i3)', flex: 1 }}>
           Allocated by PLAN or by the stores desk, and issued from the stores — read live.
         </span>
+        {/* Requirement 2 output: Mat Report (A) — the material allocated to this job */}
+        <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} disabled={busy || !mat}
+          aria-label={`Download Mat Report A of ${so} as Excel`} title="Mat Report (A): material allocated to this job"
+          onClick={() => downloadMatReport('xlsx')}>⬇ Mat Report (Excel)</button>
+        <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} disabled={busy || !mat}
+          aria-label={`Download Mat Report A of ${so} as PDF`} title="Mat Report (A): material allocated to this job"
+          onClick={() => downloadMatReport('pdf')}>⬇ PDF</button>
         <button className="btn btn-s" style={{ height: 24, fontSize: 11 }} disabled={busy}
           aria-label={`Refresh the material of ${so}`} onClick={load}>↻ Refresh</button>
       </div>

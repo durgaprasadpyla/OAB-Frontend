@@ -109,6 +109,9 @@ describe('BloomFlex V2 — BOM approval on the PLAN board', () => {
     await userEvent.type(within(head).getByLabelText('Approval note for 26/772'), 'ok per QC');
     await userEvent.click(within(head).getByRole('button', { name: 'Approve the BOM of 26/772' }));
     await waitFor(() => expect(approved).toEqual([{ so: '26/772', note: 'ok per QC' }]));
+    // Requirement 2 output: the Mat Report (A) downloads sit on the same panel
+    expect(screen.getByRole('button', { name: 'Download Mat Report A of 26/772 as Excel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download Mat Report A of 26/772 as PDF' })).toBeInTheDocument();
   });
 
   it('roles outside the reviewers see the status but no Approve button', async () => {
