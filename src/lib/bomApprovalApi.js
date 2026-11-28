@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { isInk } from './soMaterial.js';
 
 // BloomFlex V2 — BOM approval before Ready to Plan, and the material readiness of a
 // sale order (how much of its BOM is allocated / issued). The server is the authority:
@@ -42,10 +43,14 @@ export function readyRefusal(e) {
  * requirement, or a unit mismatch). Returns { pct (0-100, floored to 0.1), status } or
  * null when nothing can be measured.
  */
-export function coverFromLines(lines) {
+export function coverFromLines(lines, freeOf) {
   let min = null;
   (lines || []).forEach((l) => {
     if (!l || l.onBom === false || l.uomMismatch) return;
+    // Issues 05.11: an ink the stores hold none of is mixed on the spot — not a
+    // shortage, so it is left out (the server's rule too). `freeOf(line)` is the free
+    // stock of the line's item; without it every line counts, as before.
+    if (freeOf && isInk({ ...l, itemDescription: l.itemName }) && !(Number(freeOf(l)) > 0)) return;
     const req = Number(l.required);
     if (!(req > 0)) return;
     const have = Math.max(0, Number(l.covered) || 0);

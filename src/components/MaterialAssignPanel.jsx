@@ -297,7 +297,8 @@ export default function MaterialAssignPanel({ so, spec, material, soQty, onChang
 
       {/* BloomFlex V2: the BOM's approval + how much of it the order's material covers */}
       {approval !== undefined && (
-        <BomApprovalHeader so={so} state={approval} cover={coverFromLines(mat && mat.lines)}
+        <BomApprovalHeader so={so} state={approval} cover={coverFromLines(mat && mat.lines,
+          (l) => (freeByItem.get(codeKey(l.itemCode)) || []).reduce((t, u) => t + num(u.free), 0))}
           canApprove={!!canApprove} onApprove={onApprove || (async () => {})} />
       )}
 

@@ -151,6 +151,22 @@ describe('BloomFlex V2 — coverage helpers', () => {
     expect(coverFromLines([])).toBeNull();
   });
 
+  it('leaves out an ink the stores hold none of (mixed on the spot), as the server does', () => {
+    const lines = [
+      { onBom: true, itemCode: 'FILM1', materialType: 'FILM', required: 500, covered: 250 },
+      { onBom: true, itemCode: 'MAG', materialType: 'INK', subGroup: 'C I FLEXO', required: 1, covered: 0 },
+      { onBom: true, itemCode: 'SLV', materialType: 'FILM', subGroup: 'SHRINK', required: 10, covered: 10 },
+    ];
+    const none = () => 0;
+    expect(coverFromLines(lines, none)).toEqual({ pct: 50, status: 'PARTIAL' });
+    // free magenta in the stores → a real shortage again
+    expect(coverFromLines(lines, (l) => (l.itemCode === 'MAG' ? 5 : 0))).toEqual({ pct: 0, status: 'BLOCKED' });
+    // a SHRINK film with no stock is no ink — it still counts
+    expect(coverFromLines([{ ...lines[2], covered: 0 }], none)).toEqual({ pct: 0, status: 'BLOCKED' });
+    // without stock information every line counts, as before
+    expect(coverFromLines(lines)).toEqual({ pct: 0, status: 'BLOCKED' });
+  });
+
   it('a row is pending only when the server says so and it is not already ready', () => {
     expect(bomPending({ bomApproved: false })).toBe(true);
     expect(bomPending({ bomApproved: false, readyToPlan: true })).toBe(false);
